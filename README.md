@@ -3,9 +3,21 @@
 > A standalone framework for orchestrating a company of AI Members — Paperclip-inspired, released publicly, runtime-agnostic by design.
 
 **Type:** Application
-**Stack:** JSON file store + Python hooks + Claude Code skills + MCP (future) + pluggable runtime adapters
+**Stack:** SQLite (`.firm/firm.db`) + Python (core / hooks / MCP server) + Claude Code skills + pluggable runtime adapters
 **Skill Loadout:** ui-ux-pro-max, /paul:audit, humanizer
-**Quality Gates:** schema validation, dependency cycle detection, atomic Unit checkout enforcement
+**Quality Gates:** schema validation, dependency cycle detection, atomic Unit checkout (via SQL `UPDATE ... WHERE claimed_by IS NULL`)
+
+## Install (development)
+
+```bash
+cd apps/agent-company-architecture
+pip install -e ".[dev]"
+python -m firm --help
+python -m firm init /path/to/workspace   # creates .firm/firm.db
+pytest
+```
+
+The package name is `firm` internally. Subject to rename at Phase 8 before public release.
 
 ---
 

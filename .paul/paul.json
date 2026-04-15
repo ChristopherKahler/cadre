@@ -5,11 +5,11 @@
   "milestone": {
     "name": "v0.1 Initial Release",
     "version": "0.1.0",
-    "status": "not_started"
+    "status": "in_progress"
   },
   "phase": {
-    "number": 1,
-    "name": "Schema + Storage Layer",
+    "number": 2,
+    "name": "Hook Layer",
     "status": "not_started"
   },
   "loop": {
@@ -18,7 +18,7 @@
   },
   "timestamps": {
     "created_at": "2026-04-14T17:30:00-05:00",
-    "updated_at": "2026-04-14T17:30:00-05:00"
+    "updated_at": "2026-04-15T11:24:00-05:00"
   },
   "satellite": {
     "groom": true

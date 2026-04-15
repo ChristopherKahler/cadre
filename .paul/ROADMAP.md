@@ -7,8 +7,8 @@ Build a standalone framework that treats AI workflows as a company. Journey: sta
 ## Current Milestone
 
 **v0.1 Initial Release** (v0.1.0)
-Status: Not started
-Phases: 0 of 8 complete
+Status: In progress
+Phases: 1 of 8 complete
 
 ## Phases
 
@@ -20,7 +20,7 @@ Phases execute in numeric order: 1 → 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 
 | Phase | Name | Plans | Status | Completed |
 |-------|------|-------|--------|-----------|
-| 1 | Schema + Storage Layer | TBD | Not started | - |
+| 1 | Schema + Storage Layer | 3/3 | ✅ Complete | 2026-04-15 |
 | 2 | Hook Layer | TBD | Not started | - |
 | 3 | Core Slash Commands | TBD | Not started | - |
 | 4 | Quill End-to-End | TBD | Not started | - |
@@ -33,18 +33,26 @@ Phases execute in numeric order: 1 → 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 
 ### Phase 1: Schema + Storage Layer
 
-**Goal:** All 14 entity types have formal schemas with validation. `.firm/` directory structure scaffolded. CRUD operations implemented for each entity.
+**Goal:** Python package + SQLite substrate in place. All 14 entity types have table schemas with constraints + foreign keys. CRUD operations implemented.
 **Depends on:** Nothing (first phase)
 **Research:** Unlikely (entities fully designed in ENTITY-DESIGN.md)
 
-**Scope:**
-- JSON schemas for all 14 entities (Firm, Member, Goal, Operation, Project, Unit, Comment, Member Run, Usage Event, Gate, Records, Firm Secret, Document, Contract)
-- `.firm/` directory scaffold generator
-- CRUD operations per entity with schema validation on every write
-- Storage layout decision (monolithic files vs per-entity directories)
-- Dependency cycle detection for Unit `depends_on`
+**Storage pivot (2026-04-15):** SQLite replaces per-file JSON storage. Rationale in PROJECT.md Key Decisions.
 
-**Plans:** TBD during `/paul:plan`
+**Scope:**
+- Python package scaffold (`src/firm/`) with src-layout + pyproject
+- SQLite connection helper + transactional migration runner
+- 14 entity tables via numbered SQL migrations (Firm, Member, Goal, Operation, Project, Unit, Comment, Member Run, Usage Event, Gate, Records, Firm Secret, Document, Contract)
+- Typed CRUD per entity with transaction helpers
+- Atomic Unit checkout (single `UPDATE ... WHERE claimed_by IS NULL` query)
+- Unit `depends_on` cycle detection
+
+**Plans (all complete 2026-04-15):**
+- **01-01** ✅ Package scaffold + DB foundation + `firm init` (19 tests)
+- **01-02** ✅ 14 entity table migrations + schema tests (22 tests)
+- **01-03** ✅ Typed CRUD repo + atomic Unit checkout + cycle detection (35 tests)
+
+**Total:** 76 tests green. No blockers.
 
 ### Phase 2: Hook Layer
 
@@ -146,4 +154,4 @@ Phases execute in numeric order: 1 → 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 
 ---
 *Roadmap created: 2026-04-14*
-*Last updated: 2026-04-14*
+*Last updated: 2026-04-15 (Phase 1 complete; 76 tests; ready for Phase 2)*

@@ -30,15 +30,15 @@ Solo operators can treat their AI workflows as a company — with Members, Goals
 
 ### Validated (Shipped)
 
-None yet.
+- ✓ **Phase 1: Schema + Storage Layer** (2026-04-15) — Python package scaffold, SQLite foundation with transactional migration runner, 14 entity tables with FK/CHECK/immutability triggers + 46 indexes, generic CRUD repository with JSON auto-serialization, atomic Unit checkout, dependency cycle detection. 76 tests green.
 
 ### Active (In Progress)
 
-- [ ] Phase 1: Schema + Storage Layer (starting point)
+- [ ] Phase 2: Hook Layer (session-pulse, unit-completion, run-record)
 
 ### Planned (Next)
 
-- Phase 2: Hook Layer (session-pulse, unit-completion, run-record)
+- Phase 3: Core Slash Commands
 - Phase 3: Core Slash Commands
 - Phase 4: Quill End-to-End (first Member operational)
 - Phase 5: Leadership Layer (Sterling + Sage Contracts)
@@ -68,8 +68,9 @@ None yet.
 
 ### Technical Constraints
 
-- JSON file store — no database (git-friendly, no hosting)
-- Python for hooks (ecosystem fit with Claude Code)
+- SQLite single-file store at `.firm/firm.db` — no hosting required, ACID transactions, SQL query power
+- Python for everything (core package, hooks, MCP server) — one language, stdlib `sqlite3` = zero DB deps
+- JSON export/import commands round-trip data for backup, sharing, and portability reassurance
 - Firm Secrets are metadata-only — actual values NEVER in `.firm/` files
 - Atomic Unit checkout required (prevents Member collision)
 - All Member Runs linked to Member ID for attribution
@@ -100,24 +101,32 @@ None yet.
 | Hybrid priority (categorical + decimal stack rank) | Deterministic AI ordering + human-readable buckets | 2026-04-14 | Active |
 | Earn-the-pace throughput rule | Prevents AI throughput creep | 2026-04-14 | Active |
 | Board = yes/no authority, not scope-definer | Team runs the firm; Board approves/rejects | 2026-04-14 | Active |
+| SQLite data store (supersedes JSON files) | ACID transactions for atomic Unit checkout; SQL joins for cross-entity queries in hooks/MCP; scales cleanly; stdlib `sqlite3` = zero external deps. JSON export/import commands provide portability. Paperclip reference uses Postgres; SQLite is the single-file equivalent that fits "no hosting" constraint | 2026-04-15 | Active |
+| Python as the one language | Core, hooks, CLI, and MCP server all in Python — removes serialization boundary and simplifies maintenance | 2026-04-15 | Active |
+| Per-migration explicit transaction control (isolation_level=None + BEGIN/COMMIT/ROLLBACK) | Python sqlite3 default deferred isolation does not wrap DDL transactionally; CREATE TABLE can implicit-commit | 2026-04-15 | Active (01-01) |
+| `_split_sql` handles BEGIN/END + inline `--` comments | Naive splitter couldn't parse trigger bodies or inline comments with semicolons (real case in 002 migration) | 2026-04-15 | Active (01-02) |
+| Polymorphic refs: `*_entity_type` + `*_entity_id` with CHECK on type, no composite FK | SQLite can't express "references one of N tables" at the FK level; application validates target | 2026-04-15 | Active (01-02) |
+| `member_run` is mutable (has `running → completed` lifecycle) | Initial spec had it in immutable set; corrected to 3 immutable tables (comment, records, usage_event) | 2026-04-15 | Active (01-02) |
+| Repository API uses `repo.find` (not `list`) | `list` shadows Python builtin; `find` is unambiguous and matches ORM conventions | 2026-04-15 | Active (01-03) |
+| Atomic Unit checkout via `UPDATE unit SET claimed_by = ? WHERE id = ? AND claimed_by IS NULL RETURNING *` | Single-statement atomicity; no race window; no app-layer locking | 2026-04-15 | Active (01-03) |
 
 ## Success Metrics
 
 | Metric | Target | Current | Status |
 |--------|--------|---------|--------|
-| Schema validation | All entity writes pass schema | - | Not started |
+| Schema validation | All entity writes pass schema | DB-enforced via CHECK/FK/triggers | ✓ Phase 1 |
 | End-to-end Quill run | Blog post publishes via `/quill:run full` | - | Not started |
-| Atomic checkout verified | Parallel Members can't claim same Unit | - | Not started |
+| Atomic checkout verified | Parallel Members can't claim same Unit | `UPDATE ... WHERE claimed_by IS NULL` pattern tested | ✓ Phase 1 |
 | Framework installed on fresh workspace | Non-Chris user can install and run | - | Not started |
 
 ## Tech Stack / Tools
 
 | Layer | Technology | Notes |
 |-------|------------|-------|
-| Data store | JSON files in `.firm/` | Git-friendly, human-readable |
+| Data store | SQLite at `.firm/firm.db` | ACID, SQL joins, atomic Unit checkout, stdlib only |
 | Hooks | Python | Matches existing Claude Code hook ecosystem |
 | Commands | Claude Code skills + slash commands | Native integration |
-| MCP server | Node.js or Python (TBD) | Programmatic entity access for Members |
+| MCP server | Python | Same language as core, direct SQLite access |
 | Runtime adapters | Formal 3-method interface | Claude Code default; OpenClaw/Codex/Cursor pluggable |
 
 ## Links
@@ -130,4 +139,5 @@ None yet.
 
 ---
 *Created: 2026-04-14*
+*Last updated: 2026-04-15 after Phase 1 completion*
 *PROJECT.md — Updated when requirements or context change*
