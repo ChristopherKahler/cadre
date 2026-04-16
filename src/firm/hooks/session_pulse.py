@@ -368,6 +368,85 @@ def render_goal_health(
 
 
 # ---------------------------------------------------------------------------
+# <budget-health>
+# ---------------------------------------------------------------------------
+
+_BUDGET_HEALTH_SQL = """
+SELECT
+  m.id              AS member_id,
+  m.name            AS member_name,
+  bp.run_count      AS run_count,
+  bp.total_cost_usd AS total_cost_usd,
+  c.budget_config   AS budget_config_json
+FROM budget_period bp
+JOIN member m ON m.id = bp.member_id
+LEFT JOIN contract c ON c.id = m.contract_id
+WHERE bp.firm_id = ? AND bp.status = 'active'
+ORDER BY m.id
+"""
+
+_BUDGET_BEHAVIOR = (
+    "BEHAVIOR: This context is PASSIVE AWARENESS ONLY.\n"
+    "Do NOT proactively mention budget health unless the user asks about budget\n"
+    "OR a Member is at limit_reached status."
+)
+
+
+def render_budget_health(
+    conn: sqlite3.Connection,
+    firm_id: str,
+) -> str | None:
+    """Render the ``<budget-health>`` block. Silent when no Members are near limits."""
+    rows = conn.execute(_BUDGET_HEALTH_SQL, (firm_id,)).fetchall()
+    if not rows:
+        return None
+
+    warning_lines: list[str] = []
+    for r in rows:
+        bc_raw = r["budget_config_json"]
+        if not bc_raw:
+            continue
+        try:
+            bc = json.loads(bc_raw) if isinstance(bc_raw, str) else bc_raw
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(bc, dict):
+            continue
+
+        limits = bc.get("limits", {})
+        if not isinstance(limits, dict):
+            continue
+
+        alerts: list[str] = []
+        max_runs = limits.get("max_runs_per_period")
+        if max_runs and max_runs > 0:
+            pct = (r["run_count"] or 0) / max_runs * 100
+            if pct >= 80:
+                alerts.append(f"runs {r['run_count']}/{max_runs} ({pct:.0f}%)")
+
+        max_cost = limits.get("max_total_cost_per_period_usd")
+        if max_cost and max_cost > 0:
+            pct = (r["total_cost_usd"] or 0.0) / max_cost * 100
+            if pct >= 80:
+                alerts.append(f"cost ${r['total_cost_usd']:.2f}/${max_cost:.2f} ({pct:.0f}%)")
+
+        if alerts:
+            warning_lines.append(
+                f"  - [{r['member_id']}] {r['member_name']}: {', '.join(alerts)}"
+            )
+
+    if not warning_lines:
+        return None
+
+    lines = [f'<budget-health warnings="{len(warning_lines)}">']
+    lines.extend(warning_lines)
+    lines.append("")
+    lines.append(_BUDGET_BEHAVIOR)
+    lines.append("</budget-health>")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -376,7 +455,7 @@ def render(
     firm_id: str,
     now: datetime | None = None,
 ) -> str:
-    """Render all three tags. Empty string when all are silent.
+    """Render all four tags. Empty string when all are silent.
 
     Non-None results are joined with a single blank line between them so the
     entrypoint can ``print(render(...))`` unconditionally — an empty string
@@ -392,4 +471,7 @@ def render(
     goals = render_goal_health(conn, firm_id, now=now)
     if goals:
         parts.append(goals)
+    budget = render_budget_health(conn, firm_id)
+    if budget:
+        parts.append(budget)
     return "\n\n".join(parts)

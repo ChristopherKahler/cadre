@@ -11,7 +11,9 @@ from __future__ import annotations
 import sqlite3
 
 PREFIX_REGISTRY: dict[str, str] = {
+    "budget_period": "BP",
     "member": "MEM",
+    "member_run": "RUN",
     "operation": "OPS",
     "project": "PROJ",
     "unit": "UNIT",
