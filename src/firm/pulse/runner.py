@@ -1,8 +1,8 @@
 """PULSE runner — the orchestrator callback that chains all subsystems.
 
 Implements the ``RunMemberFn`` contract: ``(conn, member_dict) -> result_dict``.
-Chains: budget check → unit lookup → member_run create → prompt assembly →
-spawn → parse → validate → retry → budget update → finalize.
+Chains: budget check → unit lookup → resolve runtime → member_run create →
+Contract invoke → parse → validate → retry → budget update → finalize.
 """
 
 from __future__ import annotations
@@ -12,6 +12,8 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+from firm.contracts.claude_code import ClaudeCodeRuntime
+from firm.contracts.registry import resolve_runtime
 from firm.core import repo
 from firm.pulse.budget import (
     check_budget_preflight,
@@ -19,57 +21,55 @@ from firm.pulse.budget import (
     update_budget_postrun,
 )
 from firm.pulse.parser import parse_stream
-from firm.pulse.prompt import assemble_prompt
 from firm.pulse.spawn import spawn_member_run
 from firm.pulse.validate import retry_on_failure, validate_output
 from firm.services._id import next_id
 
 
 # ---------------------------------------------------------------------------
-# Config extraction helpers
+# Helpers
 # ---------------------------------------------------------------------------
 
-def _get_contract_config(
+def _get_contract(
     conn: sqlite3.Connection, member: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
-    """Extract pulse_config, validation_config, budget_config from member's contract.
-
-    Returns (pulse_config, validation_config, budget_config).
-    pulse_config always returns a dict (with defaults if missing).
-    """
-    defaults: dict[str, Any] = {"timeout_sec": 300}
+) -> dict[str, Any] | None:
+    """Get the member's contract row, or None."""
     contract_id = member.get("contract_id")
     if not contract_id:
-        return defaults, None, None
+        return None
+    return repo.get(conn, "contract", contract_id)
 
-    contract = repo.get(conn, "contract", contract_id)
+
+def _get_validation_config(
+    contract: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Extract validation_config from a contract, handling JSON strings."""
     if not contract:
-        return defaults, None, None
-
-    pc = contract.get("pulse_config")
-    if isinstance(pc, str):
-        try:
-            pc = json.loads(pc)
-        except (json.JSONDecodeError, TypeError):
-            pc = None
-    pulse_config = pc if isinstance(pc, dict) else {}
-    pulse_config.setdefault("timeout_sec", 300)
-
+        return None
     vc = contract.get("validation_config")
     if isinstance(vc, str):
         try:
             vc = json.loads(vc)
         except (json.JSONDecodeError, TypeError):
-            vc = None
+            return None
+    return vc if isinstance(vc, dict) else None
 
-    bc = contract.get("budget_config")
-    if isinstance(bc, str):
+
+def _get_pulse_config_value(
+    contract: dict[str, Any] | None, key: str, default: Any = None,
+) -> Any:
+    """Read a single value from contract.pulse_config."""
+    if not contract:
+        return default
+    pc = contract.get("pulse_config")
+    if isinstance(pc, str):
         try:
-            bc = json.loads(bc)
+            pc = json.loads(pc)
         except (json.JSONDecodeError, TypeError):
-            bc = None
-
-    return pulse_config, vc, bc
+            return default
+    if isinstance(pc, dict):
+        return pc.get(key, default)
+    return default
 
 
 def _find_claimed_unit(
@@ -117,8 +117,10 @@ def make_runner(
         if not unit:
             return {"skipped": True, "reason": "no units"}
 
-        # 3. Extract config
-        pulse_config, validation_config, budget_config = _get_contract_config(conn, member)
+        # 3. Resolve contract + runtime
+        contract = _get_contract(conn, member)
+        runtime = resolve_runtime(contract) if contract else ClaudeCodeRuntime()
+        validation_config = _get_validation_config(contract)
 
         # 4. Create member_run
         run_id = next_id(conn, "member_run", firm_id)
@@ -132,20 +134,18 @@ def make_runner(
             "invocation_source": "pulse",
         })
 
-        # 5. Assemble prompt
-        prompt = assemble_prompt(conn, firm_id, member_id, unit["id"], cwd=cwd)
+        # 5. Invoke via Contract interface
+        result = runtime.invoke(conn, contract or {}, member, unit, cwd=cwd)
 
         # 6. Store prompt snapshot
         repo.update(conn, "member_run", run_id, {
-            "prompt_snapshot": prompt,
+            "prompt_snapshot": result.prompt_snapshot,
         })
 
-        # 7. Spawn
-        timeout = pulse_config.get("timeout_sec", 300)
-        spawn_result = spawn_member_run(prompt, timeout_sec=timeout, cwd=cwd)
+        # 7. Handle timeout / process error
+        timeout = result.handle.metadata.get("timeout_sec", 300)
 
-        # 8. Handle timeout / process error
-        if spawn_result.timed_out:
+        if result.timed_out:
             repo.update(conn, "member_run", run_id, {
                 "status": "timed_out",
                 "ended_at": datetime.now(tz=timezone.utc).isoformat(),
@@ -153,22 +153,22 @@ def make_runner(
             })
             return {"run_id": run_id, "status": "timed_out"}
 
-        if spawn_result.returncode is not None and spawn_result.returncode != 0:
+        if result.returncode is not None and result.returncode != 0:
             repo.update(conn, "member_run", run_id, {
                 "status": "failed",
                 "ended_at": datetime.now(tz=timezone.utc).isoformat(),
                 "error": json.dumps({
                     "type": "process_error",
-                    "returncode": spawn_result.returncode,
-                    "stderr": spawn_result.stderr[:2000],
+                    "returncode": result.returncode,
+                    "stderr": result.stderr[:2000],
                 }),
             })
-            return {"run_id": run_id, "status": "failed", "returncode": spawn_result.returncode}
+            return {"run_id": run_id, "status": "failed", "returncode": result.returncode}
 
-        # 9. Parse
-        parsed = parse_stream(spawn_result.stdout)
+        # 8. Parse
+        parsed = parse_stream(result.stdout)
 
-        # 10. Validate
+        # 9. Validate
         validation_result = validate_output(parsed, validation_config, cwd)
         retry_run_id = None
 
@@ -181,7 +181,7 @@ def make_runner(
                     if not d.get("passed")
                 )
                 retry_parsed = retry_on_failure(
-                    prompt,
+                    result.prompt_snapshot,
                     failure_context,
                     lambda p: spawn_member_run(p, timeout_sec=timeout, cwd=cwd),
                     parse_stream,
@@ -191,16 +191,18 @@ def make_runner(
                 validation_result = validate_output(parsed, validation_config, cwd)
                 retry_run_id = run_id  # Link retry to original
 
-        # 11. Rate limit awareness
+        # 10. Rate limit awareness
         rate_warning = check_rate_limit(
             parsed.get("rate_limit_events", []),
-            alert_threshold_pct=pulse_config.get("alert_threshold_pct", 80),
+            alert_threshold_pct=_get_pulse_config_value(
+                contract, "alert_threshold_pct", 80,
+            ),
         )
 
-        # 12. Budget post-run
+        # 11. Budget post-run
         update_budget_postrun(conn, member_id, firm_id, parsed)
 
-        # 13. Finalize member_run
+        # 12. Finalize member_run
         final_status = "completed" if validation_result.passed else "failed"
         update_data: dict[str, Any] = {
             "status": final_status,
