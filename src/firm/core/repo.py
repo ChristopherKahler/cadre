@@ -1,8 +1,8 @@
-"""Generic CRUD repository for the firm framework's 14 entity tables.
+"""Generic CRUD repository for the firm framework's 15 entity tables.
 
-Builds on the SQLite schema shipped by migration 002. Handles JSON column
-serialization, auto-touches ``updated_at`` on update, and guards against
-table/column injection by hard-allowlisting names.
+Builds on the SQLite schema shipped by migrations 002 + 003. Handles JSON
+column serialization, auto-touches ``updated_at`` on update, and guards
+against table/column injection by hard-allowlisting names.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ ALL_TABLES: frozenset[str] = frozenset({
     "records",
     "firm_secret",
     "document",
+    "budget_period",
 })
 
 #: Tables whose rows cannot be UPDATEd or DELETEd (enforced at DB level by triggers).
@@ -40,14 +41,15 @@ _TABLES_WITH_UPDATED_AT: frozenset[str] = ALL_TABLES - IMMUTABLE_TABLES
 
 #: Columns that store JSON-encoded Python values (list/dict), per table.
 JSON_COLUMNS: dict[str, frozenset[str]] = {
-    "firm": frozenset({"operator", "core_values", "partners"}),
-    "contract": frozenset({"runtime_config", "skill_loadout", "domain_loadout"}),
+    "firm": frozenset({"operator", "core_values", "partners", "schedule"}),
+    "contract": frozenset({"runtime_config", "skill_loadout", "domain_loadout",
+                           "pulse_config", "validation_config", "budget_config"}),
     "member": frozenset({"suggested_skills", "suggested_domains", "budget"}),
     "goal": frozenset({"metric"}),
     "operation": frozenset({"goal_ids", "acceptance_criteria", "project_ids"}),
     "project": frozenset({"goal_ids", "acceptance_criteria", "unit_ids", "tags"}),
     "unit": frozenset({"goal_ids", "acceptance_criteria", "depends_on", "outputs", "tags"}),
-    "member_run": frozenset({"usage_event_ids", "outputs"}),
+    "member_run": frozenset({"usage_event_ids", "outputs", "validation_result"}),
     "records": frozenset({"details"}),
     "firm_secret": frozenset({"used_by_member_ids"}),
 }
