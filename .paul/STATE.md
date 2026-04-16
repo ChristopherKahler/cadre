@@ -11,9 +11,9 @@ See: .paul/PROJECT.md (updated 2026-04-15 after Phase 1 completion)
 
 Milestone: v0.1 Initial Release (2 of 8 phases complete, Phase 3 in progress)
 Phase: 3 of 8 — Core Slash Commands — IN PROGRESS
-Plan: 03-01 loop closed — BRIEF + SUMMARY written
-Status: 03-01 complete. Ready for 03-02 (Skill Scaffold + Entry Point).
-Last activity: 2026-04-15 ~20:55 CDT — 03-01 BRIEF + SUMMARY complete
+Plan: 03-03 loop closed — service infrastructure complete
+Status: Wave 1 complete (03-02 scaffold + 03-03 service infra). Wave 2 ready.
+Last activity: 2026-04-15 ~21:25 CDT — 03-03 SUMMARY written
 
 Progress:
 - Milestone: [██░░░░░��░░] ~25%
@@ -23,10 +23,10 @@ Progress:
 
 Current loop state:
 ```
-PLAN ──▶ APPLY ──▶ UNIFY          [03-01 closed]
+PLAN ──▶ APPLY ──▶ UNIFY          [03-03 closed]
   ✓        ✓        ✓
 ```
-Next: /paul:plan for 03-02 (Skill Scaffold + Entry Point) — Wave 1
+Next: Wave 2 — 03-04 (Firm/Member/Operation) through 03-07 (Comment/Contract/Doc) — all parallel
 
 ## Accumulated Context
 
@@ -60,11 +60,11 @@ None.
 
 ### Blockers/Concerns
 - Pyright cannot resolve `firm.hooks.*` imports (src-layout config gap). Runtime + tests fine. Non-blocking.
-- Phase 1 + 02-01 + 02-02 + 02-03 all uncommitted. Operator decision at 02-03 UNIFY: DEFER — bundle commit will fire at Phase 2 transition (after 02-04). Bundle growing to 4 loops; still manageable.
+- Phase 1 + Phase 2 committed as bundle (4ac7cc6 + c5df0e2). Phase 3 research committed (6bd4c58).
 - `LOG-NNN` id generation is not concurrency-safe (count-based). v1 single-operator; flag if the framework grows concurrent writers.
 
 ### Git State
-Last phase: Phase 1 + 02-01 + 02-02 + 02-03 (all pending bundle commit)
+Last commit: 6bd4c58 — feat(03-core-slash-commands): Phase 3 entered — 03-01 research complete
 Branch: main
 Feature branches merged: none
 
@@ -78,11 +78,11 @@ Feature branches merged: none
 
 ## Session Continuity
 
-Last session: 2026-04-15 ~20:55 CDT
-Stopped at: 03-01 loop closed — BRIEF + SUMMARY written
-Next action: /paul:plan for 03-02 (Skill Scaffold + Entry Point). Wave 1 — parallel with 03-03.
-Resume file: .paul/phases/03-core-slash-commands/03-01-SUMMARY.md
-Resume context: 03-01 research complete. BRIEF.md contains: command surface (10 entities, 37 sub-actions), Skillsmith skill spec (16 files), service layer design (14 modules), 9-plan breakdown (4 waves). Phase 1+2 code still uncommitted (bundle commit deferred). 8 decision log entries ready for PROJECT.md.
+Last session: 2026-04-15 ~21:25 CDT
+Stopped at: 03-03 complete — service infrastructure shipped (181/181 tests)
+Next action: Wave 2 — /paul:plan for 03-04 (Firm/Member/Operation services)
+Resume file: .paul/phases/03-core-slash-commands/03-03-SUMMARY.md
+Resume context: Wave 1 done. Skill directory scaffolded (03-02). Service infra shipped: _id (next_id, global count), _validate (require_exists, validate_status, validate_parent_ref, validate_fk), _records (log_event). 181 tests green. Wave 2 ready: 03-04 through 03-07 are all parallel candidates.
 
 ### 02-03 Execution Summary
 - 2/2 auto tasks PASS
