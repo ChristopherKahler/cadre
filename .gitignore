@@ -16,3 +16,15 @@ env/
 .ruff_cache/
 
 .firm/
+
+# PAUL orchestration (internal project management)
+.paul/
+
+# Pre-build design docs (source material, not release artifacts)
+ENTITY-DESIGN.md
+LANDSCAPE.md
+MEMBERS-DESIGN.md
+PLANNING.md
+
+# Tests (development only)
+tests/
