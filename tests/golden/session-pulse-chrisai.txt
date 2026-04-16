@@ -1,0 +1,44 @@
+<active-roster members="3">
+[BOARD] — Chris Kahler (Board / Founder)
+[MANAGERS]
+  - [MEM-002] Sterling (CMO) — (no contract wired yet)
+[INDIVIDUAL CONTRIBUTORS]
+  - [MEM-001] Quill (Blog Author) reports to Sterling — /quill:run
+    CURRENTLY ON: [UNIT-014] Blog post #14 draft (in_progress)
+  - [MEM-003] Sage (Content Strategist) reports to Sterling — (no contract wired yet)
+
+BEHAVIOR: This context is PASSIVE AWARENESS ONLY.
+Do NOT proactively mention roster state unless the user asks who's working on what
+or a Member's current Unit is blocked.
+</active-roster>
+
+<pending-gates count="1">
+[URGENT]
+  - [GATE-001] publish_post on unit "Blog post #14 draft" (requested by Quill, expires in 3h)
+    Context: Blog post #14 draft complete, AC resolved, ready for publish.
+
+BEHAVIOR: This context is PASSIVE AWARENESS ONLY.
+Do NOT proactively mention pending gates unless the user asks about approvals
+OR a gate is expired and unacknowledged this session.
+Use /gate:decide {id} approve|reject "{comment}" to act.
+</pending-gates>
+
+<goal-health goals="3">
+[OPERATION-LEVEL]
+  - [GOAL-001] Publish 2 longform blog posts per week (parent: operation "Content Publishing")
+    Metric: publish_rate — target 2 posts_per_week, current not-yet-baselined
+    Last metric update: 1h ago
+  - [GOAL-002] Monthly unique visitors trending upward (parent: operation "Content Publishing")
+    Metric: unique_visitors — target null per_month, current not-yet-baselined
+    Trend growing
+    Last metric update: 1h ago
+  - [GOAL-003] Unique-visitor-to-subscriber ratio held or growing (parent: operation "Content Publishing")
+    Metric: conversion_ratio — target null subs_per_unique, current not-yet-baselined
+    Trend stable_or_growing
+    Last metric update: 1h ago
+
+BEHAVIOR: This context is PASSIVE AWARENESS ONLY.
+v1 metrics are manually refreshed (no auto-polling). Stale metric.current reflects
+last manual update; do not infer actual progress from injection alone. Use
+/goal:update {id} {value} to refresh.
+</goal-health>

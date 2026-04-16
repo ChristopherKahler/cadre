@@ -21,7 +21,7 @@ Phases execute in numeric order: 1 → 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 | Phase | Name | Plans | Status | Completed |
 |-------|------|-------|--------|-----------|
 | 1 | Schema + Storage Layer | 3/3 | ✅ Complete | 2026-04-15 |
-| 2 | Hook Layer | TBD | Not started | - |
+| 2 | Hook Layer | 4/4 | ✅ Complete | 2026-04-15 |
 | 3 | Core Slash Commands | TBD | Not started | - |
 | 4 | Quill End-to-End | TBD | Not started | - |
 | 5 | Leadership Layer | TBD | Not started | - |
@@ -66,7 +66,11 @@ Phases execute in numeric order: 1 → 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 - `run-record` hook
 - Injection tag format design
 
-**Plans:** TBD during `/paul:plan`
+**Plans:**
+- **02-01** ✅ Research — injection tag format + hook contracts (BRIEF.md, 7 sections, 414 lines) [2026-04-15]
+- **02-02** ✅ Execute — session-pulse hook shipped; live-installed; 107 tests green; golden locked [2026-04-15]
+- **02-03** ✅ Execute — unit-completion handler + `firm unit complete` CLI shipped; 129/129 tests green (22 new); raw-SQL transaction pattern established [2026-04-15]
+- **02-04** ✅ Execute — run-record handler + `firm run end` CLI + PROJECT.md decisions append (3 tasks; 25 new tests; 154/154 total) [2026-04-15]
 
 ### Phase 3: Core Slash Commands
 

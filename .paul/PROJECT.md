@@ -32,9 +32,13 @@ Solo operators can treat their AI workflows as a company — with Members, Goals
 
 - ✓ **Phase 1: Schema + Storage Layer** (2026-04-15) — Python package scaffold, SQLite foundation with transactional migration runner, 14 entity tables with FK/CHECK/immutability triggers + 46 indexes, generic CRUD repository with JSON auto-serialization, atomic Unit checkout, dependency cycle detection. 76 tests green.
 
+### Validated (Shipped)
+
+- ✓ **Phase 2: Hook Layer** (2026-04-15) -- session-pulse hook (live-installed at workspace), unit-completion handler + CLI, run-record handler + CLI with credential redaction. 154 tests green. 34 decisions in Key Decisions table.
+
 ### Active (In Progress)
 
-- [ ] Phase 2: Hook Layer (session-pulse, unit-completion, run-record)
+- [ ] Phase 3: Core Slash Commands
 
 ### Planned (Next)
 
@@ -109,6 +113,21 @@ Solo operators can treat their AI workflows as a company — with Members, Goals
 | `member_run` is mutable (has `running → completed` lifecycle) | Initial spec had it in immutable set; corrected to 3 immutable tables (comment, records, usage_event) | 2026-04-15 | Active (01-02) |
 | Repository API uses `repo.find` (not `list`) | `list` shadows Python builtin; `find` is unambiguous and matches ORM conventions | 2026-04-15 | Active (01-03) |
 | Atomic Unit checkout via `UPDATE unit SET claimed_by = ? WHERE id = ? AND claimed_by IS NULL RETURNING *` | Single-statement atomicity; no race window; no app-layer locking | 2026-04-15 | Active (01-03) |
+| `session-pulse` triggers on `SessionStart:startup`, not `UserPromptSubmit` | One injection per session matches pulse-activation principle; UserPromptSubmit would spam tags and force dedup logic v1 doesn't need | 2026-04-15 | Active (02-01) |
+| `unit-completion` and `run-record` ship as callable functions in v1, not Claude Code hooks | v1 has no slash commands or MCP surface to auto-trigger them; Phase 6 (MCP) is the right layer for auto-hooking | 2026-04-15 | Active (02-01) |
+| Hook install path is `<workspace>/.claude/hooks/firm-*.py` | Firm data is workspace-scoped (`.firm/`); hooks must be too; matches BASE satellite precedent | 2026-04-15 | Active (02-01) |
+| Firm ID resolves via `FIRM_ID` env var with default `"chrisai"` | No new config file needed; multi-Firm migration path already documented at 1-2hr cost | 2026-04-15 | Active (02-01) |
+| Goal health is read-only in v1 -- hook does NOT compute metrics | `metric.current` is manually updated; null baselines handled gracefully; v1 surfaces target + status + staleness only | 2026-04-15 | Active (02-01) |
+| `<pending-gates>` renders silent-when-empty | Matches `<base-pulse>` precedent; avoids empty-tag noise | 2026-04-15 | Active (02-01) |
+| Run-record applies regex-based credential redaction on `error` and `notes` before write | Records are immutable; accidental secret-logging can't be undone; matches Paperclip's sanitizeRecord pattern | 2026-04-15 | Active (02-01, implemented 02-04) |
+| Inheritance-via-parent-chain rendering (Goals cascade) is v2, not v1 | Walking `parent_ref` recursively is a performance + UX question worth deferring until live data demands it | 2026-04-15 | Deferred (02-01) |
+| `FIRM_NOW_OVERRIDE` env hatch on entrypoint for deterministic golden tests | Allows hook entrypoint to produce bit-identical output regardless of wall-clock time; test-only, never used in production | 2026-04-15 | Active (02-02) |
+| Polymorphic dispatcher: `goal` -> `target`, others -> `name` for name resolution | Goal table has no `name` column; `target` is the human-readable identifier; all other entities use `name` | 2026-04-15 | Active (02-02) |
+| Human-verify checkpoints should default to Claude-executed when action is automatable | If Claude can run the verification (install, seed, fire subprocess), do it; save checkpoints for truly human-only judgments | 2026-04-15 | Active (02-02, ops principle) |
+| Raw SQL + manual transaction for multi-row hook writes | `repo.create`/`repo.update` commit internally; inside a try/commit/except+rollback block that commit defeats rollback; raw SQL preserves atomicity | 2026-04-15 | Active (02-03, reused 02-04) |
+| `LOG-NNN` / `USG-NNN` record ids via `SELECT COUNT(*)` per firm_id | Simplest readable scheme; safe because records/usage_event are immutable (no deletes shrink count); v1 single-operator, not concurrency-safe | 2026-04-15 | Active (02-03, 02-04) |
+| Caller owns `unit.status` / `member_run.status` mutation; handlers record transitions only | Keeps handlers pure; prevents double-writes when Phase 3 slash commands sequence status update + handler call explicitly | 2026-04-15 | Active (02-03) |
+| DB-trigger fixture (`BEFORE UPDATE/INSERT ... RAISE(ABORT)`) for mid-transaction failure tests | `sqlite3.Connection.execute` is read-only on CPython; DB trigger fires inside real SQL and produces genuine `sqlite3.IntegrityError` for rollback verification | 2026-04-15 | Active (02-03, reused 02-04) |
 
 ## Success Metrics
 
@@ -139,5 +158,5 @@ Solo operators can treat their AI workflows as a company — with Members, Goals
 
 ---
 *Created: 2026-04-14*
-*Last updated: 2026-04-15 after Phase 1 completion*
+*Last updated: 2026-04-15 after Phase 2 Plan 02-04 (Key Decisions append)*
 *PROJECT.md — Updated when requirements or context change*
