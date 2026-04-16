@@ -5,28 +5,28 @@
 See: .paul/PROJECT.md (updated 2026-04-15 after Phase 1 completion)
 
 **Core value:** Solo operators can treat their AI workflows as a company — with Members, Goals, and autonomous delegation — instead of hand-driving every session.
-**Current focus:** Phase 2 — Hook Layer — Plan 02-03 CLOSED. Ready for 02-04 (run-record + PROJECT.md decisions append).
+**Current focus:** Phase 3 — Core Slash Commands — 03-01 research complete. Ready for 03-02 scaffold.
 
 ## Current Position
 
-Milestone: v0.1 Initial Release (1 of 8 phases complete → Phase 2 transition pending)
-Phase: 2 of 8 — Hook Layer — COMPLETE (4 of 4 plans closed)
-Plan: 02-04 loop closed — SUMMARY written
-Status: Phase 2 complete. Transition required.
-Last activity: 2026-04-15 ~20:30 CDT — 02-04 UNIFY complete
+Milestone: v0.1 Initial Release (2 of 8 phases complete, Phase 3 in progress)
+Phase: 3 of 8 — Core Slash Commands — IN PROGRESS
+Plan: 03-01 loop closed — BRIEF + SUMMARY written
+Status: 03-01 complete. Ready for 03-02 (Skill Scaffold + Entry Point).
+Last activity: 2026-04-15 ~20:55 CDT — 03-01 BRIEF + SUMMARY complete
 
 Progress:
-- Milestone: [██░░░░░░░░] ~25%
-- Phase 2: [██████████] 100% (4 of 4 plans complete)
+- Milestone: [██░░░░░��░░] ~25%
+- Phase 3: [░░░░░░░��░░] 0% (plan 03-01 in design)
 
 ## Loop Position
 
 Current loop state:
 ```
-PLAN ──▶ APPLY ──▶ UNIFY          [02-04 loop closed]
+PLAN ──▶ APPLY ──▶ UNIFY          [03-01 closed]
   ✓        ✓        ✓
 ```
-Next: Phase 2 transition (commit bundle + ROADMAP update + route to Phase 3)
+Next: /paul:plan for 03-02 (Skill Scaffold + Entry Point) — Wave 1
 
 ## Accumulated Context
 
@@ -78,11 +78,11 @@ Feature branches merged: none
 
 ## Session Continuity
 
-Last session: 2026-04-15 ~20:30 CDT
-Stopped at: 02-04 UNIFY complete — loop closed, Phase 2 transition pending
-Next action: Phase 2 transition — bundle commit (Phase 1 + Phase 2 all uncommitted), ROADMAP update, route to Phase 3
-Resume file: .paul/phases/02-hook-layer/02-04-SUMMARY.md
-Resume context: Phase 2 (Hook Layer) complete — 4/4 plans shipped. 154/154 tests green. Deliverables: session-pulse hook (live-installed), unit-completion handler + CLI, run-record handler + CLI, _redact utility, PROJECT.md with 34 decisions. Bundle commit covers Phase 1 (foundation: scaffold + migrations + repo) + Phase 2 (hooks: session-pulse + unit-completion + run-record + CLI verbs). Operator chose single-bundle commit at 02-03 UNIFY — confirm at transition or split.
+Last session: 2026-04-15 ~20:55 CDT
+Stopped at: 03-01 loop closed — BRIEF + SUMMARY written
+Next action: /paul:plan for 03-02 (Skill Scaffold + Entry Point). Wave 1 — parallel with 03-03.
+Resume file: .paul/phases/03-core-slash-commands/03-01-SUMMARY.md
+Resume context: 03-01 research complete. BRIEF.md contains: command surface (10 entities, 37 sub-actions), Skillsmith skill spec (16 files), service layer design (14 modules), 9-plan breakdown (4 waves). Phase 1+2 code still uncommitted (bundle commit deferred). 8 decision log entries ready for PROJECT.md.
 
 ### 02-03 Execution Summary
 - 2/2 auto tasks PASS

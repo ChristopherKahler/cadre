@@ -22,7 +22,7 @@ Phases execute in numeric order: 1 → 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 |-------|------|-------|--------|-----------|
 | 1 | Schema + Storage Layer | 3/3 | ✅ Complete | 2026-04-15 |
 | 2 | Hook Layer | 4/4 | ✅ Complete | 2026-04-15 |
-| 3 | Core Slash Commands | TBD | Not started | - |
+| 3 | Core Slash Commands | TBD | In progress | - |
 | 4 | Quill End-to-End | TBD | Not started | - |
 | 5 | Leadership Layer | TBD | Not started | - |
 | 6 | MCP Server | TBD | Not started | - |
@@ -74,17 +74,23 @@ Phases execute in numeric order: 1 → 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 
 ### Phase 3: Core Slash Commands
 
-**Goal:** All entity lifecycle operations runnable from slash commands. Full Member/Operation/Project/Unit/Gate/Goal management via CLI.
+**Goal:** All entity lifecycle operations runnable from slash commands. Full Member/Operation/Project/Unit/Gate/Goal management via Claude Code skill surface.
 **Depends on:** Phase 2 (commands integrate with hook-generated context)
-**Research:** Unlikely
+**Research:** Yes — Skillsmith discovery to design the skill spec before scaffolding.
+**Methodology:** Built using `/skillsmith:skillsmith` conventions (entry point, tasks, frameworks, templates, checklists). Skill files invoke the Python backend via subprocess or direct import.
 
 **Scope:**
-- `/firm:init`, `/firm:status`
-- `/member:*` commands (create, update, run)
-- `/operation:*`, `/project:*`, `/unit:*`, `/gate:*`, `/goal:*` commands
-- Atomic Unit checkout implementation
+- `firm` Claude Code skill (suite type, Skillsmith-compliant)
+- `/firm:init`, `/firm:status` — Firm lifecycle
+- `/firm:member` — Member CRUD + dispatch routing
+- `/firm:operation`, `/firm:project` — Strategic entity lifecycle
+- `/firm:unit` — Unit lifecycle including checkout/complete (wraps Phase 2 handlers)
+- `/firm:gate` — Gate request/approve/reject flow
+- `/firm:goal` — Goal CRUD + metric updates
+- `/firm:comment`, `/firm:contract`, `/firm:document` — Supporting entity lifecycle
+- Python service layer (`firm.services`) bridging slash commands to `firm.core.repo`
 
-**Plans:** TBD during `/paul:plan`
+**Plans:** TBD (in progress)
 
 ### Phase 4: Quill End-to-End
 
