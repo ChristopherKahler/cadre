@@ -163,6 +163,86 @@ def update_member(
     return updated
 
 
+# ---------------------------------------------------------------------------
+# Hierarchy queries
+# ---------------------------------------------------------------------------
+
+
+def get_direct_reports(
+    conn: sqlite3.Connection,
+    firm_id: str,
+    member_id: str,
+) -> list[dict[str, Any]]:
+    """Return Members whose reports_to_member_id equals member_id.
+
+    Args:
+        conn: SQLite connection.
+        firm_id: Firm scope.
+        member_id: The manager's member ID.
+
+    Returns:
+        List of member dicts who report to this member. Empty if none.
+    """
+    return repo.find(conn, "member", firm_id=firm_id, reports_to_member_id=member_id)
+
+
+def get_management_chain(
+    conn: sqlite3.Connection,
+    member_id: str,
+) -> list[dict[str, Any]]:
+    """Walk up the reports_to chain from member to root (Board).
+
+    Returns:
+        Ordered list of manager dicts, from immediate manager to root.
+        Empty list if member reports directly to the Board (no manager).
+
+    Raises:
+        ValueError: If member_id not found.
+    """
+    member = require_exists(conn, "member", member_id)
+
+    chain: list[dict[str, Any]] = []
+    current = member
+    seen: set[str] = {member_id}
+
+    for _ in range(10):  # Safety cap prevents infinite loops from corrupt data
+        manager_id = current.get("reports_to_member_id")
+        if not manager_id:
+            break
+        if manager_id in seen:
+            break  # Circular reference — stop walking
+        seen.add(manager_id)
+        manager = repo.get(conn, "member", manager_id)
+        if not manager:
+            break  # Dangling FK — stop walking
+        chain.append(dict(manager))
+        current = manager
+
+    return chain
+
+
+def can_delegate_to(
+    conn: sqlite3.Connection,
+    manager_id: str,
+    assignee_id: str,
+) -> bool:
+    """Check if manager can delegate work to assignee (direct report).
+
+    Returns True if assignee's reports_to_member_id == manager_id
+    and both Members exist and are active.
+
+    Raises:
+        ValueError: If either Member not found.
+    """
+    manager = require_exists(conn, "member", manager_id)
+    assignee = require_exists(conn, "member", assignee_id)
+
+    if manager.get("status") != "active" or assignee.get("status") != "active":
+        return False
+
+    return assignee.get("reports_to_member_id") == manager_id
+
+
 def _auto_gen_instructions(
     member_id: str,
     role: str,
