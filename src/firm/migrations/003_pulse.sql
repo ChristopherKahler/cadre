@@ -17,7 +17,7 @@
 -----------------------------------------------------------------------------
 -- member: PULSE activation columns
 -- Frequency and cadence are Member-level concerns (identity, not runtime).
--- Contract is a runtime adapter only — it defines HOW a Member executes,
+-- Contract defines the runtime binding only — HOW a Member executes,
 -- not WHAT they do or WHEN.
 -----------------------------------------------------------------------------
 

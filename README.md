@@ -167,9 +167,9 @@ Members can manipulate their own Firm's state during Runs — create sub-Units, 
 
 ---
 
-## Adapters (runtime-agnostic design)
+## Contract runtimes (runtime-agnostic design)
 
-Member (identity) and Contract (runtime) are separable by design. Cadre ships with one reference adapter: `firm.contracts.claude_code`. To target another runtime, implement the 3-method `ContractRuntime` Protocol:
+Member (identity) and Contract (runtime binding) are separable entities in Cadre. Cadre ships with one reference Contract runtime: `firm.contracts.claude_code`. To target another runtime, implement the 3-method `ContractRuntime` Protocol:
 
 ```python
 invoke(conn, contract, member, unit, *, cwd) -> InvokeResult
@@ -177,7 +177,9 @@ status(handle) -> RunStatus
 cancel(handle) -> bool
 ```
 
-Stub templates live in [`templates/adapters/`](templates/adapters/) (OpenClaw, Codex). Full authoring guide in [`docs/adapters.md`](docs/adapters.md).
+Stub templates live in [`templates/contracts/`](templates/contracts/) (OpenClaw, Codex). Full authoring guide in [`docs/contracts.md`](docs/contracts.md).
+
+> Cadre calls these **Contract runtimes**, not *adapters*. "Adapter" is Paperclip vocabulary. See [CADRE-VS-PAPERCLIP.md](CADRE-VS-PAPERCLIP.md) for the terminology and architectural differences.
 
 ---
 
@@ -188,12 +190,12 @@ Stub templates live in [`templates/adapters/`](templates/adapters/) (OpenClaw, C
 - PULSE handler (stateless orchestrator with frequency/budget/validation gating)
 - 10 service modules, 33 MCP tools, gap detection + propose-hire flow
 - Demo Firm seed, one-command installer, session-pulse hook with auto-registration
-- Public docs, adapter authoring guide, OpenClaw + Codex stub templates
+- Public docs, Contract runtime authoring guide, OpenClaw + Codex stub templates
 
 **Not yet:**
 - PyPI publish (install from source for now)
 - UI / dashboard — CLI + hook injection is the interface
-- Real OpenClaw / Codex adapters (stubs only; implement when those runtimes are live for you)
+- Real OpenClaw / Codex Contract runtimes (stubs only; implement when those runtimes are live for you)
 - Scheduled `cadre pulse` cron — Members activate on trigger, not on a timer
 - Multi-operator governance — v0.1 is single-Board
 
@@ -222,8 +224,33 @@ Firm (chrisai)
 |---|---|
 | Data store | SQLite (`.firm/firm.db`) — ACID, stdlib only, zero deps |
 | Core / hooks / CLI / MCP | Python (one language, zero serialization boundary) |
-| Runtime adapters | Formal `ContractRuntime` Protocol (structural typing) |
+| Contract runtimes | Formal `ContractRuntime` Protocol (structural typing) |
 | Operator interface | Slash commands + session-pulse injection + MCP tools |
+
+---
+
+## How Cadre differs from Paperclip
+
+Cadre and [Paperclip](https://github.com/) both encode the "AI-operated company" mental model, but they target different operators with different assumptions. Paperclip is a multi-operator control plane running 24/7 on Postgres with a React dashboard — Salesforce-shaped. Cadre is local-first, session-activated, and lives inside your editor — Git-shaped.
+
+|  | Paperclip | Cadre |
+|---|---|---|
+| **Mental model** | Salesforce for AI companies | Git for AI companies |
+| **Activation** | 24/7 heartbeat cron | Session-start pulse (wake when you work) |
+| **Operator surface** | React dashboard at localhost:3100 | Claude Code session context (no separate UI) |
+| **Persistence** | Postgres (embedded PGlite or hosted) | SQLite (stdlib, single file) |
+| **Process model** | Persistent Node server + workers | Python package, no daemon |
+| **Identity vs runtime** | `agent.adapter_config` JSONB | Member and Contract as separate entities |
+| **Audit** | `activity_log` + `cost_events` + `heartbeat_run_events` + `budget_incidents` | Single immutable `Records` stream |
+| **Governance** | Approvals as DB state machine rows | Rules-as-code (CARL) + Gate entities |
+| **Extension** | TypeScript plugin SDK | Python `ContractRuntime` Protocol (3 methods) |
+| **Tables** | ~65 | ~14 |
+
+**Use Paperclip** for multi-operator teams, 24/7 autonomous operation, web dashboards for non-engineers, and enterprise governance/audit needs.
+
+**Use Cadre** for solo builders, editor-native workflows, zero-infra deployment, and governance-as-code via CARL rules.
+
+These aren't the same product at different scales. They occupy different categories. Full breakdown with entity tables, architectural assumptions, strengths, frictions, and anti-patterns to avoid: [CADRE-VS-PAPERCLIP.md](CADRE-VS-PAPERCLIP.md).
 
 ---
 
@@ -249,7 +276,8 @@ Firm (chrisai)
 - [`MEMBERS-DESIGN.md`](MEMBERS-DESIGN.md) — concrete roster (Quill, Sterling, Sage), Operations, Goals, Projects, Contracts
 - [`NAMING.md`](NAMING.md) — Cadre vocabulary map (public brand vs. internal package)
 - [`PULSE-SPEC.md`](PULSE-SPEC.md) — stateless pulse orchestrator spec
-- [`docs/adapters.md`](docs/adapters.md) — runtime adapter authoring guide
+- [`docs/contracts.md`](docs/contracts.md) — Contract runtime authoring guide
+- [`CADRE-VS-PAPERCLIP.md`](CADRE-VS-PAPERCLIP.md) — architectural and positioning differences vs Paperclip
 
 ---
 
@@ -261,4 +289,4 @@ MIT.
 
 ## Acknowledgments
 
-Cadre's entity vocabulary (Firm / Member / Operation / Unit / Gate) was inspired by [Paperclip](https://github.com/), a 53k-star project that validated the "AI-operated company" conceptual model for multi-operator orgs running on 24/7 cron heartbeats. Cadre takes that mental model and rescopes it: pulse-activated instead of heartbeat-driven, solo-to-small-operator instead of enterprise, SQLite + stdlib instead of Postgres + hosted infra, runtime-agnostic via formal Contract interface. Different shape, same north star — treat your agents like a team, not a one-shot prompt.
+The "AI-operated company" mental model was formatively explored by [Paperclip](https://github.com/), a 53k-star project validating the concept for multi-operator orgs on 24/7 cron heartbeats. Cadre takes that frame, inverts the scheduling model, rescopes for solo operators, and keeps its own vocabulary — **Firm / Member / Unit / Gate / Contract runtime** — because the products are different and the language should be too. See [CADRE-VS-PAPERCLIP.md](CADRE-VS-PAPERCLIP.md) for the full architectural and positioning breakdown.

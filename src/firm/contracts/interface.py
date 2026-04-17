@@ -1,7 +1,8 @@
 """Contract runtime interface types.
 
-Defines the 3-method Protocol (invoke / status / cancel) that every runtime
-adapter must satisfy, plus the data types exchanged across the boundary.
+Defines the 3-method Protocol (invoke / status / cancel) that every
+Contract runtime must satisfy, plus the data types exchanged across the
+boundary.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ class RunStatus(enum.Enum):
 class RunHandle:
     """Opaque handle returned by ``invoke`` for ``status`` / ``cancel``.
 
-    Adapters populate whichever fields are meaningful for their runtime.
+    Runtimes populate whichever fields are meaningful for their backend.
     """
 
     run_id: str | None = None
@@ -62,7 +63,7 @@ class InvokeResult:
 class ContractRuntime(Protocol):
     """3-method interface for runtime-swappable Contract execution.
 
-    Adapters implement this Protocol (structural typing — no inheritance
+    Runtimes implement this Protocol (structural typing — no inheritance
     required) to plug into the framework.
     """
 

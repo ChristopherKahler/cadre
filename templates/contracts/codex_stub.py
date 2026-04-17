@@ -1,9 +1,9 @@
-"""Codex runtime adapter stub.
+"""Codex Contract runtime stub.
 
 Copy to ``src/firm/contracts/codex.py`` and implement the 3 Protocol
 methods (invoke, status, cancel). Register with the runtime resolver by
 setting ``Contract.runtime_type = "codex"`` on any Contract that should
-use this adapter.
+use this runtime.
 
 Registration example:
 
@@ -12,7 +12,7 @@ Registration example:
 
     register_runtime("codex", CodexRuntime())
 
-See docs/adapters.md for the full walkthrough.
+See docs/contracts.md for the full walkthrough.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ class CodexRuntime:
     ) -> InvokeResult:
         """Start a Codex invocation for the given Member + Unit.
 
-        TODO: Implement this adapter:
+        TODO: Implement this runtime:
         - Build the prompt from contract.skill_loadout + unit context
         - Call the Codex CLI / SDK for the session
         - Capture stdout / stderr / exit code

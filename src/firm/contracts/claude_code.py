@@ -1,4 +1,4 @@
-"""Claude Code runtime adapter — ``claude --print`` subprocess invocation.
+"""Claude Code Contract runtime — ``claude --print`` subprocess invocation.
 
 Implements ``ContractRuntime`` by delegating to the existing PULSE spawn
 and prompt-assembly infrastructure.
@@ -16,7 +16,7 @@ from firm.pulse.spawn import _active_pids, spawn_member_run
 
 
 class ClaudeCodeRuntime:
-    """Runtime adapter for ``claude --print`` subprocess invocation."""
+    """Contract runtime for ``claude --print`` subprocess invocation."""
 
     def invoke(
         self,

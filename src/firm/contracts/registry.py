@@ -1,4 +1,4 @@
-"""Runtime adapter registry — resolves ``runtime_type`` to adapter instance."""
+"""Contract runtime registry — resolves ``runtime_type`` to runtime instance."""
 
 from __future__ import annotations
 
@@ -15,13 +15,13 @@ SUPPORTED_RUNTIMES: list[str] = list(_RUNTIMES.keys())
 
 
 def resolve_runtime(contract: dict[str, Any]) -> ContractRuntime:
-    """Return the correct ``ContractRuntime`` adapter for a contract.
+    """Return the correct ``ContractRuntime`` for a contract.
 
     Args:
         contract: Contract row dict with ``runtime_type`` field.
 
     Returns:
-        Instantiated runtime adapter.
+        Instantiated Contract runtime.
 
     Raises:
         ValueError: If ``runtime_type`` is not registered.

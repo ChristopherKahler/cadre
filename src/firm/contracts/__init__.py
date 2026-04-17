@@ -1,7 +1,7 @@
 """Formal Contract runtime interface — invoke, status, cancel.
 
-Adapters implement the ``ContractRuntime`` protocol to make the framework
-runtime-agnostic.  Use ``resolve_runtime(contract)`` to get the right adapter.
+Runtimes implement the ``ContractRuntime`` protocol to make the framework
+runtime-agnostic. Use ``resolve_runtime(contract)`` to get the right runtime.
 """
 
 from firm.contracts.interface import (

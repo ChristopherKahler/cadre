@@ -1,9 +1,9 @@
-"""OpenClaw runtime adapter stub.
+"""OpenClaw Contract runtime stub.
 
 Copy to ``src/firm/contracts/openclaw.py`` and implement the 3 Protocol
 methods (invoke, status, cancel). Register with the runtime resolver by
 setting ``Contract.runtime_type = "openclaw"`` on any Contract that should
-use this adapter.
+use this runtime.
 
 Registration example (in your project setup):
 
@@ -12,7 +12,7 @@ Registration example (in your project setup):
 
     register_runtime("openclaw", OpenClawRuntime())
 
-See docs/adapters.md for the full walkthrough.
+See docs/contracts.md for the full walkthrough.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ class OpenClawRuntime:
     ) -> InvokeResult:
         """Start an OpenClaw invocation for the given Member + Unit.
 
-        TODO: Implement this adapter:
+        TODO: Implement this runtime:
         - Build the prompt from contract.skill_loadout + unit context
         - Spawn your OpenClaw process (subprocess / API call / etc.)
         - Capture stdout / stderr / exit code

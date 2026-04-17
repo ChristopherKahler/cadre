@@ -38,7 +38,7 @@ firm.__internal_package__ # "firm"
 | Work | Units | Atomic tasks Members claim via atomic checkout |
 | Strategy | Operations → Projects → Goals | Scoping hierarchy |
 | Checkpoints | Gates | Board approval points for significant actions |
-| Contract | Contract | Runtime adapter — how a Member actually executes (Claude Code, OpenClaw, etc.) |
+| Contract | Contract | Runtime binding — how a Member actually executes (Claude Code, OpenClaw, etc.) |
 
 ## When to Say What
 

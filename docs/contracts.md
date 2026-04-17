@@ -1,8 +1,10 @@
-# Writing a Runtime Adapter
+# Writing a Contract Runtime
 
 Cadre is runtime-agnostic by design. The reference implementation targets Claude Code, but any agent runtime that can execute a prompt and return output can be plugged in through the `ContractRuntime` Protocol.
 
-## Why Adapters Exist
+> **Terminology.** Cadre calls these **Contract runtimes**, not *adapters*. A `Contract` is a first-class entity on the Firm; a runtime is the code that executes it. "Adapter" is Paperclip vocabulary — Cadre keeps its own.
+
+## Why Contract Runtimes Exist
 
 A `Member` owns identity (role, skills, reports-to). A `Contract` owns runtime (which system actually executes the Member). Splitting those two concerns means you can swap Claude Code for OpenClaw, Codex, or any future runtime without rewriting your Firm.
 
@@ -42,10 +44,10 @@ All defined in `firm.contracts.interface`:
 | Type | Purpose |
 | :--- | :--- |
 | `RunStatus` | Enum of lifecycle states |
-| `RunHandle` | Opaque handle: `run_id`, `pid`, `metadata` (adapter-specific) |
+| `RunHandle` | Opaque handle: `run_id`, `pid`, `metadata` (runtime-specific) |
 | `InvokeResult` | Returned from `invoke`; carries handle + output + snapshot |
 
-## Registering Your Adapter
+## Registering Your Runtime
 
 ```python
 from firm.contracts.registry import register_runtime
@@ -54,15 +56,15 @@ from firm.contracts.your_runtime import YourRuntime
 register_runtime("your_runtime_name", YourRuntime())
 ```
 
-After registration, any `Contract` row with `runtime_type = "your_runtime_name"` dispatches to your adapter. The PULSE runner calls `resolve_runtime(contract)` to look up the right adapter by `runtime_type`.
+After registration, any `Contract` row with `runtime_type = "your_runtime_name"` dispatches to your runtime. The PULSE runner calls `resolve_runtime(contract)` to look up the right runtime by `runtime_type`.
 
 ## Reference Implementation
 
-`src/firm/contracts/claude_code.py` is the canonical example. It spawns `claude --print`, parses stream-JSON, and maps Claude Code's exit codes to the `RunStatus` enum. Read it side-by-side with your stub when implementing a new adapter.
+`src/firm/contracts/claude_code.py` is the canonical example. It spawns `claude --print`, parses stream-JSON, and maps Claude Code's exit codes to the `RunStatus` enum. Read it side-by-side with your stub when implementing a new runtime.
 
 ## Stub Templates
 
-Two copy-to-start stubs live in [`templates/adapters/`](../templates/adapters/):
+Two copy-to-start stubs live in [`templates/contracts/`](../templates/contracts/):
 
 - `openclaw_stub.py` — for OpenClaw
 - `codex_stub.py` — for OpenAI Codex
