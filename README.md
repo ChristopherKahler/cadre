@@ -1,6 +1,6 @@
 # Agent Company Architecture
 
-> A standalone framework for orchestrating a company of AI Members — Paperclip-inspired, released publicly, runtime-agnostic by design.
+> A standalone framework for orchestrating a company of AI Members - Paperclip-inspired, released publicly, runtime-agnostic by design.
 
 **Type:** Application
 **Stack:** SQLite (`.firm/firm.db`) + Python (core / hooks / MCP server) + Claude Code skills + pluggable runtime adapters
@@ -23,9 +23,9 @@ The package name is `firm` internally. Subject to rename at Phase 8 before publi
 
 ## Overview
 
-Solo operators and small teams building with Claude Code have no structured way to treat AI workflows as a company. Paperclip (53k stars) validates the conceptual model but is scoped for multi-operator orgs with 24/7 cron heartbeats. This framework encodes the autonomous-team mental model — Members with roles, Operations they own, Goals they pursue, Units of atomic work, Gates the Board decides on — scoped for solo-to-small operators, built for Claude Code but designed to swap to OpenClaw / Codex / other runtimes.
+Solo operators and small teams building with Claude Code have no structured way to treat AI workflows as a company. Paperclip (53k stars) validates the conceptual model but is scoped for multi-operator orgs with 24/7 cron heartbeats. This framework encodes the autonomous-team mental model - Members with roles, Operations they own, Goals they pursue, Units of atomic work, Gates the Board decides on - scoped for solo-to-small operators, built for Claude Code but designed to swap to OpenClaw / Codex / other runtimes.
 
-**First Firm:** ChrisAI — Chris Kahler's personal AI-operated firm. Framework released publicly so other solo builders can install and adapt.
+**First Firm:** ChrisAI - Chris Kahler's personal AI-operated firm. Framework released publicly so other solo builders can install and adapt.
 
 ---
 
@@ -52,22 +52,22 @@ Solo operators and small teams building with Claude Code have no structured way 
 
 ### Key Design Principles
 
-1. **Standalone** — independent of BASE/CARL/PAUL. Separate folder (`.firm/`), hooks, MCP.
-2. **Identity / runtime split** — Member (identity) and Contract (runtime) separable. Swappable runtimes.
-3. **Firm-scoped from day one** — `firm_id` on every entity. Supports multi-Firm later.
-4. **Pulse activation** — session-start hooks fire Members. No 24/7 heartbeats.
-5. **Polymorphic modifiers** — Goal and Comment both use `parent_ref` pattern.
-6. **Immutable append-only** — Comments and Records never rewritten.
-7. **Formal 3-method Contract interface** — runtime-agnostic from v1.
-8. **Hard-gated dependencies** — Units can't run until `depends_on` is done.
-9. **Hybrid priority** — categorical bucket + decimal stack rank for deterministic AI ordering.
-10. **Board = yes/no authority** — team runs the firm; Board approves/rejects.
+1. **Standalone** - independent of BASE/CARL/PAUL. Separate folder (`.firm/`), hooks, MCP.
+2. **Identity / runtime split** - Member (identity) and Contract (runtime) separable. Swappable runtimes.
+3. **Firm-scoped from day one** - `firm_id` on every entity. Supports multi-Firm later.
+4. **Pulse activation** - session-start hooks fire Members. No 24/7 heartbeats.
+5. **Polymorphic modifiers** - Goal and Comment both use `parent_ref` pattern.
+6. **Immutable append-only** - Comments and Records never rewritten.
+7. **Formal 3-method Contract interface** - runtime-agnostic from v1.
+8. **Hard-gated dependencies** - Units can't run until `depends_on` is done.
+9. **Hybrid priority** - categorical bucket + decimal stack rank for deterministic AI ordering.
+10. **Board = yes/no authority** - team runs the firm; Board approves/rejects.
 
 ---
 
 ## Data Model
 
-Full entity schemas in `ENTITY-DESIGN.md` (migrated from projects/ during graduation — see References).
+Full entity schemas in `ENTITY-DESIGN.md` (migrated from projects/ during graduation - see References).
 
 Storage: single monolithic JSON files per entity type in `.firm/` (open question: revisit if files grow unwieldy).
 
@@ -77,17 +77,17 @@ Storage: single monolithic JSON files per entity type in `.firm/` (open question
 
 ### Slash Commands (primary operator interface)
 
-- `/firm:init` — bootstrap
-- `/member:create`, `/member:update`, `/member:run <name>` — Members
-- `/quill:run <stage>` — per-Member dispatch pattern
-- `/operation:*`, `/project:*`, `/unit:*`, `/gate:*`, `/goal:*` — entity lifecycles
-- `/firm:status` — comprehensive health check
+- `/firm:init` - bootstrap
+- `/member:create`, `/member:update`, `/member:run <name>` - Members
+- `/quill:run <stage>` - per-Member dispatch pattern
+- `/operation:*`, `/project:*`, `/unit:*`, `/gate:*`, `/goal:*` - entity lifecycles
+- `/firm:status` - comprehensive health check
 
 ### Hooks
 
-- `session-pulse` — injects `<active-roster>`, `<pending-gates>`, `<goal-health>`
-- `unit-completion` — Records log + Project AC update
-- `run-record` — writes RUN + USG entities
+- `session-pulse` - injects `<active-roster>`, `<pending-gates>`, `<goal-health>`
+- `unit-completion` - Records log + Project AC update
+- `run-record` - writes RUN + USG entities
 
 ### MCP Surface (post-v1)
 
@@ -129,21 +129,21 @@ Not in scope: hosted service, web dashboard, SaaS layer. CLI + hooks + active-aw
 
 ## Implementation Phases
 
-**Phase 1 — Schema + Storage Layer.** Build entity schemas + CRUD, `.firm/` scaffold. Testable: create/read/update/delete each entity. Outcome: manually populate `.firm/` with Quill/Sterling/Sage roster.
+**Phase 1 - Schema + Storage Layer.** Build entity schemas + CRUD, `.firm/` scaffold. Testable: create/read/update/delete each entity. Outcome: manually populate `.firm/` with Quill/Sterling/Sage roster.
 
-**Phase 2 — Hook Layer.** session-pulse, injection tags, unit-completion, run-record hooks. Testable: session injects active roster; Unit completion writes Record. Outcome: Firm context visible every session.
+**Phase 2 - Hook Layer.** session-pulse, injection tags, unit-completion, run-record hooks. Testable: session injects active roster; Unit completion writes Record. Outcome: Firm context visible every session.
 
-**Phase 3 — Core Slash Commands.** All entity lifecycle commands. Testable: full Member lifecycle via commands. Outcome: operator orchestrates from slash commands.
+**Phase 3 - Core Slash Commands.** All entity lifecycle commands. Testable: full Member lifecycle via commands. Outcome: operator orchestrates from slash commands.
 
-**Phase 4 — Quill End-to-End.** `/quill:run <stage>`, CON-001 wiring, blog-post-master integration. Testable: Quill produces a post end-to-end. Outcome: first Member operational.
+**Phase 4 - Quill End-to-End.** `/quill:run <stage>`, CON-001 wiring, blog-post-master integration. Testable: Quill produces a post end-to-end. Outcome: first Member operational.
 
-**Phase 5 — Leadership Layer.** Sterling + Sage Contracts, reports_to enforcement, delegation flows. Testable: Sterling assigns Unit to Quill; Sage surfaces opportunities. Outcome: Chris operates at Board level.
+**Phase 5 - Leadership Layer.** Sterling + Sage Contracts, reports_to enforcement, delegation flows. Testable: Sterling assigns Unit to Quill; Sage surfaces opportunities. Outcome: Chris operates at Board level.
 
-**Phase 6 — MCP Server.** Programmatic entity access. Testable: Members create/update entities during Runs. Outcome: autonomous team behavior unlocked.
+**Phase 6 - MCP Server.** Programmatic entity access. Testable: Members create/update entities during Runs. Outcome: autonomous team behavior unlocked.
 
-**Phase 7 — Gap Detection.** Sterling's Member gap identification — heuristics surface "we need X role" Gates. Outcome: team grows itself under Board direction.
+**Phase 7 - Gap Detection.** Sterling's Member gap identification - heuristics surface "we need X role" Gates. Outcome: team grows itself under Board direction.
 
-**Phase 8 — Public Release.** Installer, public docs, runtime adapter templates. Testable: fresh-workspace install works. Outcome: framework shippable externally.
+**Phase 8 - Public Release.** Installer, public docs, runtime adapter templates. Testable: fresh-workspace install works. Outcome: framework shippable externally.
 
 ---
 
@@ -172,8 +172,8 @@ Not in scope: hosted service, web dashboard, SaaS layer. CLI + hooks + active-aw
 3. MCP server language (Node.js vs Python)
 4. ccusage integration surface / timing
 5. Framework public name (if rename needed before release)
-6. blog-post-master — port or reference externally?
-7. Gap-detection heuristics — what triggers "need a new Member"?
+6. blog-post-master - port or reference externally?
+7. Gap-detection heuristics - what triggers "need a new Member"?
 8. BASE relationship long-term
 
 ---
@@ -181,8 +181,8 @@ Not in scope: hosted service, web dashboard, SaaS layer. CLI + hooks + active-aw
 ## Current Roster (First Firm: ChrisAI)
 
 ```
-Board (Chris — yes/no authority)
-  └─ Sterling (MEM-002, CMO) — owns OPS-001 Content Publishing
+Board (Chris - yes/no authority)
+  └─ Sterling (MEM-002, CMO) - owns OPS-001 Content Publishing
         ├─ Sage (MEM-003, Content Strategist)
         └─ Quill (MEM-001, Blog Author)
               └─ UNIT-000: "The CLAUDE.md Strategy" (retroactive, live on chrisai.cv)
@@ -190,17 +190,17 @@ Board (Chris — yes/no authority)
 Reserved future Member names: Echo (social repurposing), Harbor (video)
 ```
 
-First Project: PROJ-001 "Quill Cadence — First 8 Posts," 2 posts/week, due 2026-05-12.
+First Project: PROJ-001 "Quill Cadence - First 8 Posts," 2 posts/week, due 2026-05-12.
 
 ---
 
 ## References
 
-- `PLANNING.md` — full planning artifact
-- `ENTITY-DESIGN.md` — authoritative schemas, 14 entities, complete design decision history
-- `MEMBERS-DESIGN.md` — concrete roster (Quill, Sterling, Sage), Operations, Goals, Projects, Contracts, Documents
-- `LANDSCAPE.md` — Paperclip research artifact, entity mapping
-- BASE project entry: PRJ-050 "Agent Company Architecture — Meta-Framework for Agent Orchestration"
+- `PLANNING.md` - full planning artifact
+- `ENTITY-DESIGN.md` - authoritative schemas, 14 entities, complete design decision history
+- `MEMBERS-DESIGN.md` - concrete roster (Quill, Sterling, Sage), Operations, Goals, Projects, Contracts, Documents
+- `LANDSCAPE.md` - Paperclip research artifact, entity mapping
+- BASE project entry: PRJ-050 "Agent Company Architecture - Meta-Framework for Agent Orchestration"
 
 ---
 

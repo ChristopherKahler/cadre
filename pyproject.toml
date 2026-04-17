@@ -3,16 +3,16 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "firm"
+name = "cadre"
 version = "0.1.0"
-description = "A standalone framework for orchestrating a company of AI Members"
+description = "Cadre — Coordinated Agent Deployment Runtime Engine. A standalone framework for orchestrating an AI Firm of Members, Goals, Operations, and Units."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
   { name = "Chris Kahler" }
 ]
-keywords = ["claude-code", "agents", "framework", "firm", "mcp"]
+keywords = ["claude-code", "agents", "framework", "firm", "mcp", "cadre"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3",
@@ -29,6 +29,7 @@ dev = [
 ]
 
 [project.scripts]
+cadre = "firm.__main__:main"
 firm = "firm.__main__:main"
 
 [project.urls]

@@ -1,11 +1,14 @@
-"""firm CLI entry point.
+"""Cadre (a.k.a. firm) CLI entry point.
 
 Usage:
-    firm init <workspace> [--force]
-    firm unit complete <unit_id> --member <member_id> [...flags]
-    firm run end <run_id> --status <status> [...flags]
-    firm --version
-    firm --help
+    cadre init <workspace> [--force] [--demo] [--install-hooks]
+    cadre unit complete <unit_id> --member <member_id> [...flags]
+    cadre run end <run_id> --status <status> [...flags]
+    cadre --version
+    cadre --help
+
+Both `cadre` and `firm` console scripts route here — the import package
+stays `firm`; `cadre` is the public-facing distribution/command name.
 """
 
 from __future__ import annotations
@@ -19,14 +22,17 @@ from firm import __version__
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    prog_name = Path(sys.argv[0]).name if sys.argv and sys.argv[0] else "cadre"
+    if prog_name.endswith(".py"):
+        prog_name = "cadre"
     parser = argparse.ArgumentParser(
-        prog="firm",
-        description="Framework for orchestrating a company of AI Members.",
+        prog=prog_name,
+        description="Cadre — Coordinated Agent Deployment Runtime Engine. Orchestrates a Firm of AI Members.",
     )
     parser.add_argument(
         "--version",
         action="version",
-        version=f"firm {__version__}",
+        version=f"{prog_name} {__version__}",
     )
 
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
@@ -44,6 +50,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Bypass the already-initialized short-circuit.",
+    )
+    init_parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Seed the generic `demo` firm after migrations (non-chrisai example).",
+    )
+    init_parser.add_argument(
+        "--install-hooks",
+        dest="install_hooks_flag",
+        action="store_true",
+        help="Install session-pulse hook into <workspace>/.claude/hooks/ and register in settings.json.",
     )
 
     unit_parser = subparsers.add_parser(
@@ -134,7 +151,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "init":
         from firm.cli.init import run_init
 
-        return run_init(args.workspace, force=args.force)
+        return run_init(
+            args.workspace,
+            force=args.force,
+            demo=args.demo,
+            install_hooks_flag=args.install_hooks_flag,
+        )
 
     if args.command == "unit":
         if args.unit_command == "complete":
