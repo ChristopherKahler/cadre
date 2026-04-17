@@ -27,6 +27,7 @@ from firm.services import member as member_svc
 from firm.services import operation as operation_svc
 from firm.services import project as project_svc
 from firm.services import unit as unit_svc
+from firm.heuristics import gaps as gaps_heuristics
 
 mcp = FastMCP("firm")
 
@@ -425,4 +426,34 @@ def firm_view_contract(contract_id: str) -> str:
 def firm_status(firm_id: str = "chrisai") -> str:
     """Get firm-wide status: member count, unit stats, pending gates, goal health."""
     result = _safe(firm_svc_mod.firm_status, firm_id)
+    return json.dumps(result, default=str)
+
+
+# ---------------------------------------------------------------------------
+# Gap detection + hire proposals
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def firm_detect_gaps(firm_id: str = "chrisai", stale_days: int = 7, overload_threshold: int = 3) -> str:
+    """Surface staffing/coverage/workload gaps: unclaimed units, overloaded members, stale goals, coverage gaps."""
+    result = _safe(
+        gaps_heuristics.detect_gaps,
+        firm_id,
+        stale_days=stale_days,
+        overload_threshold=overload_threshold,
+    )
+    return json.dumps(result, default=str)
+
+
+@mcp.tool()
+def firm_propose_hire(proposer_id: str, proposed_role: str, justification: str, proposed_description: str = "", firm_id: str = "chrisai") -> str:
+    """Sterling (or any active member) proposes a new hire. Creates a hire_member Gate for Board approval."""
+    result = _safe(
+        gaps_heuristics.propose_hire,
+        firm_id,
+        proposer_id,
+        proposed_role,
+        proposed_description,
+        justification,
+    )
     return json.dumps(result, default=str)
