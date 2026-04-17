@@ -231,26 +231,28 @@ Firm (chrisai)
 
 ## How Cadre differs from Paperclip
 
-Cadre and [Paperclip](https://github.com/) both encode the "AI-operated company" mental model, but they target different operators with different assumptions. Paperclip is a multi-operator control plane running 24/7 on Postgres with a React dashboard — Salesforce-shaped. Cadre is local-first, session-activated, and lives inside your editor — Git-shaped.
+Cadre and [Paperclip](https://github.com/) both encode the "AI-operated company" mental model, but they target different operators with different assumptions. Paperclip bundles scheduling, execution, UI, governance, and audit into a persistent Node + Postgres server — Salesforce-shaped. Cadre decouples scheduling from execution and delegates platform integration to the MCP ecosystem — Git-shaped.
 
 |  | Paperclip | Cadre |
 |---|---|---|
 | **Mental model** | Salesforce for AI companies | Git for AI companies |
-| **Activation** | 24/7 heartbeat cron | Session-start pulse (wake when you work) |
+| **Activation** | Scheduler-bound (cron inside a persistent server) | Stateless PULSE — trigger-agnostic (cron, session hook, CLI, CI, systemd, any caller) |
 | **Operator surface** | React dashboard at localhost:3100 | Claude Code session context (no separate UI) |
 | **Persistence** | Postgres (embedded PGlite or hosted) | SQLite (stdlib, single file) |
 | **Process model** | Persistent Node server + workers | Python package, no daemon |
 | **Identity vs runtime** | `agent.adapter_config` JSONB | Member and Contract as separate entities |
-| **Audit** | `activity_log` + `cost_events` + `heartbeat_run_events` + `budget_incidents` | Single immutable `Records` stream |
+| **Platform integrations** | Custom plugins via TS SDK | MCP servers scoped per-Member via `Contract.skill_loadout` |
+| **Runtime swap** | Adapter + adapter_config JSONB | `ContractRuntime` Protocol (Python, 3 methods) |
+| **Audit** | `activity_log` + `cost_events` + `heartbeat_run_events` + `budget_incidents` | `member_run` + immutable `Records` stream |
 | **Governance** | Approvals as DB state machine rows | Rules-as-code (CARL) + Gate entities |
-| **Extension** | TypeScript plugin SDK | Python `ContractRuntime` Protocol (3 methods) |
+| **Goal ancestry** | Explicit `parent_id` + full materialization | Polymorphic `parent_ref` (any entity) + denormalized `goal_ids` |
 | **Tables** | ~65 | ~14 |
 
-**Use Paperclip** for multi-operator teams, 24/7 autonomous operation, web dashboards for non-engineers, and enterprise governance/audit needs.
+**Use Paperclip** for multi-operator teams that want the framework to own the scheduler, a web dashboard for non-engineers, and enterprise governance/audit needs.
 
-**Use Cadre** for solo builders, editor-native workflows, zero-infra deployment, and governance-as-code via CARL rules.
+**Use Cadre** if you want your scheduler to be *your* scheduler (cron, systemd, CI, hooks), MCP as the platform-integration surface, zero-infra deployment (`pip install`), and governance-as-code via CARL rules.
 
-These aren't the same product at different scales. They occupy different categories. Full breakdown with entity tables, architectural assumptions, strengths, frictions, and anti-patterns to avoid: [CADRE-VS-PAPERCLIP.md](CADRE-VS-PAPERCLIP.md).
+These aren't the same product at different scales. They occupy different categories — most critically, they give different answers to "who owns the scheduler" and "how do Members reach real platforms." Full breakdown with entity tables, architectural assumptions, shared foundations, integration architecture, and anti-patterns to avoid: [CADRE-VS-PAPERCLIP.md](CADRE-VS-PAPERCLIP.md).
 
 ---
 
@@ -259,13 +261,14 @@ These aren't the same product at different scales. They occupy different categor
 1. **Standalone** — independent of BASE/CARL/PAUL. Own `.firm/`, own hooks, own MCP.
 2. **Identity/runtime split** — Member and Contract separable. Swap runtimes without rewriting Members.
 3. **Firm-scoped from day one** — `firm_id` on every row. Multi-Firm migration is ~1-2 hours.
-4. **Pulse activation, not heartbeat** — session-start hooks fire Members. No 24/7 cron required.
-5. **Polymorphic modifiers** — Goals and Comments both attach via `parent_ref` (entity_type + entity_id).
-6. **Immutable where it matters** — Comments, Records, Usage Events never rewritten.
-7. **Hard-gated dependencies** — Units can't run until `depends_on` is complete.
-8. **Hybrid priority** — categorical bucket + decimal stack rank for deterministic AI ordering.
-9. **Atomic Unit checkout** — single SQL statement, no race window: `UPDATE unit SET claimed_by = ? WHERE id = ? AND claimed_by IS NULL RETURNING *`.
-10. **Board = yes/no authority, not scope-definer** — the team runs the Firm; the Board approves or rejects.
+4. **Trigger-agnostic PULSE** — `firm pulse` is a stateless function. Cron, session hooks, CLI, CI, systemd — any trigger fires the same handler. Cadre does not own the scheduler.
+5. **Polymorphic modifiers** — Goals and Comments both attach via `parent_ref` (entity_type + entity_id). Every Unit traces back to the Firm via Project → Operation → Firm; Goals attach at any level of the chain.
+6. **MCP-first platform integrations** — Members reach Meta Ads, Google Analytics, CRMs, and any SaaS through MCP servers declared in `Contract.skill_loadout`. No Cadre-specific plugin SDK.
+7. **Immutable where it matters** — Comments, Records, Usage Events never rewritten.
+8. **Hard-gated dependencies** — Units can't run until `depends_on` is complete.
+9. **Hybrid priority** — categorical bucket + decimal stack rank for deterministic AI ordering.
+10. **Atomic Unit checkout** — single SQL statement, no race window: `UPDATE unit SET claimed_by = ? WHERE id = ? AND claimed_by IS NULL RETURNING *`.
+11. **Board = yes/no authority, not scope-definer** — the team runs the Firm; the Board approves or rejects.
 
 ---
 
