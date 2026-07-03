@@ -84,7 +84,10 @@ def _render_member_line(row: sqlite3.Row, is_contributor: bool) -> str:
     mem_id = row["member_id"]
     name = row["member_name"]
     role = row["member_role"]
-    entry = _entry_command(row["runtime_config_json"]) or "(no contract wired yet)"
+    if row["runtime_config_json"]:
+        entry = _entry_command(row["runtime_config_json"]) or "(no entry command)"
+    else:
+        entry = "(no contract wired yet)"
     prefix = f"  - [{mem_id}] {name} ({role})"
     if is_contributor and row["manager_name"]:
         prefix += f" reports to {row['manager_name']}"

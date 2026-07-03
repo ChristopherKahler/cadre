@@ -127,6 +127,62 @@ def _render_member_identity(
 
 
 # ---------------------------------------------------------------------------
+# Section 2b: Contract — sanctioned loadout + binding policies
+# ---------------------------------------------------------------------------
+
+def _render_contract(conn: sqlite3.Connection, member_id: str) -> str | None:
+    """Render the Member's Contract: sanctioned commands, tools, and policies.
+
+    Without this section a Member never learns which commands its Contract
+    sanctions — it improvises tooling instead of using the operator's
+    frameworks, and contract policies (voice gates, CTA rules) never bind.
+    """
+    member = repo.get(conn, "member", member_id)
+    if not member or not member.get("contract_id"):
+        return None
+    contract = repo.get(conn, "contract", member["contract_id"])
+    if not contract:
+        return None
+
+    lines = [
+        "## Your Contract\n",
+        f"- Contract: {contract.get('name') or contract.get('id')}",
+    ]
+
+    raw = contract.get("skill_loadout")
+    loadout: dict[str, Any] = {}
+    if raw:
+        try:
+            loadout = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            loadout = {}
+    if not isinstance(loadout, dict):
+        loadout = {}
+
+    stages = loadout.get("stages")
+    if isinstance(stages, dict) and stages:
+        lines.append("\n### Sanctioned commands — use these, do not improvise tooling")
+        lines.extend(f"- {stage}: {cmd}" for stage, cmd in stages.items())
+
+    tools = loadout.get("tools")
+    if isinstance(tools, list) and tools:
+        lines.append("\n### Tools")
+        lines.extend(f"- {t}" for t in tools)
+
+    duties = loadout.get("duties")
+    if isinstance(duties, list) and duties:
+        lines.append("\n### Duties")
+        lines.extend(f"- {d}" for d in duties)
+
+    policies = loadout.get("policies")
+    if isinstance(policies, list) and policies:
+        lines.append("\n### Binding policies — non-negotiable")
+        lines.extend(f"- {p}" for p in policies)
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Section 3: Operational Context
 # ---------------------------------------------------------------------------
 
@@ -314,9 +370,12 @@ def assemble_prompt(
     """
     workspace = cwd or os.getcwd()
 
+    contract_section = _render_contract(conn, member_id)
+
     sections = [
         _render_system_context(conn, firm_id),
         _render_member_identity(conn, member_id, workspace),
+        *((contract_section,) if contract_section else ()),
         _render_operational_context(conn, firm_id),
         _render_unit_briefing(conn, unit_id),
         _render_execution_directive(conn, member_id, workspace),
