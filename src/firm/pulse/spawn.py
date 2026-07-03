@@ -7,6 +7,8 @@ subprocess with timeout enforcement and PID tracking for abort support.
 from __future__ import annotations
 
 import dataclasses
+import os
+import shutil
 import subprocess
 
 
@@ -41,13 +43,37 @@ class SpawnResult:
 # Spawn
 # ---------------------------------------------------------------------------
 
-_CLAUDE_ARGS: list[str] = [
-    "claude",
+_CLAUDE_FLAGS: list[str] = [
     "--print",
     "--output-format", "stream-json",
     "--verbose",
     "--dangerously-skip-permissions",
 ]
+
+
+def resolve_claude_bin() -> tuple[str | None, str]:
+    """Resolve the claude binary Members run on.
+
+    Order: ``$CADRE_CLAUDE_BIN`` (explicit, must be executable) → ``shutil.which``.
+    Returns (path-or-None, detail) — detail carries the honest failure reason so
+    callers never surface a bare EACCES as a permissions bug.
+    """
+    env_bin = os.environ.get("CADRE_CLAUDE_BIN")
+    if env_bin:
+        if os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
+            return env_bin, f"CADRE_CLAUDE_BIN={env_bin}"
+        return None, (
+            f"CADRE_CLAUDE_BIN={env_bin} is not an executable file — "
+            "fix the env var or unset it to fall back to PATH lookup"
+        )
+    found = shutil.which("claude")
+    if found:
+        return found, f"PATH resolution: {found}"
+    return None, (
+        "no runnable `claude` on PATH and CADRE_CLAUDE_BIN unset — "
+        "the Member runtime is not wired (set CADRE_CLAUDE_BIN to an "
+        "executable claude, e.g. the nvm bin path)"
+    )
 
 
 def spawn_member_run(
@@ -66,7 +92,17 @@ def spawn_member_run(
     Returns:
         SpawnResult with captured stdout/stderr and process metadata.
     """
-    cmd = [*_CLAUDE_ARGS, "-p", prompt]
+    claude_bin, resolve_detail = resolve_claude_bin()
+    if claude_bin is None:
+        return SpawnResult(
+            returncode=-1,
+            stdout="",
+            stderr=f"spawn aborted before exec: {resolve_detail}",
+            pid=None,
+            timed_out=False,
+        )
+
+    cmd = [claude_bin, *_CLAUDE_FLAGS, "-p", prompt]
 
     try:
         proc = subprocess.Popen(
@@ -80,7 +116,11 @@ def spawn_member_run(
         return SpawnResult(
             returncode=-1,
             stdout="",
-            stderr=str(exc),
+            stderr=(
+                f"claude failed to exec ({exc}) — resolved via {resolve_detail}; "
+                "the binary is likely not runnable from this host (e.g. a Windows "
+                ".exe symlink without interop, or wrong arch)"
+            ),
             pid=None,
             timed_out=False,
         )

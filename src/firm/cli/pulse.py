@@ -51,13 +51,27 @@ def run_pulse(
         }))
         return 0
 
+    # Preflight: don't spawn N doomed subprocesses (and write N failed
+    # member_run rows) when the Member runtime isn't wired at all.
+    if not dry_run:
+        from firm.pulse.spawn import resolve_claude_bin
+
+        claude_bin, resolve_detail = resolve_claude_bin()
+        if claude_bin is None:
+            print(json.dumps({
+                "ok": False,
+                "reason": "runtime-not-wired",
+                "detail": resolve_detail,
+            }))
+            return 1
+
     conn = connect(db_path)
     try:
         runner = make_runner(firm_id, str(workspace))
         summary = pulse(conn, firm_id, runner, dry_run=dry_run)
 
         output: dict[str, Any] = {
-            "ok": True,
+            "ok": not (summary.errors and not summary.ran),
             "dry_run": summary.dry_run,
             "ran": len(summary.ran),
             "skipped": len(summary.skipped),

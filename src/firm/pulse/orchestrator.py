@@ -409,7 +409,19 @@ def pulse(
 
         try:
             result = run_member(conn, member)
-            summary.ran.append({"member": member, "result": result})
+
+            # A run that failed or timed out is an error, not a success —
+            # "ran" must mean "executed and produced output", or the summary
+            # reads healthy when every Member died at spawn.
+            status = result.get("status") if isinstance(result, dict) else None
+            if status in ("failed", "timed_out"):
+                summary.errors.append({
+                    "member": member,
+                    "error": result,
+                    "error_type": status,
+                })
+            else:
+                summary.ran.append({"member": member, "result": result})
 
             # Update last_activated
             repo.update(conn, "member", member["id"], {
