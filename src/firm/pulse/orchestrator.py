@@ -54,14 +54,20 @@ def gather_active_members(
 # ---------------------------------------------------------------------------
 
 def compute_load(conn: sqlite3.Connection, member_id: str) -> int:
-    """Count pending/in_progress Units claimed by *member_id*.
+    """Count the Member's workable queue: claimed pending/in_progress Units
+    PLUS assigned-but-unclaimed pending Units (the runner atomically claims
+    those at dispatch).
 
+    Counting only claimed Units gated every Member with assigned work out at
+    load=0 — before the runner's auto-claim could ever fire — stalling
+    dependency chains forever (Board Proxy field report, 2026-07-03 night).
     A load of 0 means the Member has nothing queued — no point activating.
     """
     row = conn.execute(
         "SELECT COUNT(*) FROM unit "
-        "WHERE claimed_by = ? AND status IN ('pending', 'in_progress')",
-        (member_id,),
+        "WHERE (claimed_by = ? AND status IN ('pending', 'in_progress')) "
+        "   OR (assignee_member_id = ? AND claimed_by IS NULL AND status = 'pending')",
+        (member_id, member_id),
     ).fetchone()
     return row[0] or 0
 
@@ -210,11 +216,18 @@ def filter_members(
 def _member_units(
     conn: sqlite3.Connection, member_id: str,
 ) -> list[dict[str, Any]]:
-    """Return pending/in_progress Units claimed by *member_id*."""
-    return [
-        u for u in repo.find(conn, "unit", claimed_by=member_id)
-        if u.get("status") in ("pending", "in_progress")
-    ]
+    """Return the Member's workable Units: claimed pending/in_progress PLUS
+    assigned-but-unclaimed pending (same definition as compute_load — the
+    topo/blocked analysis must see the same queue the load gate counts and
+    the runner dispatches)."""
+    by_id: dict[str, dict[str, Any]] = {}
+    for u in repo.find(conn, "unit", claimed_by=member_id):
+        if u.get("status") in ("pending", "in_progress"):
+            by_id[u["id"]] = u
+    for u in repo.find(conn, "unit", assignee_member_id=member_id):
+        if u.get("status") == "pending" and not u.get("claimed_by"):
+            by_id.setdefault(u["id"], u)
+    return list(by_id.values())
 
 
 def _unit_deps(unit: dict[str, Any]) -> list[str]:
