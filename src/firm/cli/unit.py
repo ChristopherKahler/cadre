@@ -14,7 +14,7 @@ from typing import Any
 
 from firm.core import repo
 from firm.core.db import connect, get_db_path
-from firm.hooks.unit_completion import on_unit_done
+from firm.services.unit import complete_unit
 
 
 def _preview_resolved_acs(
@@ -90,12 +90,14 @@ def run_unit_complete(
                       "project-missing error")
             return 0
 
-        result = on_unit_done(
+        # Route through the service so the status flip, audit record, and AC
+        # rollup stay one transaction — calling on_unit_done directly left
+        # unit.status untouched and pulses re-dispatched finished work.
+        result = complete_unit(
             conn,
-            firm_id=firm_id,
-            unit_id=unit_id,
-            member_id=member_id,
-            prior_status=prior_status,
+            firm_id,
+            unit_id,
+            member_id,
             run_id=run_id,
         )
         if not result.get("ok"):
@@ -105,7 +107,7 @@ def run_unit_complete(
 
         resolved = result.get("resolved_ac_ids") or []
         ac_display = ", ".join(resolved) if resolved else "(none)"
-        print(f"completed {unit_id} — resolved AC: {ac_display}")
+        print(f"completed {unit_id} (status: {prior_status} -> done) — resolved AC: {ac_display}")
         print(f"records: {result['records_id']}")
         return 0
     finally:

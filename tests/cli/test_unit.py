@@ -121,7 +121,10 @@ def test_complete_writes_records_row(tmp_path: Path) -> None:
         "--workspace", str(tmp_path),
     )
     assert result.returncode == 0
-    assert _records_count(tmp_path) == 1
+    # Service path writes the transition record AND the unit.completed event
+    # (CLI now routes through services.unit.complete_unit, which also flips
+    # unit.status — the old direct on_unit_done call left status untouched).
+    assert _records_count(tmp_path) == 2
 
 
 def test_complete_prints_none_when_no_ac_flipped(tmp_path: Path) -> None:

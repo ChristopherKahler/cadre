@@ -24,6 +24,7 @@ from firm.pulse.parser import parse_stream
 from firm.pulse.spawn import spawn_member_run
 from firm.pulse.validate import retry_on_failure, validate_output
 from firm.services._id import next_id
+from firm.services.unit import complete_unit
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +84,57 @@ def _find_claimed_unit(
     return None
 
 
+def _deps_met(conn: sqlite3.Connection, unit: dict[str, Any]) -> bool:
+    """Hard dependency gate: every depends_on unit must be status=done.
+
+    Until now depends_on was only rendered into the prompt — never enforced
+    in the pulse path, so a Member could be dispatched onto a blocked Unit.
+    """
+    deps = unit.get("depends_on")
+    if isinstance(deps, str):
+        try:
+            deps = json.loads(deps)
+        except (json.JSONDecodeError, TypeError):
+            deps = []
+    if not deps:
+        return True
+    for dep_id in deps:
+        dep = repo.get(conn, "unit", dep_id)
+        if not dep or dep.get("status") != "done":
+            return False
+    return True
+
+
+def _find_member_unit(
+    conn: sqlite3.Connection, member_id: str,
+) -> dict[str, Any] | None:
+    """Runnable unit for this member: claimed first, else atomically claim
+    the next assigned, dependency-clear, pending unit.
+
+    Without the assigned-unit fallback a completed dependency chain stalls
+    forever — downstream units carry assignee_member_id but nothing ever
+    claims them. The claim is a single guarded UPDATE (no race window).
+    """
+    claimed = _find_claimed_unit(conn, member_id)
+    if claimed and _deps_met(conn, claimed):
+        return claimed
+
+    for u in repo.find(conn, "unit", assignee_member_id=member_id):
+        if u.get("status") != "pending" or u.get("claimed_by"):
+            continue
+        if not _deps_met(conn, u):
+            continue
+        row = conn.execute(
+            "UPDATE unit SET claimed_by = ?, updated_at = datetime('now') "
+            "WHERE id = ? AND claimed_by IS NULL RETURNING id",
+            (member_id, u["id"]),
+        ).fetchone()
+        if row:
+            conn.commit()
+            return repo.get(conn, "unit", u["id"])
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Runner factory
 # ---------------------------------------------------------------------------
@@ -112,10 +164,10 @@ def make_runner(
         if not budget_check.allowed:
             return {"skipped": True, "reason": f"budget: {budget_check.reason}"}
 
-        # 2. Find claimed unit
-        unit = _find_claimed_unit(conn, member_id)
+        # 2. Find runnable unit (claimed, else claim next assigned dep-clear)
+        unit = _find_member_unit(conn, member_id)
         if not unit:
-            return {"skipped": True, "reason": "no units"}
+            return {"skipped": True, "reason": "no units runnable (none claimed/assigned, or dependencies unmet)"}
 
         # 3. Resolve contract + runtime
         contract = _get_contract(conn, member)
@@ -216,6 +268,14 @@ def make_runner(
             update_data["retry_of_run_id"] = retry_run_id
 
         repo.update(conn, "member_run", run_id, update_data)
+
+        # 13. Completion persistence — a validated run MUST flip its Unit to
+        # done (audit record + AC rollup via the service), or every future
+        # pulse re-dispatches the same finished work and dependents never
+        # unblock. Runner-owned per the relay seam-4 convention: the harness,
+        # not the model, is the completion authority.
+        if validation_result.passed:
+            complete_unit(conn, firm_id, unit["id"], member_id, run_id=run_id)
 
         return {
             "run_id": run_id,
