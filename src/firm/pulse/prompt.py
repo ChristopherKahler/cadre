@@ -340,7 +340,12 @@ def _render_execution_directive(
         f"- Work in: {work_dir}\n"
         "- When done: Report completion status and list outputs produced\n"
         "- Do NOT modify files outside your assigned scope\n"
-        "- If blocked: Report the blocker clearly instead of guessing"
+        "- If blocked: Report the blocker clearly instead of guessing\n"
+        "- If your work surfaces follow-up tasks, create Units for them AS YOU GO "
+        "via the firm MCP tools (unit_create — within your Project's scope, "
+        "assigned to the right colleague) instead of doing their work yourself. "
+        "A later pulse activates them in parallel; queued work is throughput, "
+        "hoarded work is a bottleneck"
     )
 
 
