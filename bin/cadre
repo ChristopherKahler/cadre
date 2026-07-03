@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Cadre CLI shim for the base extension fleet.
+# Resolves the venv that owns the `firm` package: $CADRE_VENV wins, else the
+# chrisai firm venv. Keeps the framework repo free of machine-specific installs
+# while giving base a stable handler path (bin/cadre).
+VENV="${CADRE_VENV:-/home/chriskahler/firms/chrisai/.venv}"
+exec "$VENV/bin/cadre" "$@"

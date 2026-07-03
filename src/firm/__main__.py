@@ -95,6 +95,28 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the planned changes without writing to the DB.",
     )
 
+    # ---- pulse subparser ----
+    pulse_parser = subparsers.add_parser(
+        "pulse",
+        help="Run one PULSE activation cycle — spawn due Members per frequency/budget/validation gating.",
+    )
+    pulse_parser.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
+    pulse_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Show which Members would activate without spawning.",
+    )
+    pulse_parser.add_argument(
+        "--abort", action="store_true",
+        help="SIGTERM all tracked in-flight Member runs and exit.",
+    )
+    pulse_parser.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. Defaults to $FIRM_ID or 'chrisai'.",
+    )
+
     # ---- run subparser ----
     run_parser = subparsers.add_parser(
         "run",
@@ -174,6 +196,18 @@ def main(argv: list[str] | None = None) -> int:
             )
         parser.parse_args(["unit", "--help"])
         return 0
+
+    if args.command == "pulse":
+        from firm.cli.pulse import run_pulse
+
+        workspace = args.workspace if args.workspace is not None else Path.cwd()
+        firm_id = args.firm_id or os.environ.get("FIRM_ID", "chrisai")
+        return run_pulse(
+            workspace,
+            dry_run=args.dry_run,
+            abort=args.abort,
+            firm_id=firm_id,
+        )
 
     if args.command == "run":
         if args.run_command == "end":
