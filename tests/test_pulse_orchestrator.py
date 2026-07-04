@@ -18,6 +18,7 @@ from firm.pulse.orchestrator import (
     filter_members,
     gather_active_members,
     pulse,
+    reap_stale_runs,
     topo_sort_members,
 )
 
@@ -433,3 +434,130 @@ class TestPulse:
 
         assert len(summary.ran) == 0
         assert len(summary.errors) == 0
+
+
+# ---------------------------------------------------------------------------
+# reap_stale_runs — zombie 'running' rows (ESC-D)
+# ---------------------------------------------------------------------------
+
+def _add_run(
+    conn: sqlite3.Connection,
+    run_id: str,
+    member_id: str,
+    unit_id: str,
+    *,
+    age_sec: int,
+    status: str = "running",
+) -> dict:
+    started = datetime.now(tz=timezone.utc) - timedelta(seconds=age_sec)
+    return create(conn, "member_run", {
+        "id": run_id,
+        "firm_id": "chrisai",
+        "member_id": member_id,
+        "unit_id": unit_id,
+        "status": status,
+        "started_at": started.isoformat(),
+        "invocation_source": "pulse",
+    })
+
+
+class TestReapStaleRuns:
+
+    def _seed(self, conn):
+        _add_member(conn, "MEM-001")
+        _add_project(conn, "PRJ-001")
+        _add_unit(conn, "UNT-001", "PRJ-001", claimed_by="MEM-001")
+
+    def test_stale_running_row_reaped_as_orphaned(self):
+        conn = _fresh_conn()
+        self._seed(conn)
+        # Default timeout 300 → max lifetime 2*300+600 = 1200s; 2h is dead.
+        _add_run(conn, "RUN-001", "MEM-001", "UNT-001", age_sec=7200)
+
+        reaped = reap_stale_runs(conn, "chrisai")
+
+        assert [r["run_id"] for r in reaped] == ["RUN-001"]
+        row = get(conn, "member_run", "RUN-001")
+        assert row["status"] == "failed"
+        assert row["ended_at"] is not None
+        assert json.loads(row["error"])["type"] == "orphaned"
+
+    def test_fresh_running_row_left_alone(self):
+        conn = _fresh_conn()
+        self._seed(conn)
+        _add_run(conn, "RUN-001", "MEM-001", "UNT-001", age_sec=60)
+
+        reaped = reap_stale_runs(conn, "chrisai")
+
+        assert reaped == []
+        assert get(conn, "member_run", "RUN-001")["status"] == "running"
+
+    def test_closed_rows_never_touched(self):
+        conn = _fresh_conn()
+        self._seed(conn)
+        _add_run(conn, "RUN-001", "MEM-001", "UNT-001", age_sec=99999, status="completed")
+
+        assert reap_stale_runs(conn, "chrisai") == []
+        assert get(conn, "member_run", "RUN-001")["status"] == "completed"
+
+    def test_contract_timeout_extends_lifetime(self):
+        conn = _fresh_conn()
+        contract = create(conn, "contract", {
+            "id": "CON-001",
+            "firm_id": "chrisai",
+            "name": "Long contract",
+            "runtime_type": "claude_code",
+            "pulse_config": json.dumps({"timeout_sec": 1800}),
+        })
+        member = create(conn, "member", {
+            "id": "MEM-001",
+            "firm_id": "chrisai",
+            "name": "Member MEM-001",
+            "role": "worker",
+            "status": "active",
+            "contract_id": contract["id"],
+        })
+        _add_project(conn, "PRJ-001")
+        _add_unit(conn, "UNT-001", "PRJ-001", claimed_by=member["id"])
+        # Lifetime = 2*1800+600 = 4200s: 3000s-old row is plausibly alive,
+        # 5000s-old row is dead.
+        _add_run(conn, "RUN-001", "MEM-001", "UNT-001", age_sec=3000)
+        _add_run(conn, "RUN-002", "MEM-001", "UNT-001", age_sec=5000)
+
+        reaped = reap_stale_runs(conn, "chrisai")
+
+        assert [r["run_id"] for r in reaped] == ["RUN-002"]
+        assert get(conn, "member_run", "RUN-001")["status"] == "running"
+        assert get(conn, "member_run", "RUN-002")["status"] == "failed"
+
+    def test_write_false_detects_without_writing(self):
+        conn = _fresh_conn()
+        self._seed(conn)
+        _add_run(conn, "RUN-001", "MEM-001", "UNT-001", age_sec=7200)
+
+        reaped = reap_stale_runs(conn, "chrisai", write=False)
+
+        assert [r["run_id"] for r in reaped] == ["RUN-001"]
+        assert get(conn, "member_run", "RUN-001")["status"] == "running"
+
+    def test_pulse_reaps_before_gates(self):
+        conn = _fresh_conn()
+        self._seed(conn)
+        _add_run(conn, "RUN-001", "MEM-001", "UNT-001", age_sec=7200)
+
+        summary = pulse(conn, "chrisai", _noop_callback)
+
+        assert [r["run_id"] for r in summary.reaped] == ["RUN-001"]
+        reaped_row = get(conn, "member_run", "RUN-001")
+        assert reaped_row["status"] == "failed"
+        assert json.loads(reaped_row["error"])["type"] == "orphaned"
+
+    def test_dry_run_pulse_reports_but_does_not_write(self):
+        conn = _fresh_conn()
+        self._seed(conn)
+        _add_run(conn, "RUN-001", "MEM-001", "UNT-001", age_sec=7200)
+
+        summary = pulse(conn, "chrisai", _noop_callback, dry_run=True)
+
+        assert [r["run_id"] for r in summary.reaped] == ["RUN-001"]
+        assert get(conn, "member_run", "RUN-001")["status"] == "running"

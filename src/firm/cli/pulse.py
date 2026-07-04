@@ -78,6 +78,9 @@ def run_pulse(
             "errors": len(summary.errors),
         }
 
+        if summary.reaped:
+            output["reaped"] = summary.reaped
+
         if summary.ran:
             output["ran_details"] = [
                 {

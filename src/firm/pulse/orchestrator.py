@@ -36,6 +36,7 @@ class ActivationSummary:
     skipped: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     errors: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     dry_run: bool = False
+    reaped: list[dict[str, Any]] = dataclasses.field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +48,88 @@ def gather_active_members(
 ) -> list[dict[str, Any]]:
     """Return all Members with ``status='active'`` for *firm_id*."""
     return repo.find(conn, "member", firm_id=firm_id, status="active")
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight: reap zombie runs
+# ---------------------------------------------------------------------------
+
+_REAP_DEFAULT_TIMEOUT_SEC = 300
+_REAP_GRACE_SEC = 600
+
+
+def _contract_timeout_sec(conn: sqlite3.Connection, member_id: str) -> int:
+    """Resolve the member's contract ``pulse_config.timeout_sec`` (default 300)."""
+    member = repo.get(conn, "member", member_id)
+    contract_id = member.get("contract_id") if member else None
+    contract = repo.get(conn, "contract", contract_id) if contract_id else None
+    pc = contract.get("pulse_config") if contract else None
+    if isinstance(pc, str):
+        try:
+            pc = json.loads(pc)
+        except (json.JSONDecodeError, TypeError):
+            pc = None
+    if isinstance(pc, dict):
+        try:
+            return int(pc.get("timeout_sec", _REAP_DEFAULT_TIMEOUT_SEC))
+        except (TypeError, ValueError):
+            return _REAP_DEFAULT_TIMEOUT_SEC
+    return _REAP_DEFAULT_TIMEOUT_SEC
+
+
+def reap_stale_runs(
+    conn: sqlite3.Connection,
+    firm_id: str,
+    *,
+    now: datetime | None = None,
+    write: bool = True,
+) -> list[dict[str, Any]]:
+    """Close member_run rows stuck at 'running' past any plausible lifetime.
+
+    A run row leaks as 'running' when the pulse process dies mid-run
+    (systemd kill, host teardown) — the runner that would have closed it is
+    gone, and nothing else ever touches the row (ESC-D field report: RUN-016
+    sat open 20h). Stale = older than 2× the contract timeout (a validation
+    retry can double a run) plus grace. Reaped rows close as status='failed'
+    with error.type='orphaned' (the member_run status CHECK is a closed
+    vocabulary; the error payload carries the reap reason). With
+    ``write=False`` (dry-run) stale rows are reported but left untouched.
+    """
+    ref = now or datetime.now(tz=timezone.utc)
+    if ref.tzinfo is None:
+        ref = ref.replace(tzinfo=timezone.utc)
+    reaped: list[dict[str, Any]] = []
+    for run in repo.find(conn, "member_run", firm_id=firm_id, status="running"):
+        started_raw = run.get("started_at")
+        try:
+            started = datetime.fromisoformat(started_raw)
+        except (TypeError, ValueError):
+            started = None
+        if started is not None and started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        deadline_sec = 2 * _contract_timeout_sec(conn, run["member_id"]) + _REAP_GRACE_SEC
+        if started is not None and (ref - started).total_seconds() <= deadline_sec:
+            continue  # plausibly still alive — leave it
+        if write:
+            repo.update(conn, "member_run", run["id"], {
+                "status": "failed",
+                "ended_at": ref.isoformat(),
+                "error": json.dumps({
+                    "type": "orphaned",
+                    "detail": (
+                        f"still 'running' past {deadline_sec}s max lifetime; "
+                        "pulse process presumed dead, row reaped at next pulse"
+                    ),
+                    "started_at": started_raw,
+                }),
+            })
+        reaped.append({
+            "run_id": run["id"],
+            "member_id": run["member_id"],
+            "unit_id": run.get("unit_id"),
+            "started_at": started_raw,
+        })
+    return reaped
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +474,10 @@ def pulse(
         ActivationSummary with ran/skipped/errors lists.
     """
     summary = ActivationSummary(dry_run=dry_run)
+
+    # Gate 0: heal leaked state — close zombie 'running' rows before anything
+    # else reads them (dry-run detects but does not write).
+    summary.reaped = reap_stale_runs(conn, firm_id, now=now, write=not dry_run)
 
     # Gate 1: business hours
     if not check_business_hours(conn, firm_id, now=now):

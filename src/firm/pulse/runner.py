@@ -186,105 +186,143 @@ def make_runner(
             "invocation_source": "pulse",
         })
 
-        # 5. Invoke via Contract interface
-        result = runtime.invoke(conn, contract or {}, member, unit, cwd=cwd)
-
-        # 6. Store prompt snapshot
-        repo.update(conn, "member_run", run_id, {
-            "prompt_snapshot": result.prompt_snapshot,
-        })
-
-        # 7. Handle timeout / process error
-        timeout = result.handle.metadata.get("timeout_sec", 300)
-
-        if result.timed_out:
-            repo.update(conn, "member_run", run_id, {
-                "status": "timed_out",
-                "ended_at": datetime.now(tz=timezone.utc).isoformat(),
-                "error": json.dumps({"type": "timeout", "timeout_sec": timeout}),
-            })
-            return {"run_id": run_id, "status": "timed_out"}
-
-        if result.returncode is not None and result.returncode != 0:
-            repo.update(conn, "member_run", run_id, {
-                "status": "failed",
-                "ended_at": datetime.now(tz=timezone.utc).isoformat(),
-                "error": json.dumps({
-                    "type": "process_error",
-                    "returncode": result.returncode,
-                    "stderr": result.stderr[:2000],
-                }),
-            })
-            return {"run_id": run_id, "status": "failed", "returncode": result.returncode}
-
-        # 8. Parse
-        parsed = parse_stream(result.stdout)
-
-        # 9. Validate
-        validation_result = validate_output(parsed, validation_config, cwd)
-        retry_run_id = None
-
-        if not validation_result.passed and validation_config:
-            max_retries = validation_config.get("max_retries", 0) if isinstance(validation_config, dict) else 0
-            if max_retries > 0:
-                failure_context = "\n".join(
-                    f"- {d['name']}: {d['message']}"
-                    for d in validation_result.details
-                    if not d.get("passed")
-                )
-                retry_parsed = retry_on_failure(
-                    result.prompt_snapshot,
-                    failure_context,
-                    lambda p: spawn_member_run(p, timeout_sec=timeout, cwd=cwd),
-                    parse_stream,
-                )
-                # Use retry result
-                parsed = retry_parsed
-                validation_result = validate_output(parsed, validation_config, cwd)
-                retry_run_id = run_id  # Link retry to original
-
-        # 10. Rate limit awareness
-        rate_warning = check_rate_limit(
-            parsed.get("rate_limit_events", []),
-            alert_threshold_pct=_get_pulse_config_value(
-                contract, "alert_threshold_pct", 80,
-            ),
-        )
-
-        # 11. Budget post-run
-        update_budget_postrun(conn, member_id, firm_id, parsed)
-
-        # 12. Finalize member_run
-        final_status = "completed" if validation_result.passed else "failed"
-        update_data: dict[str, Any] = {
-            "status": final_status,
-            "ended_at": datetime.now(tz=timezone.utc).isoformat(),
-            "validation_result": json.dumps({
-                "passed": validation_result.passed,
-                "details": validation_result.details,
-            }),
-        }
-        if retry_run_id:
-            update_data["retry_of_run_id"] = retry_run_id
-
-        repo.update(conn, "member_run", run_id, update_data)
-
-        # 13. Completion persistence — a validated run MUST flip its Unit to
-        # done (audit record + AC rollup via the service), or every future
-        # pulse re-dispatches the same finished work and dependents never
-        # unblock. Runner-owned per the relay seam-4 convention: the harness,
-        # not the model, is the completion authority.
-        if validation_result.passed:
-            complete_unit(conn, firm_id, unit["id"], member_id, run_id=run_id)
-
-        return {
-            "run_id": run_id,
-            "status": final_status,
-            "text_length": len(parsed.get("text", "")),
-            "usage": parsed.get("usage", {}),
-            "cost": parsed.get("total_cost_usd"),
-            "validation_passed": validation_result.passed,
-            "rate_limit_warning": rate_warning,
-        }
+        # 5–13 must never leak a 'running' row: if any step raises, close the
+        # run as failed before propagating (the orchestrator records the
+        # exception, but nothing downstream would ever close the row — it
+        # would sit as a zombie 'running' forever; ESC-D field report).
+        try:
+            return _execute_run(
+                conn, firm_id, member, unit, contract, runtime,
+                validation_config, run_id, cwd,
+            )
+        except Exception as exc:
+            row = repo.get(conn, "member_run", run_id)
+            if row and row.get("status") == "running":
+                repo.update(conn, "member_run", run_id, {
+                    "status": "failed",
+                    "ended_at": datetime.now(tz=timezone.utc).isoformat(),
+                    "error": json.dumps({
+                        "type": "runner_exception",
+                        "exception": type(exc).__name__,
+                        "message": str(exc)[:2000],
+                    }),
+                })
+            raise
 
     return _run_member
+
+
+def _execute_run(
+    conn: sqlite3.Connection,
+    firm_id: str,
+    member: dict[str, Any],
+    unit: dict[str, Any],
+    contract: dict[str, Any] | None,
+    runtime: Any,
+    validation_config: dict[str, Any] | None,
+    run_id: str,
+    cwd: str,
+) -> dict[str, Any]:
+    """Steps 5–13: invoke, parse, validate, finalize, persist completion."""
+    member_id = member["id"]
+
+    # 5. Invoke via Contract interface
+    result = runtime.invoke(conn, contract or {}, member, unit, cwd=cwd)
+
+    # 6. Store prompt snapshot
+    repo.update(conn, "member_run", run_id, {
+        "prompt_snapshot": result.prompt_snapshot,
+    })
+
+    # 7. Handle timeout / process error
+    timeout = result.handle.metadata.get("timeout_sec", 300)
+
+    if result.timed_out:
+        repo.update(conn, "member_run", run_id, {
+            "status": "timed_out",
+            "ended_at": datetime.now(tz=timezone.utc).isoformat(),
+            "error": json.dumps({"type": "timeout", "timeout_sec": timeout}),
+        })
+        return {"run_id": run_id, "status": "timed_out"}
+
+    if result.returncode is not None and result.returncode != 0:
+        repo.update(conn, "member_run", run_id, {
+            "status": "failed",
+            "ended_at": datetime.now(tz=timezone.utc).isoformat(),
+            "error": json.dumps({
+                "type": "process_error",
+                "returncode": result.returncode,
+                "stderr": result.stderr[:2000],
+            }),
+        })
+        return {"run_id": run_id, "status": "failed", "returncode": result.returncode}
+
+    # 8. Parse
+    parsed = parse_stream(result.stdout)
+
+    # 9. Validate
+    validation_result = validate_output(parsed, validation_config, cwd)
+    retry_run_id = None
+
+    if not validation_result.passed and validation_config:
+        max_retries = validation_config.get("max_retries", 0) if isinstance(validation_config, dict) else 0
+        if max_retries > 0:
+            failure_context = "\n".join(
+                f"- {d['name']}: {d['message']}"
+                for d in validation_result.details
+                if not d.get("passed")
+            )
+            retry_parsed = retry_on_failure(
+                result.prompt_snapshot,
+                failure_context,
+                lambda p: spawn_member_run(p, timeout_sec=timeout, cwd=cwd),
+                parse_stream,
+            )
+            # Use retry result
+            parsed = retry_parsed
+            validation_result = validate_output(parsed, validation_config, cwd)
+            retry_run_id = run_id  # Link retry to original
+
+    # 10. Rate limit awareness
+    rate_warning = check_rate_limit(
+        parsed.get("rate_limit_events", []),
+        alert_threshold_pct=_get_pulse_config_value(
+            contract, "alert_threshold_pct", 80,
+        ),
+    )
+
+    # 11. Budget post-run
+    update_budget_postrun(conn, member_id, firm_id, parsed)
+
+    # 12. Finalize member_run
+    final_status = "completed" if validation_result.passed else "failed"
+    update_data: dict[str, Any] = {
+        "status": final_status,
+        "ended_at": datetime.now(tz=timezone.utc).isoformat(),
+        "validation_result": json.dumps({
+            "passed": validation_result.passed,
+            "details": validation_result.details,
+        }),
+    }
+    if retry_run_id:
+        update_data["retry_of_run_id"] = retry_run_id
+
+    repo.update(conn, "member_run", run_id, update_data)
+
+    # 13. Completion persistence — a validated run MUST flip its Unit to
+    # done (audit record + AC rollup via the service), or every future
+    # pulse re-dispatches the same finished work and dependents never
+    # unblock. Runner-owned per the relay seam-4 convention: the harness,
+    # not the model, is the completion authority.
+    if validation_result.passed:
+        complete_unit(conn, firm_id, unit["id"], member_id, run_id=run_id)
+
+    return {
+        "run_id": run_id,
+        "status": final_status,
+        "text_length": len(parsed.get("text", "")),
+        "usage": parsed.get("usage", {}),
+        "cost": parsed.get("total_cost_usd"),
+        "validation_passed": validation_result.passed,
+        "rate_limit_warning": rate_warning,
+    }

@@ -297,3 +297,34 @@ class TestValidationRetry:
         assert result["status"] == "failed"
         assert result["validation_passed"] is False
         assert mock_spawn.call_count == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Crash safety — no leaked 'running' rows (ESC-D)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestCrashSafety:
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_exception_mid_run_closes_row_as_failed(self, mock_spawn):
+        mock_spawn.side_effect = RuntimeError("host teardown mid-invoke")
+
+        conn = _fresh_conn()
+        _add_contract(conn, "CON-001")
+        _add_member(conn, "MEM-001", contract_id="CON-001")
+        _add_project(conn, "PRJ-001")
+        _add_unit(conn, "UNT-001", "PRJ-001", claimed_by="MEM-001")
+
+        runner = make_runner("chrisai", "/tmp")
+        member = get(conn, "member", "MEM-001")
+        with pytest.raises(RuntimeError):
+            runner(conn, member)
+
+        runs = find(conn, "member_run", member_id="MEM-001")
+        assert len(runs) == 1
+        assert runs[0]["status"] == "failed"
+        assert runs[0]["ended_at"] is not None
+        error = json.loads(runs[0]["error"])
+        assert error["type"] == "runner_exception"
+        assert error["exception"] == "RuntimeError"
