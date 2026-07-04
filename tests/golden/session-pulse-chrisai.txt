@@ -39,6 +39,6 @@ Use /gate:decide {id} approve|reject "{comment}" to act.
 
 BEHAVIOR: This context is PASSIVE AWARENESS ONLY.
 v1 metrics are manually refreshed (no auto-polling). Stale metric.current reflects
-last manual update; do not infer actual progress from injection alone. Use
-/goal:update {id} {value} to refresh.
+last manual update; do not infer actual progress from injection alone. Refresh with
+`cadre goal update <id> --current <value>` (CLI) or firm_update_goal_metric (MCP).
 </goal-health>

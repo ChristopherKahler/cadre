@@ -151,3 +151,98 @@ def test_update_goal_metric_change() -> None:
     details = records[0]["details"]
     assert details["from"]["current"] == 0
     assert details["to"]["current"] == 3
+
+
+# ---------------------------------------------------------------------------
+# update_goal_metric — canonical metric refresh (COM-010)
+# ---------------------------------------------------------------------------
+
+
+def _goal_with_metric(conn, metric):
+    op = create_operation(conn, "chrisai", {"name": "Content Pipeline"})
+    return create_goal(conn, "chrisai", {
+        "target": ">= 5 approved-ready assets",
+        "parent_entity_type": "operation",
+        "parent_entity_id": op["id"],
+        "metric": metric,
+    })
+
+
+def test_update_goal_metric_shapes_json_from_scratch() -> None:
+    import json
+
+    from firm.services.goal import update_goal_metric
+
+    conn = _fresh_conn()
+    goal = _goal_with_metric(conn, None)
+
+    updated = update_goal_metric(
+        conn, goal["id"],
+        current=6, value=5, unit="assets", metric_type="publish_ready_queue_depth",
+    )
+
+    metric = updated["metric"]
+    assert metric == {
+        "current": 6,
+        "value": 5,
+        "unit": "assets",
+        "type": "publish_ready_queue_depth",
+    }
+
+
+def test_update_goal_metric_merges_preserving_existing_keys() -> None:
+    import json
+
+    from firm.services.goal import update_goal_metric
+
+    conn = _fresh_conn()
+    goal = _goal_with_metric(conn, json.dumps({
+        "type": "publish_ready_queue_depth", "value": 5, "unit": "assets", "current": 0,
+    }))
+
+    updated = update_goal_metric(conn, goal["id"], current=6)
+
+    metric = updated["metric"]
+    assert metric["current"] == 6
+    assert metric["type"] == "publish_ready_queue_depth"
+    assert metric["value"] == 5
+    assert metric["unit"] == "assets"
+
+
+def test_update_goal_metric_absorbs_legacy_bare_string_as_type() -> None:
+    import json
+
+    from firm.services.goal import update_goal_metric
+
+    conn = _fresh_conn()
+    goal = _goal_with_metric(conn, "ig_followers")
+
+    updated = update_goal_metric(conn, goal["id"], current=142, value=500)
+
+    metric = updated["metric"]
+    assert metric["type"] == "ig_followers"
+    assert metric["current"] == 142
+    assert metric["value"] == 500
+
+
+def test_update_goal_metric_requires_at_least_one_field() -> None:
+    from firm.services.goal import update_goal_metric
+
+    conn = _fresh_conn()
+    goal = _goal_with_metric(conn, None)
+
+    with pytest.raises(ValueError, match="No metric fields"):
+        update_goal_metric(conn, goal["id"])
+
+
+def test_update_goal_metric_logs_records_event() -> None:
+    from firm.services.goal import update_goal_metric
+
+    conn = _fresh_conn()
+    goal = _goal_with_metric(conn, None)
+
+    update_goal_metric(conn, goal["id"], current=1)
+
+    records = find(conn, "records", event_type="goal.metric_updated")
+    assert len(records) == 1
+    assert records[0]["target_entity_id"] == goal["id"]

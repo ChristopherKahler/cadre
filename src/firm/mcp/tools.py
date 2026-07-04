@@ -192,9 +192,9 @@ def firm_release_unit(unit_id: str) -> str:
 
 
 @mcp.tool()
-def firm_complete_unit(unit_id: str) -> str:
-    """Mark a unit as done and trigger completion handler."""
-    result = _safe(unit_svc.complete_unit, unit_id)
+def firm_complete_unit(unit_id: str, member_id: str, firm_id: str = "chrisai", run_id: str = "") -> str:
+    """Mark a unit as done and trigger completion handler. member_id is the completing member (actor on the audit record)."""
+    result = _safe(unit_svc.complete_unit, firm_id, unit_id, member_id, run_id=run_id or None)
     return json.dumps(result, default=str)
 
 
@@ -281,6 +281,28 @@ def firm_create_goal(target: str, parent_entity_type: str, parent_entity_id: str
     if metric:
         data["metric"] = metric
     result = _safe(goal_svc.create_goal, firm_id, data)
+    return json.dumps(result, default=str)
+
+
+@mcp.tool()
+def firm_update_goal_metric(goal_id: str, current: str = "", value: str = "", unit: str = "", metric_type: str = "", deadline: str = "", trend: str = "") -> str:
+    """Refresh a goal's metric (the canonical way to update goal progress). Merges the provided fields into the metric JSON the goal-health banner parses — pass only what changed, e.g. current="6". Numbers may be passed as strings."""
+    def _num(v: str) -> Any:
+        try:
+            f = float(v)
+            return int(f) if f.is_integer() else f
+        except ValueError:
+            return v
+    result = _safe(
+        goal_svc.update_goal_metric,
+        goal_id,
+        current=_num(current) if current else None,
+        value=_num(value) if value else None,
+        unit=unit or None,
+        metric_type=metric_type or None,
+        deadline=deadline or None,
+        trend=trend or None,
+    )
     return json.dumps(result, default=str)
 
 

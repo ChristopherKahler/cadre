@@ -121,6 +121,56 @@ def view_goal(
     return require_exists(conn, "goal", goal_id)
 
 
+def update_goal_metric(
+    conn: sqlite3.Connection,
+    goal_id: str,
+    *,
+    current: Any = None,
+    value: Any = None,
+    unit: str | None = None,
+    metric_type: str | None = None,
+    deadline: str | None = None,
+    trend: str | None = None,
+) -> dict[str, Any]:
+    """Merge fields into the goal's metric JSON and persist via update_goal.
+
+    Shapes the ``{"type", "value", "unit", "current", "deadline", "trend"}``
+    object the session-pulse banner parser expects. Unspecified fields keep
+    their existing values. A legacy bare-string metric (e.g. "ig_followers")
+    is absorbed as the ``type`` key rather than discarded. The repo layer
+    hydrates JSON metrics to dicts on read and serializes on write.
+
+    Raises:
+        ValueError: If goal not found, or no metric field provided.
+    """
+    existing = require_exists(conn, "goal", goal_id)
+
+    raw = existing.get("metric")
+    metric: dict[str, Any] = {}
+    if isinstance(raw, dict):
+        metric = dict(raw)
+    elif isinstance(raw, str) and raw:
+        metric = {"type": raw}
+
+    updates = {
+        "current": current,
+        "value": value,
+        "unit": unit,
+        "type": metric_type,
+        "deadline": deadline,
+        "trend": trend,
+    }
+    provided = {k: v for k, v in updates.items() if v is not None}
+    if not provided:
+        raise ValueError(
+            "No metric fields provided — pass at least one of "
+            "current/value/unit/metric_type/deadline/trend"
+        )
+    metric.update(provided)
+
+    return update_goal(conn, goal_id, {"metric": metric})
+
+
 def update_goal(
     conn: sqlite3.Connection,
     goal_id: str,

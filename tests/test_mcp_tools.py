@@ -226,3 +226,52 @@ class TestErrorHandling:
         result = json.loads(mcp_tools.firm_update_member("MEM-001"))
         assert "error" in result
         assert "No fields" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# firm_complete_unit — correct service arity (COM-005)
+# ---------------------------------------------------------------------------
+
+
+class TestCompleteUnit:
+
+    def test_complete_unit_flips_status_to_done(self):
+        result = json.loads(mcp_tools.firm_complete_unit("UNT-001", "MEM-001"))
+        assert "error" not in result
+
+        unit = json.loads(mcp_tools.firm_view_unit("UNT-001"))
+        assert unit["status"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# firm_update_goal_metric — canonical metric refresh (COM-010)
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateGoalMetric:
+
+    def test_shapes_metric_json(self):
+        ops = json.loads(mcp_tools.firm_list_operations())
+        goal = json.loads(mcp_tools.firm_create_goal(
+            ">= 5 approved-ready assets", "operation", ops[0]["id"],
+            metric="publish_ready_queue_depth",
+        ))
+
+        result = json.loads(mcp_tools.firm_update_goal_metric(
+            goal["id"], current="6", value="5", unit="assets",
+        ))
+        assert "error" not in result
+
+        metric = result["metric"]
+        assert metric["current"] == 6
+        assert metric["value"] == 5
+        assert metric["unit"] == "assets"
+        assert metric["type"] == "publish_ready_queue_depth"
+
+    def test_no_fields_returns_error(self):
+        ops = json.loads(mcp_tools.firm_list_operations())
+        goal = json.loads(mcp_tools.firm_create_goal(
+            "target", "operation", ops[0]["id"],
+        ))
+        result = json.loads(mcp_tools.firm_update_goal_metric(goal["id"]))
+        assert "error" in result

@@ -95,6 +95,47 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the planned changes without writing to the DB.",
     )
 
+    # ---- goal subparser ----
+    goal_parser = subparsers.add_parser(
+        "goal",
+        help="Goal lifecycle operations (update, ...).",
+    )
+    goal_sub = goal_parser.add_subparsers(dest="goal_command", metavar="<goal-command>")
+
+    goal_update_parser = goal_sub.add_parser(
+        "update",
+        help="Refresh a Goal's metric — merges given fields into the metric JSON the goal-health banner parses.",
+    )
+    goal_update_parser.add_argument("goal_id", help="ID of the Goal to update (e.g., GL-002).")
+    goal_update_parser.add_argument(
+        "--current", default=None,
+        help="Current observed value of the metric (e.g., 6).",
+    )
+    goal_update_parser.add_argument(
+        "--value", default=None,
+        help="Target value of the metric (e.g., 5).",
+    )
+    goal_update_parser.add_argument(
+        "--unit", default=None,
+        help="Unit label for the metric (e.g., assets, followers).",
+    )
+    goal_update_parser.add_argument(
+        "--type", dest="metric_type", default=None,
+        help="Metric type slug (e.g., publish_ready_queue_depth).",
+    )
+    goal_update_parser.add_argument(
+        "--deadline", default=None,
+        help="ISO deadline for the metric (e.g., 2026-08-01).",
+    )
+    goal_update_parser.add_argument(
+        "--trend", default=None,
+        help="Freeform trend note (e.g., 'up 3 this week').",
+    )
+    goal_update_parser.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
+
     # ---- pulse subparser ----
     pulse_parser = subparsers.add_parser(
         "pulse",
@@ -195,6 +236,24 @@ def main(argv: list[str] | None = None) -> int:
                 firm_id=firm_id,
             )
         parser.parse_args(["unit", "--help"])
+        return 0
+
+    if args.command == "goal":
+        if args.goal_command == "update":
+            from firm.cli.goal import run_goal_update
+
+            workspace = args.workspace if args.workspace is not None else Path.cwd()
+            return run_goal_update(
+                workspace=workspace,
+                goal_id=args.goal_id,
+                current=args.current,
+                value=args.value,
+                unit=args.unit,
+                metric_type=args.metric_type,
+                deadline=args.deadline,
+                trend=args.trend,
+            )
+        parser.parse_args(["goal", "--help"])
         return 0
 
     if args.command == "pulse":

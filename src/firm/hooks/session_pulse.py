@@ -268,8 +268,8 @@ ORDER BY
 _GOAL_BEHAVIOR = (
     "BEHAVIOR: This context is PASSIVE AWARENESS ONLY.\n"
     "v1 metrics are manually refreshed (no auto-polling). Stale metric.current reflects\n"
-    "last manual update; do not infer actual progress from injection alone. Use\n"
-    "/goal:update {id} {value} to refresh."
+    "last manual update; do not infer actual progress from injection alone. Refresh with\n"
+    "`cadre goal update <id> --current <value>` (CLI) or firm_update_goal_metric (MCP)."
 )
 
 _LEVEL_HEADERS = {
