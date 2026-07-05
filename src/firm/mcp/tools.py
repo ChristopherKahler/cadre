@@ -57,7 +57,7 @@ def _safe(fn, *args, **kwargs) -> dict | list:
         if hasattr(result, "keys"):
             return dict(result)
         return result
-    except (ValueError, sqlite3.IntegrityError) as exc:
+    except (ValueError, TypeError, sqlite3.IntegrityError) as exc:
         return {"error": str(exc)}
     finally:
         if _conn_factory is None:

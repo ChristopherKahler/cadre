@@ -328,3 +328,68 @@ class TestCrashSafety:
         error = json.loads(runs[0]["error"])
         assert error["type"] == "runner_exception"
         assert error["exception"] == "RuntimeError"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Retry accounting — every attempt is a billed, closed run row
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestRetryAccounting:
+
+    @mock.patch("firm.pulse.runner.spawn_member_run")
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_retry_gets_own_row_and_both_attempts_billed(self, mock_invoke_spawn, mock_retry_spawn):
+        mock_invoke_spawn.return_value = _mock_spawn_result(text="short", cost=0.10)
+        long_text = " ".join(["word"] * 200) + " AC-1 satisfied"
+        mock_retry_spawn.return_value = _mock_spawn_result(text=long_text, cost=0.25)
+
+        conn = _fresh_conn()
+        _add_contract(conn, "CON-001", validation_config={
+            "enabled": True,
+            "max_retries": 1,
+            "validators": ["min_word_count", "ac_self_report"],
+        })
+        _add_member(conn, "MEM-001", contract_id="CON-001")
+        _add_project(conn, "PRJ-001")
+        _add_unit(conn, "UNT-001", "PRJ-001", claimed_by="MEM-001")
+
+        runner = make_runner("chrisai", "/tmp")
+        result = runner(conn, get(conn, "member", "MEM-001"))
+
+        assert result["status"] == "completed"
+
+        runs = sorted(find(conn, "member_run", member_id="MEM-001"), key=lambda r: r["id"])
+        assert len(runs) == 2
+        first, second = runs
+        assert first["status"] == "failed"
+        assert json.loads(first["error"])["type"] == "validation_failed"
+        assert second["status"] == "completed"
+        assert second["retry_of_run_id"] == first["id"]
+
+        events = find(conn, "usage_event", member_id="MEM-001")
+        assert len(events) == 2
+        by_run = {e["run_id"]: e["dollar_equivalent"] for e in events}
+        assert by_run[first["id"]] == 0.10
+        assert by_run[second["id"]] == 0.25
+        assert all(e["unit_id"] == "UNT-001" for e in events)
+
+        period = find(conn, "budget_period", member_id="MEM-001")[0]
+        assert abs(period["total_cost_usd"] - 0.35) < 1e-9
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_successful_run_usage_event_linked(self, mock_spawn):
+        mock_spawn.return_value = _mock_spawn_result()
+        conn = _fresh_conn()
+        _add_contract(conn, "CON-001")
+        _add_member(conn, "MEM-001", contract_id="CON-001")
+        _add_project(conn, "PRJ-001")
+        _add_unit(conn, "UNT-001", "PRJ-001", claimed_by="MEM-001")
+
+        runner = make_runner("chrisai", "/tmp")
+        result = runner(conn, get(conn, "member", "MEM-001"))
+
+        events = find(conn, "usage_event", member_id="MEM-001")
+        assert len(events) == 1
+        assert events[0]["run_id"] == result["run_id"]
+        assert events[0]["unit_id"] == "UNT-001"

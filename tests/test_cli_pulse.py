@@ -199,3 +199,67 @@ class TestRunPulseCli:
         captured = capsys.readouterr()
         output = json.loads(captured.out)
         assert output["aborted"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Pulse overlap lock
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_live_pulse_refused(tmp_path, capsys, monkeypatch):
+    import fcntl
+    import json as _json
+
+    from firm.core.db import connect
+    from firm.core.migrate import apply_migrations
+    from firm.cli.pulse import run_pulse
+
+    ws = tmp_path
+    firm_dir = ws / ".firm"
+    firm_dir.mkdir()
+    conn = connect(firm_dir / "firm.db")
+    apply_migrations(conn)
+    conn.close()
+
+    import firm.pulse.spawn as spawn_mod
+    monkeypatch.setattr(spawn_mod, "resolve_claude_bin", lambda: ("/bin/true", "test"))
+
+    holder = open(firm_dir / "pulse.lock", "w")
+    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        rc = run_pulse(ws, dry_run=False)
+    finally:
+        holder.close()
+
+    assert rc == 1
+    out = _json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert out["reason"] == "pulse-already-running"
+
+
+def test_dry_run_ignores_lock(tmp_path, capsys):
+    import fcntl
+    import json as _json
+
+    from firm.core.db import connect
+    from firm.core.migrate import apply_migrations
+    from firm.cli.pulse import run_pulse
+
+    ws = tmp_path
+    firm_dir = ws / ".firm"
+    firm_dir.mkdir()
+    conn = connect(firm_dir / "firm.db")
+    apply_migrations(conn)
+    conn.execute("INSERT INTO firm (id, name) VALUES ('chrisai', 'ChrisAI')")
+    conn.commit()
+    conn.close()
+
+    holder = open(firm_dir / "pulse.lock", "w")
+    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        rc = run_pulse(ws, dry_run=True)
+    finally:
+        holder.close()
+
+    assert rc == 0
+    out = _json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert out["ok"] is True

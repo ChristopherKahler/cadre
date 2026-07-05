@@ -89,6 +89,14 @@ def assemble_state(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
     goals = repo.find(conn, "goal", firm_id=firm_id)
     documents = repo.find(conn, "document", firm_id=firm_id)
 
+    run_costs = {
+        row["run_id"]: row["usd"]
+        for row in conn.execute(
+            "SELECT run_id, SUM(dollar_equivalent) AS usd FROM usage_event "
+            "WHERE firm_id = ? AND run_id IS NOT NULL GROUP BY run_id",
+            (firm_id,),
+        )
+    }
     runs = sorted(
         repo.find(conn, "member_run", firm_id=firm_id),
         key=lambda r: r.get("started_at") or "",
@@ -96,6 +104,7 @@ def assemble_state(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
     )[:30]
     for r in runs:
         r["duration_sec"] = _run_duration_sec(r)
+        r["cost_usd"] = run_costs.get(r["id"])
         r.pop("prompt_snapshot", None)
 
     records = sorted(

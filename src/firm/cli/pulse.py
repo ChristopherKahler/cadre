@@ -7,6 +7,7 @@ prints a JSON summary.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import signal
 from pathlib import Path
@@ -65,6 +66,26 @@ def run_pulse(
             }))
             return 1
 
+    # Overlap lock (live pulses only — dry-run is read-only): member runs
+    # take 20-30 min each, so an hourly cadence CAN overlap a long pulse.
+    # Without this, a second pulse re-dispatches the same claimed units —
+    # duplicate work, duplicate spend. flock releases automatically on
+    # process death, so a killed pulse never wedges the next one.
+    lock_file = None
+    if not dry_run:
+        lock_path = db_path.parent / "pulse.lock"
+        lock_file = open(lock_path, "w")
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lock_file.close()
+            print(json.dumps({
+                "ok": False,
+                "reason": "pulse-already-running",
+                "detail": f"another live pulse holds {lock_path}; wait for it or `firm pulse --abort`",
+            }))
+            return 1
+
     conn = connect(db_path)
     try:
         runner = make_runner(firm_id, str(workspace))
@@ -106,6 +127,8 @@ def run_pulse(
         return 1
     finally:
         conn.close()
+        if lock_file is not None:
+            lock_file.close()  # releases the flock
 
 
 def _handle_abort() -> int:

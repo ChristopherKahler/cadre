@@ -551,6 +551,20 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
   </div>
 </div>
 
+<div class="overlay" id="goalOverlay">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="gTitle">
+    <h3 id="gTitle">Update goal metric</h3>
+    <div class="msub" id="gSub">Only filled fields change — leave the rest blank to keep current values.</div>
+    <div class="field"><label for="gCurrent">Current value</label><input id="gCurrent" inputmode="decimal" placeholder="e.g. 6"></div>
+    <div class="field"><label for="gValue">Target value</label><input id="gValue" inputmode="decimal" placeholder="e.g. 500"></div>
+    <div class="field"><label for="gUnit">Unit</label><input id="gUnit" placeholder="e.g. followers, assets"></div>
+    <div class="btn-row">
+      <button class="btn" onclick="closeGoal()">Cancel</button>
+      <button class="btn primary" id="gConfirm" onclick="submitGoal()">Update</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
@@ -837,7 +851,7 @@ function renderGoals(S){
     const pct = (cur != null && target) ? Math.min(100, 100 * cur / target) : null;
     return `<div class="goal">
       <div class="ghead">${pill(g.id,'ok')}${pill(g.level || 'goal','dim')}
-        <button class="btn sm" style="margin-left:auto" onclick="openModal('goal-metric','${g.id}')">Update</button></div>
+        <button class="btn sm" style="margin-left:auto" onclick="openGoalModal('${g.id}')">Update</button></div>
       <div class="gt">${esc(g.target)}</div>
       <div class="gm">${m.type ? esc(m.type) + ' — ' : ''}current <b>${cur ?? 'not baselined'}</b>${target ? ` / target ${esc(target)}${m.unit ? ' ' + esc(m.unit) : ''}` : ''}</div>
       ${pct != null ? `<div class="meter" role="img" aria-label="${pct.toFixed(0)}% of target"><div style="width:${pct}%"></div></div>` : ''}
@@ -899,6 +913,15 @@ function renderMd(src){
     .replace(/^(\s*)[-*] (.*)$/gm, '$1<li>$2</li>')
     .replace(/^(\s*)\d+\. (.*)$/gm, '$1<li>$2</li>');
   t = t.replace(/(<li>[\s\S]*?<\/li>)(\n(?!<li>)|$)/g, '<ul>$1</ul>$2');
+  // pipe tables: consecutive |...| lines, second line = separator
+  t = t.replace(/((?:^\|.*\|\s*$\n?){2,})/gm, block => {
+    const rows = block.trim().split('\n').filter(l => /^\|.*\|/.test(l.trim()));
+    if(rows.length < 2 || !/^\|[\s:|-]+\|$/.test(rows[1].trim())) return block;
+    const cells = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+    const head = cells(rows[0]).map(c => `<th>${c}</th>`).join('');
+    const body = rows.slice(2).map(r => '<tr>' + cells(r).map(c => `<td>${c}</td>`).join('') + '</tr>').join('');
+    return `<div class="tablewrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>\n`;
+  });
   t = t.split(/\n{2,}/).map(p =>
     /^<(h\d|ul|ol|pre|hr|blockquote|li)/.test(p.trim()) ? p : (p.trim() ? `<p>${p.replace(/\n/g,'<br>')}</p>` : '')
   ).join('\n');
@@ -970,7 +993,6 @@ function openWorkModal(){
   document.getElementById('wProject').innerHTML =
     projects.map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.id)})</option>`).join('');
   document.getElementById('wAssignee').innerHTML =
-    '<option value="">unassigned</option>' +
     members.map(m => `<option value="${esc(m.id)}">${esc(m.name)} — ${esc(m.role || m.id)}</option>`).join('');
   document.getElementById('wName').value = '';
   document.getElementById('wDesc').value = '';
@@ -999,6 +1021,41 @@ async function submitWork(){
   } else { toast(out.error || 'Create failed', true); }
 }
 
+/* ---- goal metric form ---- */
+let goalCtx = null;
+function openGoalModal(goalId){
+  goalCtx = goalId;
+  const g = ((STATE || {}).goals || []).find(x => x.id === goalId) || {};
+  let m = g.metric;
+  if(typeof m === 'string'){ try{ m = JSON.parse(m); }catch(_){ m = {}; } }
+  m = m || {};
+  document.getElementById('gTitle').textContent = `Update goal metric — ${goalId}`;
+  document.getElementById('gSub').textContent = g.target || 'Only filled fields change.';
+  document.getElementById('gCurrent').value = m.current ?? '';
+  document.getElementById('gValue').value = m.value ?? '';
+  document.getElementById('gUnit').value = m.unit ?? '';
+  document.getElementById('goalOverlay').classList.add('show');
+  document.getElementById('gCurrent').focus();
+}
+function closeGoal(){ document.getElementById('goalOverlay').classList.remove('show'); goalCtx = null; }
+document.getElementById('goalOverlay').addEventListener('click', e => { if(e.target.id === 'goalOverlay') closeGoal(); });
+async function submitGoal(){
+  if(!goalCtx) return;
+  const num = v => { const t = v.trim(); if(t === '') return null; const f = Number(t); return isNaN(f) ? t : f; };
+  const body = {
+    current: num(document.getElementById('gCurrent').value),
+    value: num(document.getElementById('gValue').value),
+    unit: document.getElementById('gUnit').value.trim() || null,
+  };
+  if(body.current == null && body.value == null && !body.unit){ toast('Fill at least one field', true); return; }
+  const btn = document.getElementById('gConfirm');
+  btn.disabled = true;
+  const out = await postAction('goal-metric/' + encodeURIComponent(goalCtx), body);
+  btn.disabled = false;
+  if(out.ok){ toast('Goal updated'); closeGoal(); lastHash = null; poll(); }
+  else { toast(out.error || 'Update failed', true); }
+}
+
 /* ---- unit comments ---- */
 function openUnitComment(unitId){
   openModal('unit-comment', unitId);
@@ -1016,13 +1073,14 @@ function renderRuns(S){
   const runs = S.runs || [];
   const el = document.getElementById('runsTable');
   if(!runs.length){ el.innerHTML = '<tbody><tr><td class="empty">No runs yet.</td></tr></tbody>'; return; }
-  el.innerHTML = `<thead><tr><th>Run</th><th>Member</th><th>Unit</th><th>Status</th><th>Duration</th><th>Started</th></tr></thead><tbody>` +
+  el.innerHTML = `<thead><tr><th>Run</th><th>Member</th><th>Unit</th><th>Status</th><th>Duration</th><th>Cost</th><th>Started</th></tr></thead><tbody>` +
     runs.map(r => {
       let errTitle = '';
       if(r.error){ try{ const e = typeof r.error === 'string' ? JSON.parse(r.error) : r.error; errTitle = e.type || ''; }catch(_){ errTitle = String(r.error).slice(0,80); } }
       return `<tr>
       <td>${esc(r.id)}</td><td class="mono" style="font-size:12px">${esc(r.member_id)}</td><td class="mono" style="font-size:12px">${esc(r.unit_id || '—')}</td>
       <td title="${esc(errTitle)}">${pill(r.status)}</td><td class="mono" style="font-size:12px">${dur(r.duration_sec)}</td>
+      <td class="mono" style="font-size:12px">${r.cost_usd != null ? money(r.cost_usd) : '—'}</td>
       <td class="muted">${when(r.started_at)}</td>
     </tr>`;
     }).join('') + '</tbody>';
@@ -1050,7 +1108,6 @@ const MODAL_SPEC = {
   'gate-reject':    {title:'Reject gate', sub:'Optional comment — recorded on the gate for the audit trail.', btn:'Reject', done:'Rejected', field:'comment'},
   'escalation-acknowledge': {title:'Acknowledge escalation', sub:'Marks it seen. It stays on the board until resolved.', btn:'Acknowledge', done:'Acknowledged', field:'resolution'},
   'escalation-resolve':     {title:'Resolve escalation', sub:'Optional resolution note for the audit trail.', btn:'Resolve', done:'Resolved', field:'resolution'},
-  'goal-metric':    {title:'Update goal metric', sub:'Enter the current value (a number).', btn:'Update', done:'Updated', field:'current'},
   'unit-comment':   {title:'Comment on unit', sub:'Direction for whoever works this unit — injected into their next briefing as a Board comment.', btn:'Post', done:'Posted', field:'body'},
 };
 let modalCtx = null;
@@ -1078,6 +1135,7 @@ document.addEventListener('keydown', e => {
   if(document.getElementById('overlay').classList.contains('show')) closeModal();
   if(document.getElementById('docOverlay').classList.contains('show')) closeDoc();
   if(document.getElementById('workOverlay').classList.contains('show')) closeWork();
+  if(document.getElementById('goalOverlay').classList.contains('show')) closeGoal();
 });
 document.getElementById('mConfirm').addEventListener('click', async () => {
   if(!modalCtx) return;

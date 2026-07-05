@@ -158,6 +158,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Firm scope. Defaults to $FIRM_ID or 'chrisai'.",
     )
 
+    # ---- notify subparser ----
+    notify_parser = subparsers.add_parser(
+        "notify",
+        help="Send a Board notification (Slack DM / webhook) via the firm's notify_config.",
+    )
+    notify_parser.add_argument("message", help="Message text to deliver to the Board.")
+    notify_parser.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
+    notify_parser.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. Defaults to $FIRM_ID or 'chrisai'.",
+    )
+
     # ---- dashboard subparser ----
     dash_parser = subparsers.add_parser(
         "dashboard",
@@ -289,6 +304,13 @@ def main(argv: list[str] | None = None) -> int:
             abort=args.abort,
             firm_id=firm_id,
         )
+
+    if args.command == "notify":
+        from firm.cli.notify import run_notify
+
+        workspace = args.workspace if args.workspace is not None else Path.cwd()
+        firm_id = args.firm_id or os.environ.get("FIRM_ID", "chrisai")
+        return run_notify(workspace, args.message, firm_id=firm_id)
 
     if args.command == "dashboard":
         from firm.dashboard.server import run_dashboard

@@ -262,26 +262,54 @@ def _execute_run(
 
     # 9. Validate
     validation_result = validate_output(parsed, validation_config, cwd)
-    retry_run_id = None
 
     if not validation_result.passed and validation_config:
         max_retries = validation_config.get("max_retries", 0) if isinstance(validation_config, dict) else 0
         if max_retries > 0:
+            # The failed attempt is a real run: bill it and close its row
+            # honestly, then give the retry its OWN row linked via
+            # retry_of_run_id. (Before this, the retry silently overwrote
+            # the original attempt — its tokens never hit the budget and
+            # retry_of_run_id pointed at itself.)
+            update_budget_postrun(
+                conn, member_id, firm_id, parsed,
+                run_id=run_id, unit_id=unit["id"],
+            )
+            repo.update(conn, "member_run", run_id, {
+                "status": "failed",
+                "ended_at": datetime.now(tz=timezone.utc).isoformat(),
+                "validation_result": json.dumps({
+                    "passed": False,
+                    "details": validation_result.details,
+                }),
+                "error": json.dumps({"type": "validation_failed", "retried": True}),
+            })
+            original_run_id = run_id
+            run_id = next_id(conn, "member_run", firm_id)
+            repo.create(conn, "member_run", {
+                "id": run_id,
+                "firm_id": firm_id,
+                "member_id": member_id,
+                "unit_id": unit["id"],
+                "status": "running",
+                "started_at": datetime.now(tz=timezone.utc).isoformat(),
+                "invocation_source": "pulse",
+                "retry_of_run_id": original_run_id,
+                "prompt_snapshot": result.prompt_snapshot,
+            })
+
             failure_context = "\n".join(
                 f"- {d['name']}: {d['message']}"
                 for d in validation_result.details
                 if not d.get("passed")
             )
-            retry_parsed = retry_on_failure(
+            parsed = retry_on_failure(
                 result.prompt_snapshot,
                 failure_context,
                 lambda p: spawn_member_run(p, timeout_sec=timeout, cwd=cwd),
                 parse_stream,
             )
-            # Use retry result
-            parsed = retry_parsed
             validation_result = validate_output(parsed, validation_config, cwd)
-            retry_run_id = run_id  # Link retry to original
 
     # 10. Rate limit awareness
     rate_warning = check_rate_limit(
@@ -292,22 +320,21 @@ def _execute_run(
     )
 
     # 11. Budget post-run
-    update_budget_postrun(conn, member_id, firm_id, parsed)
+    update_budget_postrun(
+        conn, member_id, firm_id, parsed,
+        run_id=run_id, unit_id=unit["id"],
+    )
 
     # 12. Finalize member_run
     final_status = "completed" if validation_result.passed else "failed"
-    update_data: dict[str, Any] = {
+    repo.update(conn, "member_run", run_id, {
         "status": final_status,
         "ended_at": datetime.now(tz=timezone.utc).isoformat(),
         "validation_result": json.dumps({
             "passed": validation_result.passed,
             "details": validation_result.details,
         }),
-    }
-    if retry_run_id:
-        update_data["retry_of_run_id"] = retry_run_id
-
-    repo.update(conn, "member_run", run_id, update_data)
+    })
 
     # 13. Completion persistence — a validated run MUST flip its Unit to
     # done (audit record + AC rollup via the service), or every future

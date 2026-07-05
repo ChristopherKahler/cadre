@@ -116,11 +116,16 @@ def update_budget_postrun(
     member_id: str,
     firm_id: str,
     parsed_result: dict[str, Any],
+    *,
+    run_id: str | None = None,
+    unit_id: str | None = None,
 ) -> None:
     """Update budget_period totals and create usage_event from run result.
 
     If no active budget_period exists, creates one for the current period.
     If any limit is now exceeded, sets status to 'limit_reached'.
+    run_id/unit_id link the usage_event to its run so per-run cost is
+    attributable (they were silently dropped before).
     """
     # Find or create active period
     period = _get_active_budget_period(conn, member_id)
@@ -165,6 +170,8 @@ def update_budget_postrun(
         "cache_read_tokens": usage.get("cache_read", 0),
         "cache_create_tokens": usage.get("cache_create", 0),
         "dollar_equivalent": cost,
+        "run_id": run_id,
+        "unit_id": unit_id,
     })
 
     # Check if any limit now exceeded

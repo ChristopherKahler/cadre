@@ -95,3 +95,29 @@ def test_remind_interval_defaults_and_overrides():
     assert remind_interval_hours({"remind_hours": 6}) == 6
     assert remind_interval_hours({"remind_hours": "bogus"}) == 24
     assert remind_interval_hours({"remind_hours": 0}) == 24
+
+
+def test_cli_notify_delivers(tmp_path, capsys, monkeypatch):
+    import json as _json
+
+    from firm.core.db import connect as _connect
+    from firm.core.migrate import apply_migrations as _migrate
+    from firm.core.repo import create as _create
+    import firm.cli.notify as notify_cli
+
+    firm_dir = tmp_path / ".firm"
+    firm_dir.mkdir()
+    conn = _connect(firm_dir / "firm.db")
+    _migrate(conn)
+    _create(conn, "firm", {"id": "chrisai", "name": "ChrisAI"})
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(
+        notify_cli, "send_board_dm",
+        lambda conn, firm_id, text: {"sent": True, "reason": f"test: {text}"},
+    )
+    rc = notify_cli.run_notify(tmp_path, "hello board")
+    assert rc == 0
+    out = _json.loads(capsys.readouterr().out.strip())
+    assert out["ok"] is True
