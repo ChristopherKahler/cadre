@@ -300,6 +300,12 @@ def _render_unit_briefing(
     lines.extend([
         f"Priority: {priority}",
         f"Status: {status}",
+    ])
+    # Description carries the assigner's direction (Board or colleague) —
+    # omitting it made 'Assign work' descriptions invisible to the Member.
+    if unit.get("description"):
+        lines.append(f"\n### Briefing\n{unit['description']}")
+    lines.extend([
         f"\n### Acceptance Criteria\n{_format_acceptance_criteria(ac)}",
         f"\n### Dependencies\n{deps}",
     ])

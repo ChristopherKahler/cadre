@@ -525,7 +525,8 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
       <div id="docComments"></div>
       <div class="commentbox">
         <input id="docCommentInput" placeholder="Leave direction for the team on this document…">
-        <button class="btn primary sm" onclick="postDocComment()">Post</button>
+        <button class="btn primary sm" onclick="postDocRevision()" title="Comment + a revision unit assigned to whoever produced this">Request revision</button>
+        <button class="btn sm" onclick="postDocComment()" title="Comment only — no work created">Comment only</button>
       </div>
     </div>
   </div>
@@ -941,8 +942,24 @@ async function postDocComment(){
     toast('Comment posted — the team sees it in their next briefing');
   } else { toast(out.error || 'Comment failed', true); }
 }
+async function postDocRevision(){
+  const input = document.getElementById('docCommentInput');
+  const body = input.value.trim();
+  if(!body){ toast('Write the revision direction first', true); return; }
+  if(!docCtx) return;
+  const out = await postAction('doc-revision/' + encodeURIComponent(docCtx), {body});
+  if(out.ok){
+    input.value = '';
+    const u = out.result.unit;
+    toast(`${u.id} created${u.assignee_member_id ? ' for ' + u.assignee_member_id : ''} — revision lands next pulse`);
+    const r = await fetch('/api/doc/' + encodeURIComponent(docCtx));
+    const fresh = await r.json();
+    if(!fresh.error) renderDocComments(fresh.comments);
+    lastHash = null;
+  } else { toast(out.error || 'Revision request failed', true); }
+}
 document.getElementById('docCommentInput').addEventListener('keydown', e => {
-  if(e.key === 'Enter') postDocComment();
+  if(e.key === 'Enter') postDocRevision();
 });
 
 /* ---- assign work ---- */

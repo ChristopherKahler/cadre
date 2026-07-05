@@ -24,6 +24,7 @@ from firm.core.db import connect, get_db_path
 from firm.core.migrate import apply_migrations
 from firm.pulse.orchestrator import compute_load
 from firm.services import comment as comment_svc
+from firm.services import document as document_svc
 from firm.services import escalation as escalation_svc
 from firm.services import gate as gate_svc
 from firm.services import goal as goal_svc
@@ -212,6 +213,13 @@ def perform_action(
             "body": body.get("body"),
             "author_type": "board",
         })
+    if action == "doc-revision":
+        return document_svc.request_revision(
+            conn,
+            firm_id_of(conn, body),
+            entity_id,
+            body.get("body") or "",
+        )
     if action == "unit-create":
         data: dict[str, Any] = {
             "name": body.get("name"),

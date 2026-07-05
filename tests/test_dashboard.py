@@ -203,3 +203,65 @@ def test_board_comment_reaches_member_prompt():
     briefing = _render_unit_briefing(conn, "UNIT-001")
     assert "Comments on this Unit" in briefing
     assert "THE BOARD: Ship the hard case first" in briefing
+
+
+# ---------------------------------------------------------------------------
+# Doc comment → revision unit loop
+# ---------------------------------------------------------------------------
+
+
+def _doc_on_unit(conn):
+    create(conn, "unit", {
+        "id": "UNIT-050", "firm_id": "chrisai", "project_id": "PROJ-001",
+        "name": "Produce the report", "status": "done",
+        "assignee_member_id": "MEM-001",
+    })
+    return create(conn, "document", {
+        "id": "DOC-010", "firm_id": "chrisai", "name": "Season report",
+        "type": "report", "content_path": "docs/deliverables/report.md",
+        "parent_entity_type": "unit", "parent_entity_id": "UNIT-050",
+    })
+
+
+def test_doc_revision_creates_comment_and_assigned_unit():
+    conn = _fresh_conn()
+    _doc_on_unit(conn)
+
+    result = perform_action(conn, "doc-revision", "DOC-010", {
+        "body": "Hook is weak — rewrite the first three lines.",
+    })
+
+    assert result["comment"]["author_type"] == "board"
+    unit = result["unit"]
+    assert unit["name"].startswith("Revise DOC-010")
+    assert unit["project_id"] == "PROJ-001"
+    assert unit["assignee_member_id"] == "MEM-001"
+    assert unit["priority"] == "high"
+    assert "Hook is weak" in unit["description"]
+    assert "revision" in unit["tags"]
+
+    # The revision direction reaches the member's briefing via the unit itself
+    from firm.pulse.prompt import _render_unit_briefing
+    briefing = _render_unit_briefing(conn, unit["id"])
+    assert "Hook is weak" in briefing
+
+    from firm.core.repo import find
+    assert len(find(conn, "records", event_type="document.revision_requested")) == 1
+
+
+def test_doc_revision_requires_comment_body():
+    conn = _fresh_conn()
+    _doc_on_unit(conn)
+    with pytest.raises(ValueError, match="comment_body"):
+        perform_action(conn, "doc-revision", "DOC-010", {"body": "  "})
+
+
+def test_doc_revision_without_producing_unit_fails_cleanly():
+    conn = _fresh_conn()
+    create(conn, "document", {
+        "id": "DOC-011", "firm_id": "chrisai", "name": "Firm-level doc",
+        "type": "brief", "content_path": "docs/x.md",
+        "parent_entity_type": "firm", "parent_entity_id": "chrisai",
+    })
+    with pytest.raises(ValueError, match="producing unit"):
+        perform_action(conn, "doc-revision", "DOC-011", {"body": "fix it"})

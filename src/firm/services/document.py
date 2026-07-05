@@ -187,3 +187,82 @@ def update_document(
         )
 
     return updated
+
+
+def request_revision(
+    conn: sqlite3.Connection,
+    firm_id: str,
+    document_id: str,
+    comment_body: str,
+) -> dict[str, Any]:
+    """Board revision request: comment on the document + a revision Unit.
+
+    The comment alone is invisible to Members (briefings inject unit
+    threads, not document threads) — the Unit is what carries the Board's
+    direction into someone's next pulse. The revision Unit lands in the
+    producing unit's project, assigned to whoever made the deliverable,
+    with the Board's comment inline in its description.
+
+    Returns:
+        {"comment": row, "unit": row}
+
+    Raises:
+        ValueError: If the document is unknown, the comment is empty, or
+                    the producing unit/project cannot be resolved.
+    """
+    from firm.services.comment import create_comment
+    from firm.services.unit import create_unit
+
+    if not comment_body or not comment_body.strip():
+        raise ValueError("comment_body is required for a revision request")
+
+    doc = require_exists(conn, "document", document_id)
+
+    comment = create_comment(conn, firm_id, {
+        "parent_entity_type": "document",
+        "parent_entity_id": document_id,
+        "body": comment_body,
+        "author_type": "board",
+    })
+
+    # Resolve producing unit → project + assignee
+    src_unit = None
+    if doc.get("parent_entity_type") == "unit" and doc.get("parent_entity_id"):
+        src_unit = repo.get(conn, "unit", doc["parent_entity_id"])
+    if not src_unit or not src_unit.get("project_id"):
+        raise ValueError(
+            f"document {document_id} has no producing unit with a project — "
+            "create the revision unit manually via unit-create"
+        )
+    assignee = src_unit.get("assignee_member_id") or src_unit.get("claimed_by")
+
+    unit_data: dict[str, Any] = {
+        "name": f"Revise {document_id}: {doc.get('name', '')}"[:120],
+        "project_id": src_unit["project_id"],
+        "priority": "high",
+        "description": (
+            f"THE BOARD requested a revision of {document_id} "
+            f"({doc.get('content_path')}).\n\nBoard comment:\n{comment_body}\n\n"
+            f"Original unit: {src_unit['id']}. Revise the deliverable in place "
+            "(same content_path), then complete this unit."
+        ),
+        "acceptance_criteria": [
+            f"The Board's comment on {document_id} is addressed in the deliverable",
+            "Revision saved to the same content_path",
+        ],
+        "tags": ["revision", document_id],
+    }
+    if assignee:
+        unit_data["assignee_member_id"] = assignee
+    unit = create_unit(conn, firm_id, unit_data)
+
+    log_event(
+        conn,
+        firm_id=firm_id,
+        event_type="document.revision_requested",
+        actor={"type": "board", "id": None},
+        target_ref={"type": "document", "id": document_id},
+        details={"unit_id": unit["id"], "assignee": assignee},
+    )
+
+    return {"comment": comment, "unit": unit}
