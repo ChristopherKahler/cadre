@@ -125,3 +125,81 @@ def test_index_html_ships_with_package():
     content = _INDEX_HTML.read_text()
     assert "Cadre Boardroom" in content
     assert "/api/state" in content
+
+
+# ---------------------------------------------------------------------------
+# Document reading + Board communication actions
+# ---------------------------------------------------------------------------
+
+
+def test_read_document_returns_content_and_comments(tmp_path):
+    from firm.dashboard.server import read_document
+    conn = _fresh_conn()
+    doc_file = tmp_path / "docs" / "report.md"
+    doc_file.parent.mkdir()
+    doc_file.write_text("# Report\n\nAll good.")
+    create(conn, "document", {
+        "id": "DOC-001", "firm_id": "chrisai", "name": "Report",
+        "type": "report", "content_path": "docs/report.md",
+        "parent_entity_type": "unit", "parent_entity_id": "UNIT-001",
+    })
+    from firm.services.comment import create_comment
+    create_comment(conn, "chrisai", {
+        "parent_entity_type": "document", "parent_entity_id": "DOC-001",
+        "body": "Nice work", "author_type": "board",
+    })
+
+    out = read_document(conn, tmp_path, "DOC-001")
+    assert out["content"] == "# Report\n\nAll good."
+    assert out["document"]["name"] == "Report"
+    assert [c["body"] for c in out["comments"]] == ["Nice work"]
+
+
+def test_read_document_missing_doc_raises():
+    from firm.dashboard.server import read_document
+    from pathlib import Path
+    conn = _fresh_conn()
+    with pytest.raises(ValueError, match="not found"):
+        read_document(conn, Path("/tmp"), "DOC-404")
+
+
+def test_comment_create_action_posts_as_board():
+    conn = _fresh_conn()
+    result = perform_action(conn, "comment-create", "unit", {
+        "parent_entity_id": "UNIT-001", "body": "Board direction: focus on hooks",
+    })
+    assert result["author_type"] == "board"
+    assert result["parent_entity_id"] == "UNIT-001"
+
+
+def test_unit_create_action_assigns_member():
+    conn = _fresh_conn()
+    result = perform_action(conn, "unit-create", "new", {
+        "name": "New task from the Board",
+        "project_id": "PROJ-001",
+        "assignee_member_id": "MEM-001",
+        "description": "Do the thing",
+        "priority": "high",
+    })
+    assert result["assignee_member_id"] == "MEM-001"
+    assert result["priority"] == "high"
+    row = get(conn, "unit", result["id"])
+    assert row["status"] == "pending"
+
+
+def test_unit_create_requires_name_and_project():
+    conn = _fresh_conn()
+    with pytest.raises(ValueError, match="required"):
+        perform_action(conn, "unit-create", "new", {"name": "no project"})
+
+
+def test_board_comment_reaches_member_prompt():
+    """The full loop: Board comments on a unit → member's next briefing shows it."""
+    from firm.pulse.prompt import _render_unit_briefing
+    conn = _fresh_conn()
+    perform_action(conn, "comment-create", "unit", {
+        "parent_entity_id": "UNIT-001", "body": "Ship the hard case first",
+    })
+    briefing = _render_unit_briefing(conn, "UNIT-001")
+    assert "Comments on this Unit" in briefing
+    assert "THE BOARD: Ship the hard case first" in briefing

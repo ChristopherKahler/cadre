@@ -23,9 +23,11 @@ from firm.core import repo
 from firm.core.db import connect, get_db_path
 from firm.core.migrate import apply_migrations
 from firm.pulse.orchestrator import compute_load
+from firm.services import comment as comment_svc
 from firm.services import escalation as escalation_svc
 from firm.services import gate as gate_svc
 from firm.services import goal as goal_svc
+from firm.services import unit as unit_svc
 
 _INDEX_HTML = Path(__file__).parent / "index.html"
 
@@ -138,6 +140,37 @@ def assemble_state(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Document content
+# ---------------------------------------------------------------------------
+
+def read_document(
+    conn: sqlite3.Connection, workspace: Path, doc_id: str,
+) -> dict[str, Any]:
+    """Resolve a document row and read its content file.
+
+    content_path may be absolute or workspace-relative. Raises ValueError
+    for unknown docs / unreadable files (surfaced as a 400 to the UI).
+    """
+    doc = repo.get(conn, "document", doc_id)
+    if not doc:
+        raise ValueError(f"document {doc_id!r} not found")
+    raw = doc.get("content_path") or ""
+    path = Path(raw)
+    if not path.is_absolute():
+        path = workspace / path
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise ValueError(f"cannot read {path}: {exc}") from exc
+    comments = [
+        c for c in repo.find(conn, "comment", parent_entity_id=doc_id)
+        if c.get("parent_entity_type") == "document"
+    ]
+    comments.sort(key=lambda c: c.get("created_at") or "")
+    return {"document": doc, "content": content, "comments": comments}
+
+
+# ---------------------------------------------------------------------------
 # Board actions
 # ---------------------------------------------------------------------------
 
@@ -171,7 +204,39 @@ def perform_action(
             if body.get(k) not in (None, "")
         }
         return goal_svc.update_goal_metric(conn, entity_id, **fields)
+    if action == "comment-create":
+        # entity_id carries the parent type; the id rides in the body.
+        return comment_svc.create_comment(conn, firm_id_of(conn, body), {
+            "parent_entity_type": entity_id,
+            "parent_entity_id": body.get("parent_entity_id"),
+            "body": body.get("body"),
+            "author_type": "board",
+        })
+    if action == "unit-create":
+        data: dict[str, Any] = {
+            "name": body.get("name"),
+            "project_id": body.get("project_id"),
+        }
+        if body.get("description"):
+            data["description"] = body["description"]
+        if body.get("assignee_member_id"):
+            data["assignee_member_id"] = body["assignee_member_id"]
+        if body.get("priority"):
+            data["priority"] = body["priority"]
+        if data.get("name") is None or data.get("project_id") is None:
+            raise ValueError("name and project_id are required")
+        return unit_svc.create_unit(conn, firm_id_of(conn, body), data)
     raise ValueError(f"Unknown action {action!r}")
+
+
+def firm_id_of(conn: sqlite3.Connection, body: dict[str, Any]) -> str:
+    """Firm scope for creates: explicit in body, else the DB's sole firm."""
+    if body.get("firm_id"):
+        return str(body["firm_id"])
+    firms = repo.find(conn, "firm")
+    if len(firms) == 1:
+        return firms[0]["id"]
+    raise ValueError("firm_id required (multiple firms in this DB)")
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +269,16 @@ def make_handler(workspace: Path, firm_id: str) -> type[BaseHTTPRequestHandler]:
                 conn = connect(db_path)
                 try:
                     self._send(200, assemble_state(conn, firm_id))
+                finally:
+                    conn.close()
+                return
+            if self.path.startswith("/api/doc/"):
+                doc_id = self.path.rsplit("/", 1)[1]
+                conn = connect(db_path)
+                try:
+                    self._send(200, read_document(conn, workspace, doc_id))
+                except ValueError as exc:
+                    self._send(400, {"error": str(exc)})
                 finally:
                     conn.close()
                 return

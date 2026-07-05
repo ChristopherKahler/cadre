@@ -306,6 +306,26 @@ def _render_unit_briefing(
     if outputs_str:
         lines.append(f"\n### Outputs Expected\n{outputs_str}")
 
+    # Comment thread — the Board (and colleagues) leave direction on the
+    # unit; without this section those messages never reach the Member.
+    comments = [
+        c for c in repo.find(conn, "comment", parent_entity_id=unit_id)
+        if c.get("parent_entity_type") == "unit" and not c.get("archived")
+    ]
+    if comments:
+        comments.sort(key=lambda c: c.get("created_at") or "")
+        rendered = []
+        for c in comments[-8:]:  # newest 8 — enough thread, bounded prompt
+            author = c.get("author_id") or c.get("author_type") or "?"
+            if c.get("author_type") == "board" and not c.get("author_id"):
+                author = "THE BOARD"
+            rendered.append(f"- [{c.get('created_at')}] {author}: {c.get('body')}")
+        lines.append(
+            "\n### Comments on this Unit\n"
+            "Read these before starting — comments from THE BOARD are direction, "
+            "not suggestions.\n" + "\n".join(rendered)
+        )
+
     return "\n".join(lines)
 
 

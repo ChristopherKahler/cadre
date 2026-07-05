@@ -267,6 +267,57 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
 .doc .dp{font:400 11px var(--font-mono);color:var(--brand-text-dim);word-break:break-all;margin-top:3px}
 .doc .dm2{color:var(--brand-text-dim);font-size:11.5px;margin-top:2px}
 
+/* ---- clickable rows / icon actions ---- */
+.doc.click{cursor:pointer;transition:background 140ms}
+.doc.click:hover{background:var(--brand-hover-bg)}
+.rowact{border:none;background:none;color:var(--brand-text-dim);cursor:pointer;border-radius:6px;
+  width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;vertical-align:middle}
+.rowact:hover{background:var(--brand-hover-bg);color:var(--brand-text)}
+.rowact svg{width:14px;height:14px}
+
+/* ---- doc viewer ---- */
+.docmodal{background:var(--brand-elevated);border:1px solid var(--brand-border-hover);border-radius:14px;
+  box-shadow:0 24px 64px rgba(0,0,0,.35);width:min(880px,94vw);max-height:88vh;display:flex;flex-direction:column;overflow:hidden}
+.docmodal .dhead{padding:20px 24px 14px;border-bottom:1px solid var(--brand-border);flex:none}
+.docmodal .dhead h3{font-size:17px;margin-bottom:4px}
+.docmodal .dhead .dmeta{color:var(--brand-text-dim);font:400 11.5px var(--font-mono);word-break:break-all}
+.docmodal .dclose{position:absolute;top:14px;right:14px}
+.docbody{overflow-y:auto;padding:20px 24px;flex:1}
+.md{font-size:14px;line-height:1.65;color:var(--brand-text-secondary)}
+.md h1,.md h2,.md h3,.md h4{color:var(--brand-text);margin:20px 0 8px}
+.md h1{font-size:20px}.md h2{font-size:17px}.md h3{font-size:15px}.md h4{font-size:13.5px}
+.md h1:first-child,.md h2:first-child{margin-top:0}
+.md p{margin:8px 0}
+.md ul,.md ol{margin:8px 0 8px 22px}
+.md li{margin:3px 0}
+.md code{font:500 12px var(--font-mono);background:var(--brand-tint-1);border-radius:4px;padding:1px 5px}
+.md pre{background:var(--brand-tint-1);border-radius:8px;padding:12px 14px;overflow-x:auto;margin:10px 0}
+.md pre code{background:none;padding:0;font-size:12px}
+.md hr{border:none;border-top:1px solid var(--brand-border);margin:16px 0}
+.md blockquote{border-left:3px solid var(--brand-border-hover);padding-left:12px;margin:10px 0;color:var(--brand-text-dim)}
+.md strong{color:var(--brand-text);font-weight:600}
+.md table{margin:10px 0}
+.docfoot{flex:none;border-top:1px solid var(--brand-border);padding:14px 24px;max-height:220px;overflow-y:auto}
+.comment{padding:8px 0;border-bottom:1px solid var(--brand-border);font-size:12.5px}
+.comment:last-child{border-bottom:none}
+.comment .cwho{font:500 11px var(--font-mono);color:var(--brand-primary)}
+.comment .cwho.member{color:var(--brand-text-secondary)}
+.comment .cbody{color:var(--brand-text-secondary);white-space:pre-wrap;margin-top:2px}
+.commentbox{display:flex;gap:8px;margin-top:10px}
+.commentbox input{flex:1;background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:9999px;
+  color:var(--brand-text);font:400 13px var(--font-body);padding:8px 14px}
+.commentbox input:focus{outline:none;border-color:var(--brand-primary)}
+
+/* ---- form modal fields ---- */
+.field{margin-bottom:14px}
+.field label{display:block;font:500 11px var(--font-mono);letter-spacing:.1em;text-transform:uppercase;
+  color:var(--brand-text-dim);margin-bottom:5px}
+.field input,.field select,.field textarea{width:100%;background:var(--brand-surface);border:1px solid var(--brand-border);
+  border-radius:8px;color:var(--brand-text);font:400 13.5px var(--font-body);padding:9px 12px}
+.field textarea{min-height:72px;resize:vertical}
+.field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--brand-primary);
+  box-shadow:0 0 0 3px rgba(var(--brand-primary-rgb),.14)}
+
 /* ---- modal / toast ---- */
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:50}
 .overlay.show{display:flex}
@@ -388,7 +439,10 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
 
       <!-- ============ OPERATIONS ============ -->
       <div class="page" id="page-ops">
-        <div class="pagehead"><h1>Operations</h1><p>Who is on what, and where every unit stands.</p></div>
+        <div class="pagehead" style="display:flex;align-items:flex-start;gap:16px">
+          <div style="flex:1"><h1>Operations</h1><p>Who is on what, and where every unit stands.</p></div>
+          <button class="btn primary" onclick="openWorkModal()">Assign work</button>
+        </div>
         <div class="stack">
           <div>
             <div class="seclabel">Pipeline</div>
@@ -426,7 +480,7 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
 
       <!-- ============ DELIVERABLES ============ -->
       <div class="page" id="page-docs">
-        <div class="pagehead"><h1>Deliverables</h1><p>Every document the firm has shipped, newest first.</p></div>
+        <div class="pagehead"><h1>Deliverables</h1><p>Every document the firm has shipped, newest first. Click one to read and comment.</p></div>
         <div class="listcard" id="docs"></div>
       </div>
 
@@ -457,6 +511,45 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
     </div>
   </div>
 </div>
+
+<div class="overlay" id="docOverlay">
+  <div class="docmodal" role="dialog" aria-modal="true" aria-labelledby="docTitle" style="position:relative">
+    <button class="btn sm dclose" onclick="closeDoc()">Close</button>
+    <div class="dhead">
+      <h3 id="docTitle"></h3>
+      <div class="dmeta" id="docMeta"></div>
+    </div>
+    <div class="docbody"><div class="md" id="docContent"></div></div>
+    <div class="docfoot">
+      <div class="muted" style="margin-bottom:4px">COMMENTS</div>
+      <div id="docComments"></div>
+      <div class="commentbox">
+        <input id="docCommentInput" placeholder="Leave direction for the team on this document…">
+        <button class="btn primary sm" onclick="postDocComment()">Post</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="workOverlay">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="wTitle">
+    <h3 id="wTitle">Assign work</h3>
+    <div class="msub">Creates a Unit. The assignee picks it up on their next pulse.</div>
+    <div class="field"><label for="wName">Unit name</label><input id="wName" placeholder="What needs to be done"></div>
+    <div class="field"><label for="wDesc">Description / direction</label><textarea id="wDesc" placeholder="Context, constraints, what done looks like"></textarea></div>
+    <div class="field"><label for="wProject">Project</label><select id="wProject"></select></div>
+    <div class="field"><label for="wAssignee">Assignee</label><select id="wAssignee"></select></div>
+    <div class="field"><label for="wPriority">Priority</label><select id="wPriority">
+      <option value="urgent">urgent</option><option value="high">high</option>
+      <option value="medium" selected>medium</option><option value="low">low</option>
+    </select></div>
+    <div class="btn-row">
+      <button class="btn" onclick="closeWork()">Cancel</button>
+      <button class="btn primary" id="wConfirm" onclick="submitWork()">Create unit</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
@@ -544,7 +637,7 @@ async function poll(){
     const s = await r.json();
     setLive(true);
     const h = JSON.stringify({...s, generated_at: null});
-    const modalOpen = document.getElementById('overlay').classList.contains('show');
+    const modalOpen = !!document.querySelector('.overlay.show');
     if(h !== lastHash && !modalOpen){
       STATE = s; lastHash = h;
       render();
@@ -714,14 +807,17 @@ function renderPipeline(S){
         <span class="muted">${op ? esc(op.name) + ' · ' : ''}${esc(p.status || '')}</span>
       </div>
       <div class="listcard"><div class="tablewrap"><table>
-      <thead><tr><th>ID</th><th>Unit</th><th>Assignee</th><th>Status</th><th>Depends on</th></tr></thead><tbody>
+      <thead><tr><th>ID</th><th>Unit</th><th>Assignee</th><th>Status</th><th>Depends on</th><th></th></tr></thead><tbody>
       ${pu.map(u => {
         let deps = u.depends_on;
         if(typeof deps === 'string'){ try{ deps = JSON.parse(deps); }catch(_){ deps = []; } }
         return `<tr><td>${esc(u.id)}</td><td class="unit-name">${esc(u.name)}</td>
           <td class="mono" style="font-size:12px">${esc(u.assignee_member_id || u.claimed_by || '—')}</td>
           <td>${pill(u.status)}</td>
-          <td class="mono muted" style="font-size:11.5px">${(deps || []).map(esc).join(', ') || '—'}</td></tr>`;
+          <td class="mono muted" style="font-size:11.5px">${(deps || []).map(esc).join(', ') || '—'}</td>
+          <td><button class="rowact" title="Comment on ${esc(u.id)} — the member sees it in their next briefing" onclick="openUnitComment('${esc(u.id)}')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>
+          </button></td></tr>`;
       }).join('')}
       </tbody></table></div></div></div>`;
   }).join('');
@@ -771,11 +867,132 @@ function renderDocs(S){
   const el = document.getElementById('docs');
   if(!docs.length){ el.innerHTML = '<div class="doc"><span class="empty">No deliverables yet.</span></div>'; return; }
   el.innerHTML = docs.map(d => `
-    <div class="doc">
+    <div class="doc click" role="button" tabindex="0" onclick="openDoc('${esc(d.id)}')"
+         onkeydown="if(event.key==='Enter')openDoc('${esc(d.id)}')" title="Open ${esc(d.name)}">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${pill(d.id,'ok')} ${pill(d.type || 'doc','dim')} <span class="dn">${esc(d.name)}</span></div>
       <div class="dp">${esc(d.content_path)}</div>
       <div class="dm2">on ${esc(d.parent_entity_type)} <span class="mono">${esc(d.parent_entity_id)}</span> · ${when(d.created_at)}</div>
     </div>`).join('');
+}
+
+/* ---- doc viewer ---- */
+let docCtx = null;
+function renderMd(src){
+  // YAML frontmatter is graph metadata, not prose — fold it away.
+  src = String(src).replace(/^---\n[\s\S]*?\n---\n/, '');
+  let t = esc(src);
+  const blocks = [];
+  t = t.replace(/```([\s\S]*?)```/g, (_, code) => {
+    blocks.push(`<pre><code>${code.replace(/^\w+\n/, '')}</code></pre>`);
+    return ` B${blocks.length - 1} `;
+  });
+  t = t
+    .replace(/^#### (.*)$/gm, '<h4>$1</h4>')
+    .replace(/^### (.*)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.*)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.*)$/gm, '<h1>$1</h1>')
+    .replace(/^---+$/gm, '<hr>')
+    .replace(/^&gt; (.*)$/gm, '<blockquote>$1</blockquote>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/^(\s*)[-*] (.*)$/gm, '$1<li>$2</li>')
+    .replace(/^(\s*)\d+\. (.*)$/gm, '$1<li>$2</li>');
+  t = t.replace(/(<li>[\s\S]*?<\/li>)(\n(?!<li>)|$)/g, '<ul>$1</ul>$2');
+  t = t.split(/\n{2,}/).map(p =>
+    /^<(h\d|ul|ol|pre|hr|blockquote|li)/.test(p.trim()) ? p : (p.trim() ? `<p>${p.replace(/\n/g,'<br>')}</p>` : '')
+  ).join('\n');
+  return t.replace(/ B(\d+) /g, (_, i) => blocks[+i]);
+}
+function renderDocComments(comments){
+  document.getElementById('docComments').innerHTML = (comments || []).map(c => `
+    <div class="comment">
+      <span class="cwho ${c.author_type === 'board' ? '' : 'member'}">${esc(c.author_type === 'board' && !c.author_id ? 'THE BOARD' : (c.author_id || c.author_type))}</span>
+      <span class="muted" style="margin-left:6px" title="${esc(tAttr(c.created_at))}">${timeAgo(c.created_at)}</span>
+      <div class="cbody">${esc(c.body)}</div>
+    </div>`).join('') || '<div class="empty">No comments yet.</div>';
+}
+async function openDoc(docId){
+  try{
+    const r = await fetch('/api/doc/' + encodeURIComponent(docId));
+    const out = await r.json();
+    if(out.error){ toast(out.error, true); return; }
+    docCtx = docId;
+    const d = out.document;
+    document.getElementById('docTitle').textContent = `${d.id} — ${d.name}`;
+    document.getElementById('docMeta').textContent = `${d.type || 'doc'} · on ${d.parent_entity_type} ${d.parent_entity_id} · ${d.content_path}`;
+    document.getElementById('docContent').innerHTML = renderMd(out.content);
+    renderDocComments(out.comments);
+    document.getElementById('docCommentInput').value = '';
+    document.getElementById('docOverlay').classList.add('show');
+  }catch(e){ toast('Could not open document: ' + e, true); }
+}
+function closeDoc(){ document.getElementById('docOverlay').classList.remove('show'); docCtx = null; }
+document.getElementById('docOverlay').addEventListener('click', e => { if(e.target.id === 'docOverlay') closeDoc(); });
+async function postDocComment(){
+  const input = document.getElementById('docCommentInput');
+  const body = input.value.trim();
+  if(!body || !docCtx) return;
+  const out = await postAction('comment-create/document', {parent_entity_id: docCtx, body});
+  if(out.ok){
+    input.value = '';
+    const r = await fetch('/api/doc/' + encodeURIComponent(docCtx));
+    const fresh = await r.json();
+    if(!fresh.error) renderDocComments(fresh.comments);
+    toast('Comment posted — the team sees it in their next briefing');
+  } else { toast(out.error || 'Comment failed', true); }
+}
+document.getElementById('docCommentInput').addEventListener('keydown', e => {
+  if(e.key === 'Enter') postDocComment();
+});
+
+/* ---- assign work ---- */
+function openWorkModal(){
+  const S = STATE || {};
+  const projects = (S.projects || []).filter(p => p.status !== 'done');
+  const members = (S.roster || []).filter(m => m.status === 'active');
+  document.getElementById('wProject').innerHTML =
+    projects.map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.id)})</option>`).join('');
+  document.getElementById('wAssignee').innerHTML =
+    '<option value="">unassigned</option>' +
+    members.map(m => `<option value="${esc(m.id)}">${esc(m.name)} — ${esc(m.role || m.id)}</option>`).join('');
+  document.getElementById('wName').value = '';
+  document.getElementById('wDesc').value = '';
+  document.getElementById('workOverlay').classList.add('show');
+  document.getElementById('wName').focus();
+}
+function closeWork(){ document.getElementById('workOverlay').classList.remove('show'); }
+document.getElementById('workOverlay').addEventListener('click', e => { if(e.target.id === 'workOverlay') closeWork(); });
+async function submitWork(){
+  const name = document.getElementById('wName').value.trim();
+  if(!name){ toast('Unit name is required', true); return; }
+  const btn = document.getElementById('wConfirm');
+  btn.disabled = true;
+  const out = await postAction('unit-create/new', {
+    name,
+    description: document.getElementById('wDesc').value.trim(),
+    project_id: document.getElementById('wProject').value,
+    assignee_member_id: document.getElementById('wAssignee').value,
+    priority: document.getElementById('wPriority').value,
+  });
+  btn.disabled = false;
+  if(out.ok){
+    toast(`${out.result.id} created — picked up on the next pulse`);
+    closeWork();
+    lastHash = null; poll();
+  } else { toast(out.error || 'Create failed', true); }
+}
+
+/* ---- unit comments ---- */
+function openUnitComment(unitId){
+  openModal('unit-comment', unitId);
+}
+async function postAction(path, body){
+  try{
+    const r = await fetch('/api/action/' + path, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body),
+    });
+    return await r.json();
+  }catch(e){ return {ok:false, error:String(e)}; }
 }
 
 function renderRuns(S){
@@ -817,6 +1034,7 @@ const MODAL_SPEC = {
   'escalation-acknowledge': {title:'Acknowledge escalation', sub:'Marks it seen. It stays on the board until resolved.', btn:'Acknowledge', done:'Acknowledged', field:'resolution'},
   'escalation-resolve':     {title:'Resolve escalation', sub:'Optional resolution note for the audit trail.', btn:'Resolve', done:'Resolved', field:'resolution'},
   'goal-metric':    {title:'Update goal metric', sub:'Enter the current value (a number).', btn:'Update', done:'Updated', field:'current'},
+  'unit-comment':   {title:'Comment on unit', sub:'Direction for whoever works this unit — injected into their next briefing as a Board comment.', btn:'Post', done:'Posted', field:'body'},
 };
 let modalCtx = null;
 let lastFocus = null;
@@ -839,21 +1057,26 @@ function closeModal(){
 }
 document.getElementById('overlay').addEventListener('click', e => { if(e.target.id === 'overlay') closeModal(); });
 document.addEventListener('keydown', e => {
-  if(e.key === 'Escape' && document.getElementById('overlay').classList.contains('show')) closeModal();
+  if(e.key !== 'Escape') return;
+  if(document.getElementById('overlay').classList.contains('show')) closeModal();
+  if(document.getElementById('docOverlay').classList.contains('show')) closeDoc();
+  if(document.getElementById('workOverlay').classList.contains('show')) closeWork();
 });
 document.getElementById('mConfirm').addEventListener('click', async () => {
   if(!modalCtx) return;
   const spec = MODAL_SPEC[modalCtx.action];
   const btn = document.getElementById('mConfirm');
   btn.disabled = true;
-  const body = {}; body[spec.field] = document.getElementById('mText').value.trim();
-  try{
-    const r = await fetch(`/api/action/${modalCtx.action}/${modalCtx.id}`, {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body),
-    });
-    const out = await r.json();
-    if(out.ok){ toast(`${spec.done} — recorded`); } else { toast(out.error || 'Action failed', true); }
-  }catch(e){ toast('Action failed: ' + e, true); }
+  const text = document.getElementById('mText').value.trim();
+  let out;
+  if(modalCtx.action === 'unit-comment'){
+    if(!text){ toast('Comment text is required', true); btn.disabled = false; return; }
+    out = await postAction('comment-create/unit', {parent_entity_id: modalCtx.id, body: text});
+  } else {
+    const body = {}; body[spec.field] = text;
+    out = await postAction(`${modalCtx.action}/${modalCtx.id}`, body);
+  }
+  if(out.ok){ toast(`${spec.done} — recorded`); } else { toast(out.error || 'Action failed', true); }
   btn.disabled = false;
   closeModal();
   lastHash = null;
