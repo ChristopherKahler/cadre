@@ -1,279 +1,393 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cadre Boardroom</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2343a047'/%3E%3Ctext x='16' y='22' font-family='monospace' font-size='18' font-weight='700' fill='white' text-anchor='middle'%3EC%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
+/* ============================================================
+   Caddy Design System tokens — mirrored from colors_and_type.css
+   (meet-caddy-design-system v1.0.0). Dark default + light.
+   ============================================================ */
+[data-theme="dark"] {
+  --brand-canvas:#1a1d21; --brand-surface:#22262b; --brand-elevated:#2a2f35;
+  --brand-text:#ffffff; --brand-text-secondary:#9BA1A6; --brand-text-dim:#7e8278;
+  --brand-hover-bg:rgba(255,255,255,0.04);
+  --brand-primary:#43a047; --brand-primary-rgb:67,160,71; --brand-primary-soft:#6cc970; --brand-on-primary:#ffffff;
+  --brand-accent:#e5a83a; --brand-accent-rgb:229,168,58;
+  --brand-tint-1:#333941;
+  --brand-wash:color-mix(in srgb, #43a047 6%, #1a1d21);
+  --brand-surface-accent:color-mix(in srgb, #43a047 8%, #22262b);
+  --brand-gradient:linear-gradient(90deg,#FFFFFF 0%,#C8E6C9 12%,#66BB6A 32%,#43A047 65%,#1B5E20 100%);
+  --brand-danger:#ef4444; --brand-danger-rgb:239,68,68;
+  --brand-success:#22c55e; --brand-success-rgb:34,197,94;
+  --brand-warning:#e5a83a;
+  --brand-border:rgba(232,233,228,0.08); --brand-border-hover:rgba(255,255,255,0.14);
+  --shadow-ambient:0 8px 24px rgba(0,0,0,0.40);
+  --brand-glow:0 0 32px rgba(67,160,71,0.25);
+}
+[data-theme="light"] {
+  --brand-canvas:#e8e9e4; --brand-surface:#f3f4ef; --brand-elevated:#ffffff;
+  --brand-text:#0a0a0a; --brand-text-secondary:#52525B; --brand-text-dim:#7e8278;
+  --brand-hover-bg:rgba(0,0,0,0.04);
+  --brand-primary:#2e7d32; --brand-primary-rgb:46,125,50; --brand-primary-soft:#57a65b; --brand-on-primary:#ffffff;
+  --brand-accent:#8a6116; --brand-accent-rgb:138,97,22;
+  --brand-tint-1:color-mix(in srgb, #2e7d32 6%, #e8e9e4);
+  --brand-wash:color-mix(in srgb, #2e7d32 6%, #e8e9e4);
+  --brand-surface-accent:color-mix(in srgb, #2e7d32 8%, #f3f4ef);
+  --brand-gradient:linear-gradient(90deg,#FFFFFF 0%,#C8E6C9 12%,#66BB6A 32%,#43A047 65%,#1B5E20 100%);
+  --brand-danger:#c0392b; --brand-danger-rgb:192,57,43;
+  --brand-success:#2e7d32; --brand-success-rgb:46,125,50;
+  --brand-warning:#8a6116;
+  --brand-border:rgba(26,29,33,0.12); --brand-border-hover:rgba(0,0,0,0.15);
+  --shadow-ambient:0 8px 24px rgba(0,0,0,0.10);
+  --brand-glow:0 0 32px rgba(46,125,50,0.18);
+}
 :root{
-  --bg-deep:#060A0E; --bg-elevated:#080C12; --bg-surface:#0C1016; --bg-hover:#10141A;
-  --fg1:#F4F4F5; --fg2:#A1A1AA; --fg3:#71717A;
-  --primary:#10B981; --primary-glow:rgba(16,185,129,.30); --primary-soft:rgba(16,185,129,.10); --primary-ring:rgba(16,185,129,.22);
-  --secondary:#F5A623; --secondary-glow:rgba(245,166,35,.30); --secondary-soft:rgba(245,166,35,.10);
-  --tertiary:#06B6D4; --tertiary-soft:rgba(6,182,212,.10);
-  --danger:#EF4444; --danger-soft:rgba(239,68,68,.10);
-  --border:rgba(255,255,255,.06); --border-hover:rgba(255,255,255,.12); --border-accent:rgba(16,185,129,.30);
-  --font-display:'Space Grotesk',system-ui,sans-serif;
-  --font-body:'Inter',system-ui,sans-serif;
-  --font-mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
-  --shadow-card:0 8px 32px rgba(0,0,0,.40);
+  --font-display:'DM Sans','Segoe UI',system-ui,sans-serif;
+  --font-body:'Inter',-apple-system,system-ui,sans-serif;
+  --font-mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg-deep);color:var(--fg1);font:400 14px/1.5 var(--font-body);min-height:100vh}
-a{color:var(--primary);text-decoration:none}
+html{scroll-behavior:smooth;scroll-padding-top:76px}
+body{background:var(--brand-canvas);color:var(--brand-text);font:400 15px/1.55 var(--font-body);min-height:100vh;
+  transition:background 320ms,color 320ms}
+a{color:var(--brand-primary);text-decoration:none}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}html{scroll-behavior:auto}}
+
+/* ---- header (sticky, Caddy nav pattern) ---- */
+header{position:sticky;top:0;z-index:40;background:color-mix(in srgb,var(--brand-canvas) 88%,transparent);
+  backdrop-filter:blur(12px);border-bottom:1px solid var(--brand-border)}
+.hwrap{max-width:1400px;margin:0 auto;padding:12px 24px;display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.wordmark{display:flex;align-items:baseline;gap:10px;min-width:0}
+.wordmark .mk{font:600 17px var(--font-display);letter-spacing:-.02em;white-space:nowrap}
+.wordmark .mk span{color:var(--brand-primary)}
+.wordmark .fname{color:var(--brand-text-secondary);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+nav{display:flex;gap:2px;flex-wrap:wrap}
+nav a{font:500 13px var(--font-body);color:var(--brand-text-secondary);padding:8px 12px;border-radius:8px;min-height:36px;display:inline-flex;align-items:center;gap:6px}
+nav a:hover{background:var(--brand-hover-bg);color:var(--brand-text)}
+nav a .n{font:600 11px var(--font-mono);background:var(--brand-tint-1);border-radius:9999px;padding:2px 7px;color:var(--brand-text-secondary)}
+nav a .n.hot{background:rgba(var(--brand-accent-rgb),.16);color:var(--brand-warning)}
+.hright{margin-left:auto;display:flex;align-items:center;gap:12px}
+.live{display:flex;align-items:center;gap:8px;font:500 11px var(--font-mono);letter-spacing:.14em;color:var(--brand-text-dim)}
+.live .dot{width:8px;height:8px;border-radius:9999px;background:var(--brand-primary);box-shadow:0 0 10px rgba(var(--brand-primary-rgb),.5);animation:pulse 2.4s infinite}
+.live.stale .dot{background:var(--brand-danger);box-shadow:none;animation:none}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.theme-btn{background:none;border:1px solid var(--brand-border);border-radius:8px;color:var(--brand-text-secondary);
+  width:36px;height:36px;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center}
+.theme-btn:hover{border-color:var(--brand-border-hover);color:var(--brand-text)}
 
 /* ---- shell ---- */
-.shell{max-width:1560px;margin:0 auto;padding:24px 24px 96px}
-.topbar{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;margin-bottom:8px}
-.topbar h1{font:700 28px/1.1 var(--font-display);letter-spacing:-.03em}
-.northstar{color:var(--fg2);font-size:13px;max-width:720px}
-.live{margin-left:auto;display:flex;align-items:center;gap:8px;font:500 11px var(--font-mono);letter-spacing:.18em;color:var(--fg3)}
-.live .dot{width:8px;height:8px;border-radius:999px;background:var(--primary);box-shadow:0 0 10px var(--primary-glow);animation:pulse 2s infinite}
-.live.stale .dot{background:var(--danger);box-shadow:0 0 10px rgba(239,68,68,.3);animation:none}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.shell{max-width:1400px;margin:0 auto;padding:24px 24px 96px}
+.northstar{color:var(--brand-text-secondary);font-size:14px;max-width:860px;margin:8px 0 0}
+.northstar b{color:var(--brand-text);font-weight:600}
+.confignote{color:var(--brand-warning);font-size:13px;margin-top:6px}
 
-/* ---- pills / eyebrows ---- */
-.pill{display:inline-block;font:500 10px/1 var(--font-mono);letter-spacing:.14em;text-transform:uppercase;
-  padding:4px 8px;border-radius:4px;border:1px solid var(--border);color:var(--fg2);white-space:nowrap}
-.pill.emerald{color:var(--primary);border-color:var(--border-accent);background:var(--primary-soft)}
-.pill.gold{color:var(--secondary);border-color:rgba(245,166,35,.30);background:var(--secondary-soft)}
-.pill.cyan{color:var(--tertiary);border-color:rgba(6,182,212,.30);background:var(--tertiary-soft)}
-.pill.red{color:var(--danger);border-color:rgba(239,68,68,.30);background:var(--danger-soft)}
-.pill.dim{color:var(--fg3)}
-.eyebrow{font:500 12px/1 var(--font-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--fg3);margin-bottom:12px}
-.eyebrow .accent{color:var(--primary)}
-.eyebrow.gold .accent{color:var(--secondary)}
+/* ---- overline / section headers ---- */
+.overline{font:500 12px/1 var(--font-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--brand-text-dim);margin-bottom:14px}
+.overline b{color:var(--brand-text-secondary);font-weight:500}
+section{margin-top:40px;scroll-margin-top:76px}
+.sechead{display:flex;align-items:baseline;gap:12px;margin-bottom:14px}
+.sechead h2{font:600 22px/1.2 var(--font-display);letter-spacing:-.02em}
+.sechead .sub{color:var(--brand-text-dim);font-size:13px}
 
 /* ---- stat tiles ---- */
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:20px 0}
-.stat{background:var(--bg-elevated);border:1px solid var(--border);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow-card)}
-.stat .k{font:500 10px var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--fg3)}
-.stat .v{font:700 30px/1.1 var(--font-display);letter-spacing:-.03em;margin-top:6px}
-.stat .v.emerald{color:var(--primary);text-shadow:0 0 30px var(--primary-glow)}
-.stat .v.gold{color:var(--secondary)}
-.stat .v.red{color:var(--danger)}
-.stat .sub{color:var(--fg3);font-size:11px;margin-top:2px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:24px 0 0}
+a.stat{display:block;background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:12px;
+  padding:16px 18px;color:inherit;transition:border-color 180ms}
+a.stat:hover{border-color:var(--brand-border-hover)}
+.stat .k{font:500 11px var(--font-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--brand-text-dim)}
+.stat .v{font:600 30px/1.15 var(--font-mono);letter-spacing:-.02em;margin-top:8px;font-variant-numeric:tabular-nums}
+.stat.hot{border-color:rgba(var(--brand-accent-rgb),.45)}
+.stat.hot .v{color:var(--brand-warning)}
+.stat .sub{color:var(--brand-text-dim);font-size:12px;margin-top:3px}
+.stat.skeleton .v{color:var(--brand-text-dim)}
 
-/* ---- layout grid ---- */
+/* ---- grid + cards ---- */
 .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
-.card{background:var(--bg-elevated);border:1px solid var(--border);border-radius:12px;padding:18px;box-shadow:var(--shadow-card)}
-.span12{grid-column:span 12}.span8{grid-column:span 8}.span6{grid-column:span 6}.span4{grid-column:span 4}
-@media(max-width:1100px){.span8,.span6,.span4{grid-column:span 12}}
+.card{background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:12px;padding:22px;min-width:0}
+.span12{grid-column:span 12}.span8{grid-column:span 8}.span7{grid-column:span 7}.span6{grid-column:span 6}
+.span5{grid-column:span 5}.span4{grid-column:span 4}
+@media(max-width:1080px){.span8,.span7,.span6,.span5,.span4{grid-column:span 12}}
+
+/* ---- pills (mono, quiet) ---- */
+.pill{display:inline-flex;align-items:center;font:500 10.5px/1 var(--font-mono);letter-spacing:.1em;text-transform:uppercase;
+  padding:4px 8px;border-radius:4px;background:var(--brand-tint-1);color:var(--brand-text-secondary);white-space:nowrap}
+.pill.ok{background:rgba(var(--brand-success-rgb),.12);color:var(--brand-success)}
+.pill.warn{background:rgba(var(--brand-accent-rgb),.12);color:var(--brand-warning)}
+.pill.bad{background:rgba(var(--brand-danger-rgb),.12);color:var(--brand-danger)}
+.pill.dim{color:var(--brand-text-dim)}
 
 /* ---- board attention ---- */
-.attn{border-color:rgba(245,166,35,.25)}
-.attn-item{border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:10px;background:var(--bg-surface)}
-.attn-item .head{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
-.attn-item .title{font-weight:600;font-size:14px}
-.attn-item .meta{color:var(--fg3);font-size:12px;margin-bottom:8px}
-.attn-item .body{color:var(--fg2);font-size:13px;white-space:pre-wrap;margin-bottom:10px}
-.attn-empty{color:var(--fg3);font-size:13px;padding:8px 0}
+#attention .card{background:var(--brand-wash);border-color:var(--brand-border)}
+.attn-item{background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:8px;padding:14px 16px;margin-bottom:10px}
+.attn-item.critical{border-color:rgba(var(--brand-danger-rgb),.4)}
+.attn-item .head{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.attn-item .when{color:var(--brand-text-dim);font:400 12px var(--font-mono);margin-left:auto}
+.attn-item .title{font:600 15px/1.4 var(--font-body);color:var(--brand-text)}
+.attn-item .meta{color:var(--brand-text-dim);font-size:12.5px;margin:4px 0 8px}
+.attn-item .body{color:var(--brand-text-secondary);font-size:13.5px;white-space:pre-wrap;margin-bottom:12px}
+.empty{color:var(--brand-text-dim);font-size:13.5px;padding:6px 0}
 
 /* ---- buttons ---- */
-.btn{font:600 12px var(--font-body);padding:7px 14px;border-radius:6px;border:1px solid var(--border);
-  background:var(--bg-hover);color:var(--fg1);cursor:pointer;transition:all 180ms}
-.btn:hover{border-color:var(--border-hover)}
-.btn.approve{background:var(--primary-soft);border-color:var(--border-accent);color:var(--primary)}
-.btn.approve:hover{box-shadow:0 0 16px var(--primary-ring)}
-.btn.reject{background:var(--danger-soft);border-color:rgba(239,68,68,.3);color:var(--danger)}
-.btn.gold{background:var(--secondary-soft);border-color:rgba(245,166,35,.3);color:var(--secondary)}
-.btn-row{display:flex;gap:8px;flex-wrap:wrap}
+.btn{font:500 13.5px var(--font-body);padding:9px 18px;min-height:38px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--brand-border);background:transparent;color:var(--brand-text-secondary);transition:all 180ms}
+.btn:hover{background:var(--brand-hover-bg);border-color:var(--brand-border-hover);color:var(--brand-text)}
+.btn:focus-visible{outline:2px solid var(--brand-primary);outline-offset:2px}
+.btn.primary{background:var(--brand-primary);border-color:var(--brand-primary);color:var(--brand-on-primary)}
+.btn.primary:hover{background:var(--brand-primary-soft);border-color:var(--brand-primary-soft);box-shadow:var(--brand-glow)}
+.btn.danger{color:var(--brand-danger);border-color:rgba(var(--brand-danger-rgb),.35)}
+.btn.danger:hover{background:rgba(var(--brand-danger-rgb),.08);color:var(--brand-danger)}
+.btn.sm{padding:5px 12px;min-height:30px;font-size:12.5px}
+.btn-row{display:flex;gap:10px;flex-wrap:wrap}
+@media(pointer:coarse){.btn{min-height:44px}.btn.sm{min-height:44px}}
 
 /* ---- roster ---- */
-.member{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border)}
-.member:last-child{border-bottom:none}
-.member .dot{width:9px;height:9px;border-radius:999px;margin-top:5px;flex:none}
-.dot.active{background:var(--primary);box-shadow:0 0 8px var(--primary-glow)}
-.dot.idle{background:var(--fg3)}
-.dot.paused{background:var(--secondary)}
+.member{display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--brand-border)}
+.member:last-child{border-bottom:none;padding-bottom:0}
+.member .dot{width:9px;height:9px;border-radius:9999px;margin-top:6px;flex:none}
+.dot.working{background:var(--brand-success);box-shadow:0 0 8px rgba(var(--brand-success-rgb),.5)}
+.dot.idle{background:var(--brand-text-dim)}
+.dot.paused{background:var(--brand-warning)}
 .member .who{min-width:0;flex:1}
-.member .nm{font-weight:600;font-size:14px}
-.member .rl{color:var(--fg3);font-size:12px}
-.member .cu{color:var(--fg2);font-size:12px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.member .side{text-align:right;flex:none;font:500 11px var(--font-mono);color:var(--fg3)}
+.member .nm{font:600 14.5px var(--font-body)}
+.member .nm .mid{font:400 12px var(--font-mono);color:var(--brand-text-dim);margin-left:4px}
+.member .rl{color:var(--brand-text-secondary);font-size:12.5px}
+.member .cu{color:var(--brand-text-secondary);font-size:12.5px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.member .cu .uid{font:500 11.5px var(--font-mono);color:var(--brand-text-dim)}
+.member .side{text-align:right;flex:none;font:500 11.5px var(--font-mono);color:var(--brand-text-dim);line-height:1.7}
 
-/* ---- units pipeline ---- */
-.proj{margin-bottom:16px}
-.proj .pname{font:700 15px var(--font-display);letter-spacing:-.02em;margin-bottom:8px}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{font:500 10px var(--font-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);
-  text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)}
-td{padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:top;color:var(--fg2)}
-td:first-child{font:500 12px var(--font-mono);color:var(--fg3);white-space:nowrap}
+/* ---- tables ---- */
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{font:500 10.5px var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--brand-text-dim);
+  text-align:left;padding:8px;border-bottom:1px solid var(--brand-border);white-space:nowrap}
+td{padding:9px 8px;border-bottom:1px solid var(--brand-border);vertical-align:top;color:var(--brand-text-secondary)}
+td.mono, .mono{font:500 12.5px var(--font-mono);font-variant-numeric:tabular-nums}
+td:first-child{font:500 12px var(--font-mono);color:var(--brand-text-dim);white-space:nowrap}
 tr:last-child td{border-bottom:none}
-tr:hover td{background:var(--bg-hover)}
-.unit-name{color:var(--fg1)}
+tbody tr:hover td{background:var(--brand-hover-bg)}
+.unit-name{color:var(--brand-text)}
 
-/* ---- pipeline summary bar ---- */
-.pipebar{display:flex;height:10px;border-radius:5px;overflow:hidden;margin:8px 0 6px;background:var(--bg-surface)}
+/* ---- pipeline summary ---- */
+.proj{margin-bottom:20px}
+.proj:last-child{margin-bottom:0}
+.proj .pname{font:600 15.5px var(--font-display);letter-spacing:-.01em;margin-bottom:8px}
+.proj .pname .psub{color:var(--brand-text-dim);font:400 12.5px var(--font-body);margin-left:6px}
+.pipebar{display:flex;height:8px;border-radius:4px;overflow:hidden;margin:4px 0 8px;background:var(--brand-tint-1)}
 .pipebar div{height:100%}
 .pipebar div+div{margin-left:2px}
-.pipelegend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--fg3)}
-.pipelegend .sw{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.pipelegend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--brand-text-dim);margin-bottom:16px}
+.pipelegend .sw{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+.pipelegend b{color:var(--brand-text-secondary);font-weight:500;font-family:var(--font-mono);font-size:11.5px}
 
-/* ---- goals ---- */
-.goal{padding:10px 0;border-bottom:1px solid var(--border)}
-.goal:last-child{border-bottom:none}
-.goal .gt{font-size:13px;color:var(--fg1);margin-bottom:6px}
-.goal .gm{font:500 11px var(--font-mono);color:var(--fg3);margin-bottom:6px}
-.meter{height:8px;background:var(--bg-surface);border-radius:4px;overflow:hidden}
-.meter div{height:100%;background:var(--primary);border-radius:4px;box-shadow:0 0 12px var(--primary-glow)}
-.meter.over div{background:var(--secondary)}
+/* ---- goals (growth-gradient meters — sanctioned score surface) ---- */
+.goal{padding:14px 0;border-bottom:1px solid var(--brand-border)}
+.goal:first-child{padding-top:0}
+.goal:last-child{border-bottom:none;padding-bottom:0}
+.goal .ghead{display:flex;gap:8px;align-items:center;margin-bottom:6px}
+.goal .gt{font-size:14px;color:var(--brand-text);line-height:1.45}
+.goal .gm{font:500 12px var(--font-mono);color:var(--brand-text-secondary);margin:6px 0;font-variant-numeric:tabular-nums}
+.goal .gm b{color:var(--brand-text);font-weight:600}
+.meter{height:10px;background:var(--brand-tint-1);border-radius:5px;overflow:hidden}
+.meter > div{height:100%;background:var(--brand-gradient);border-radius:5px;transition:width 600ms cubic-bezier(.16,1,.3,1)}
+.goal .gfoot{color:var(--brand-text-dim);font-size:12px;margin-top:6px}
 
 /* ---- cost bars ---- */
-.costrow{display:grid;grid-template-columns:110px 1fr 70px;gap:10px;align-items:center;padding:5px 0;font-size:12px}
-.costrow .cb{height:14px;background:var(--bg-surface);border-radius:4px;overflow:hidden}
-.costrow .cb div{height:100%;background:var(--primary);border-radius:4px 0 0 4px}
-.costrow .cv{font:500 12px var(--font-mono);color:var(--fg2);text-align:right}
+.costrow{display:grid;grid-template-columns:120px 1fr 76px;gap:12px;align-items:center;padding:6px 0;font-size:13px}
+.costrow .cb{height:12px;background:var(--brand-tint-1);border-radius:4px;overflow:hidden}
+.costrow .cb div{height:100%;background:rgba(var(--brand-primary-rgb),.45);border-radius:4px 0 0 4px}
+.costrow .cv{font:500 12.5px var(--font-mono);color:var(--brand-text-secondary);text-align:right;font-variant-numeric:tabular-nums}
+.costrow.total{border-top:1px solid var(--brand-border);margin-top:8px;padding-top:10px}
+.costrow.total .cv{color:var(--brand-text);font-weight:600}
 
-/* ---- feed ---- */
-.feed{max-height:460px;overflow-y:auto}
-.evt{display:flex;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:12px}
+/* ---- feeds ---- */
+.feed{max-height:440px;overflow-y:auto;overscroll-behavior:contain}
+.evt{display:flex;gap:12px;padding:8px 0;border-bottom:1px solid var(--brand-border);font-size:12.5px}
 .evt:last-child{border-bottom:none}
-.evt .t{color:var(--fg3);font:500 11px var(--font-mono);white-space:nowrap;flex:none;width:64px}
-.evt .e{color:var(--fg2);min-width:0}
-.evt .e b{color:var(--fg1);font-weight:600}
-.evt .type{font:500 10px var(--font-mono);letter-spacing:.08em;color:var(--primary)}
-.evt .type.warn{color:var(--secondary)}
-.evt .type.bad{color:var(--danger)}
+.evt .t{color:var(--brand-text-dim);font:400 11.5px var(--font-mono);white-space:nowrap;flex:none;width:62px;padding-top:1px}
+.evt .e{color:var(--brand-text-secondary);min-width:0;overflow-wrap:anywhere}
+.evt .e b{color:var(--brand-text);font-weight:500}
+.evt .type{font:500 11px var(--font-mono);letter-spacing:.05em}
+.evt .type.ok{color:var(--brand-success)}
+.evt .type.warn{color:var(--brand-warning)}
+.evt .type.bad{color:var(--brand-danger)}
+.evt .type.neutral{color:var(--brand-text-secondary)}
 
 /* ---- docs ---- */
-.doc{padding:8px 0;border-bottom:1px solid var(--border);font-size:13px}
+.doc{padding:10px 0;border-bottom:1px solid var(--brand-border);font-size:13.5px}
+.doc:first-child{padding-top:0}
 .doc:last-child{border-bottom:none}
-.doc .dn{color:var(--fg1);font-weight:500}
-.doc .dp{font:400 11px var(--font-mono);color:var(--fg3);word-break:break-all;margin-top:2px}
+.doc .dn{color:var(--brand-text);font-weight:500}
+.doc .dp{font:400 11.5px var(--font-mono);color:var(--brand-text-dim);word-break:break-all;margin-top:3px}
+.doc .dm2{color:var(--brand-text-dim);font-size:12px;margin-top:2px}
 
 /* ---- modal ---- */
-.overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);display:none;align-items:center;justify-content:center;z-index:50}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:50}
 .overlay.show{display:flex}
-.modal{background:var(--bg-elevated);border:1px solid var(--border-hover);border-radius:12px;
-  box-shadow:0 24px 64px rgba(0,0,0,.55);padding:24px;width:min(520px,92vw)}
-.modal h3{font:700 18px var(--font-display);letter-spacing:-.02em;margin-bottom:6px}
-.modal .msub{color:var(--fg2);font-size:13px;margin-bottom:14px}
-.modal textarea{width:100%;min-height:88px;background:var(--bg-surface);border:1px solid var(--border);
-  border-radius:8px;color:var(--fg1);font:400 13px var(--font-body);padding:10px;resize:vertical;margin-bottom:14px}
-.modal textarea:focus{outline:none;border-color:var(--border-accent)}
+.modal{background:var(--brand-elevated);border:1px solid var(--brand-border-hover);border-radius:12px;
+  box-shadow:var(--shadow-ambient);padding:28px;width:min(540px,92vw)}
+.modal h3{font:600 19px var(--font-display);letter-spacing:-.02em;margin-bottom:6px}
+.modal .msub{color:var(--brand-text-secondary);font-size:13.5px;margin-bottom:16px}
+.modal textarea, .modal input{width:100%;background:var(--brand-surface);border:1px solid var(--brand-border);
+  border-radius:8px;color:var(--brand-text);font:400 14px var(--font-body);padding:11px 12px;margin-bottom:16px}
+.modal textarea{min-height:92px;resize:vertical}
+.modal textarea:focus, .modal input:focus{outline:none;border-color:var(--brand-primary);box-shadow:0 0 0 3px rgba(var(--brand-primary-rgb),.18)}
 .modal .btn-row{justify-content:flex-end}
-.toast{position:fixed;bottom:20px;right:20px;background:var(--bg-elevated);border:1px solid var(--border-accent);
-  border-radius:8px;padding:12px 18px;font-size:13px;color:var(--fg1);box-shadow:var(--shadow-card);z-index:60;display:none}
-.toast.err{border-color:rgba(239,68,68,.4)}
-section{margin-top:24px}
-.muted{color:var(--fg3);font-size:12px}
+
+/* ---- toast ---- */
+.toast{position:fixed;bottom:20px;right:20px;background:var(--brand-elevated);border:1px solid rgba(var(--brand-success-rgb),.4);
+  border-radius:8px;padding:13px 18px;font-size:13.5px;color:var(--brand-text);box-shadow:var(--shadow-ambient);z-index:60;display:none}
+.toast.err{border-color:rgba(var(--brand-danger-rgb),.45)}
+.muted{color:var(--brand-text-dim);font-size:12px}
 </style>
 </head>
 <body>
-<div class="shell">
-  <div class="topbar">
-    <span class="pill emerald" id="firmPill">[ FIRM ]</span>
-    <h1 id="firmName">—</h1>
-    <span class="northstar" id="northStar"></span>
-    <span class="live" id="liveWrap"><span class="dot"></span><span id="liveText">CONNECTING</span></span>
+<header>
+  <div class="hwrap">
+    <div class="wordmark">
+      <span class="mk">CADRE<span>·</span>Boardroom</span>
+      <span class="fname" id="firmName"></span>
+    </div>
+    <nav aria-label="Sections">
+      <a href="#attention">Attention <span class="n" id="navAttn">0</span></a>
+      <a href="#ops">Operations</a>
+      <a href="#goals">Goals</a>
+      <a href="#runs">Runs</a>
+      <a href="#records">Records</a>
+    </nav>
+    <div class="hright">
+      <span class="live" id="liveWrap" role="status" aria-live="polite"><span class="dot"></span><span id="liveText">CONNECTING</span></span>
+      <button class="theme-btn" id="themeBtn" title="Toggle light/dark" aria-label="Toggle color theme">◐</button>
+    </div>
   </div>
-  <div class="muted" id="notifyState"></div>
+</header>
 
-  <div class="stats" id="stats"></div>
+<div class="shell">
+  <p class="northstar" id="northStar"></p>
+  <p class="confignote" id="notifyState"></p>
 
-  <section>
-    <div class="eyebrow gold"><span class="accent">[ BOARD ATTENTION ]</span> — items waiting on you</div>
+  <div class="stats" id="stats" aria-label="Firm vitals">
+    <a class="stat skeleton" href="#attention"><span class="k">LOADING</span><div class="v">—</div><div class="sub">connecting to firm</div></a>
+  </div>
+
+  <section id="attention">
+    <div class="sechead"><h2>Board attention</h2><span class="sub">items waiting on you — approve, reject, resolve</span></div>
     <div class="grid">
-      <div class="card attn span6">
-        <div class="eyebrow">PENDING GATES</div>
+      <div class="card span6">
+        <div class="overline">Pending gates</div>
         <div id="gates"></div>
       </div>
-      <div class="card attn span6">
-        <div class="eyebrow">OPEN ESCALATIONS</div>
+      <div class="card span6">
+        <div class="overline">Open escalations</div>
         <div id="escalations"></div>
       </div>
     </div>
   </section>
 
-  <section>
+  <section id="ops">
+    <div class="sechead"><h2>Operations</h2><span class="sub">who is on what, and where every unit stands</span></div>
     <div class="grid">
       <div class="card span4">
-        <div class="eyebrow"><span class="accent">[ ROSTER ]</span></div>
+        <div class="overline">Roster</div>
         <div id="roster"></div>
       </div>
       <div class="card span8">
-        <div class="eyebrow"><span class="accent">[ OPERATIONS ]</span> — unit pipeline</div>
+        <div class="overline">Unit pipeline</div>
         <div id="pipeline"></div>
       </div>
     </div>
   </section>
 
-  <section>
+  <section id="goals">
+    <div class="sechead"><h2>Goals &amp; spend</h2><span class="sub">what the firm is aiming at, and what it costs</span></div>
     <div class="grid">
       <div class="card span4">
-        <div class="eyebrow"><span class="accent">[ GOALS ]</span></div>
-        <div id="goals"></div>
+        <div class="overline">Active goals</div>
+        <div id="goalsList"></div>
       </div>
       <div class="card span4">
-        <div class="eyebrow"><span class="accent">[ SPEND ]</span> — per member</div>
+        <div class="overline">Spend per member</div>
         <div id="costs"></div>
       </div>
       <div class="card span4">
-        <div class="eyebrow"><span class="accent">[ DELIVERABLES ]</span></div>
+        <div class="overline">Deliverables</div>
         <div id="docs" class="feed"></div>
       </div>
     </div>
   </section>
 
-  <section>
-    <div class="grid">
-      <div class="card span6">
-        <div class="eyebrow"><span class="accent">[ RUNS ]</span> — recent member activity</div>
-        <div style="overflow-x:auto"><table id="runs"></table></div>
-      </div>
-      <div class="card span6">
-        <div class="eyebrow"><span class="accent">[ RECORDS ]</span> — audit feed</div>
-        <div id="records" class="feed"></div>
-      </div>
+  <section id="runs">
+    <div class="sechead"><h2>Runs</h2><span class="sub">recent member activity</span></div>
+    <div class="card span12">
+      <div class="tablewrap"><table id="runsTable"></table></div>
+    </div>
+  </section>
+
+  <section id="records">
+    <div class="sechead"><h2>Records</h2><span class="sub">the immutable audit feed</span></div>
+    <div class="card span12">
+      <div id="recordsFeed" class="feed" style="max-height:520px"></div>
     </div>
   </section>
 </div>
 
 <div class="overlay" id="overlay">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle">
     <h3 id="mTitle"></h3>
     <div class="msub" id="mSub"></div>
-    <textarea id="mText" placeholder=""></textarea>
+    <textarea id="mText"></textarea>
     <div class="btn-row">
       <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn approve" id="mConfirm"></button>
+      <button class="btn primary" id="mConfirm"></button>
     </div>
   </div>
 </div>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
 'use strict';
 let STATE = null;
+let lastHash = null;
 let pollTimer = null;
 
-const STATUS_COLORS = {
-  done:'var(--primary)', completed:'var(--primary)',
-  in_progress:'var(--tertiary)', running:'var(--tertiary)', in_review:'var(--tertiary)',
-  pending:'var(--secondary)', blocked:'var(--secondary)',
-  failed:'var(--danger)', timed_out:'var(--danger)',
-  cancelled:'var(--fg3)', orphaned:'var(--fg3)',
-};
+/* ---- theme ---- */
+const themeBtn = document.getElementById('themeBtn');
+function setTheme(t){
+  document.documentElement.setAttribute('data-theme', t);
+  try{ localStorage.setItem('cadre-dash-theme', t); }catch(_){}
+}
+themeBtn.addEventListener('click', () => {
+  setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+});
+try{ const saved = localStorage.getItem('cadre-dash-theme'); if(saved) setTheme(saved); }catch(_){}
+
+/* ---- status semantics (Caddy: green only for done/actionable; gold = in flight; red = broken) ---- */
 const STATUS_PILL = {
-  done:'emerald', completed:'emerald',
-  in_progress:'cyan', running:'cyan', in_review:'cyan',
-  pending:'gold', blocked:'gold',
-  failed:'red', timed_out:'red',
-  cancelled:'dim', orphaned:'dim', open:'gold', acknowledged:'cyan', resolved:'emerald',
-  active:'emerald', paused:'gold',
+  done:'ok', completed:'ok', resolved:'ok', approved:'ok', active:'ok',
+  in_progress:'warn', running:'warn', in_review:'warn', open:'warn', acknowledged:'warn', paused:'warn', blocked:'warn',
+  failed:'bad', timed_out:'bad', rejected:'bad',
+  pending:'', cancelled:'dim', orphaned:'dim',
+};
+const STATUS_COLORS = {
+  done:'var(--brand-success)', in_progress:'var(--brand-warning)', in_review:'var(--brand-warning)',
+  pending:'var(--brand-text-dim)', blocked:'var(--brand-danger)', cancelled:'var(--brand-tint-1)',
 };
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const pill = (txt, cls) => `<span class="pill ${cls || STATUS_PILL[txt] || ''}">${esc(txt)}</span>`;
+const pill = (txt, cls) => `<span class="pill ${cls ?? (STATUS_PILL[txt] || '')}">${esc(txt)}</span>`;
 
-function timeAgo(iso){
-  if(!iso) return '—';
+function parseTs(iso){
+  if(!iso) return null;
   const d = new Date(iso.includes('T') ? iso : iso.replace(' ','T') + 'Z');
-  if(isNaN(d)) return iso;
+  return isNaN(d) ? null : d;
+}
+function timeAgo(iso){
+  const d = parseTs(iso);
+  if(!d) return '—';
   const s = (Date.now() - d.getTime()) / 1000;
   if(s < 0) return 'now';
   if(s < 90) return Math.round(s) + 's ago';
@@ -281,15 +395,23 @@ function timeAgo(iso){
   if(s < 172800) return Math.round(s/3600) + 'h ago';
   return Math.round(s/86400) + 'd ago';
 }
+const tAttr = iso => { const d = parseTs(iso); return d ? d.toLocaleString() : ''; };
+const when = iso => `<span title="${esc(tAttr(iso))}">${timeAgo(iso)}</span>`;
 const dur = sec => sec == null ? '—' : (sec < 90 ? Math.round(sec) + 's' : Math.round(sec/60) + 'm');
 const money = v => '$' + (Math.round((v ?? 0) * 100) / 100).toFixed(2);
 
+/* ---- polling (skip re-render when nothing changed; never re-render under an open modal) ---- */
 async function poll(){
   try{
     const r = await fetch('/api/state');
-    STATE = await r.json();
-    render();
+    const s = await r.json();
     setLive(true);
+    const h = JSON.stringify({...s, generated_at: null});
+    const modalOpen = document.getElementById('overlay').classList.contains('show');
+    if(h !== lastHash && !modalOpen){
+      STATE = s; lastHash = h;
+      render();
+    }
   }catch(e){
     setLive(false);
   }
@@ -297,82 +419,103 @@ async function poll(){
   pollTimer = setTimeout(poll, 5000);
 }
 function setLive(ok){
-  const w = document.getElementById('liveWrap');
-  w.classList.toggle('stale', !ok);
+  document.getElementById('liveWrap').classList.toggle('stale', !ok);
   document.getElementById('liveText').textContent = ok ? 'LIVE' : 'DISCONNECTED';
+}
+
+/* preserve feed scroll positions across re-render */
+function withScrollKept(ids, fn){
+  const pos = {};
+  ids.forEach(id => { const el = document.getElementById(id); if(el) pos[id] = el.scrollTop; });
+  fn();
+  ids.forEach(id => { const el = document.getElementById(id); if(el && pos[id]) el.scrollTop = pos[id]; });
 }
 
 function render(){
   const S = STATE;
   const firm = S.firm || {};
   document.title = `${firm.name || firm.id} — Boardroom`;
-  document.getElementById('firmPill').textContent = `[ ${(firm.id || 'FIRM').toUpperCase()} ]`;
-  document.getElementById('firmName').textContent = firm.name || firm.id;
-  document.getElementById('northStar').textContent = firm.north_star || '';
+  document.getElementById('firmName').textContent = firm.name || firm.id || '';
+  document.getElementById('northStar').innerHTML = firm.north_star
+    ? `<b>North star</b> — ${esc(firm.north_star)}` : '';
   document.getElementById('notifyState').textContent = S.notify_configured
-    ? '' : 'Board notifications not configured — set firm.notify_config to enable escalation DMs.';
+    ? '' : 'Board notifications are not configured — set firm.notify_config so escalations reach you directly.';
 
-  renderStats(S); renderGates(S); renderEscalations(S); renderRoster(S);
-  renderPipeline(S); renderGoals(S); renderCosts(S); renderDocs(S);
-  renderRuns(S); renderRecords(S);
+  withScrollKept(['docs','recordsFeed'], () => {
+    renderStats(S); renderGates(S); renderEscalations(S); renderRoster(S);
+    renderPipeline(S); renderGoals(S); renderCosts(S); renderDocs(S);
+    renderRuns(S); renderRecords(S);
+  });
 }
 
 function renderStats(S){
   const units = S.units || [];
   const count = st => units.filter(u => st.includes(u.status)).length;
   const pendingGates = (S.gates || []).filter(g => g.status === 'pending').length;
-  const openEsc = (S.escalations || []).filter(e => e.status === 'open').length;
+  const openEsc = (S.escalations || []).filter(e => e.status !== 'resolved').length;
+  const attn = pendingGates + openEsc;
+  document.getElementById('navAttn').textContent = attn;
+  document.getElementById('navAttn').classList.toggle('hot', attn > 0);
   const spend = (S.cost_by_member || []).reduce((a,c) => a + (c.total_usd || 0), 0);
   const activeMembers = (S.roster || []).filter(m => m.status === 'active').length;
-  const runsToday = (S.runs || []).filter(r => r.started_at && (Date.now() - new Date(r.started_at).getTime()) < 86400e3).length;
+  const runsToday = (S.runs || []).filter(r => { const d = parseTs(r.started_at); return d && (Date.now() - d.getTime()) < 86400e3; }).length;
+  const runningNow = (S.runs || []).filter(r => r.status === 'running').length;
   const tiles = [
-    {k:'BOARD ITEMS', v:pendingGates + openEsc, cls:(pendingGates + openEsc) ? 'gold' : '', sub:`${pendingGates} gates · ${openEsc} escalations`},
-    {k:'UNITS IN FLIGHT', v:count(['pending','in_progress','in_review']), cls:'', sub:`${count(['blocked'])} blocked`},
-    {k:'UNITS DONE', v:count(['done']), cls:'emerald', sub:'all time'},
-    {k:'RUNS 24H', v:runsToday, cls:'', sub:`${(S.runs||[]).filter(r=>r.status==='running').length} running now`},
-    {k:'MEMBERS', v:activeMembers, cls:'', sub:`of ${(S.roster||[]).length} on roster`},
-    {k:'TOTAL SPEND', v:money(spend), cls:'', sub:'usage events, all time'},
+    {k:'NEEDS YOU', v:attn, hot:attn > 0, sub:`${pendingGates} gate${pendingGates === 1 ? '' : 's'} · ${openEsc} escalation${openEsc === 1 ? '' : 's'}`, href:'#attention'},
+    {k:'IN FLIGHT', v:count(['pending','in_progress','in_review']), sub:`${count(['blocked'])} blocked`, href:'#ops'},
+    {k:'DONE', v:count(['done']), sub:'units, all time', href:'#ops'},
+    {k:'RUNS 24H', v:runsToday, sub:runningNow ? `${runningNow} running now` : 'none running now', href:'#runs'},
+    {k:'MEMBERS', v:activeMembers, sub:`of ${(S.roster||[]).length} on roster`, href:'#ops'},
+    {k:'SPEND', v:money(spend), sub:'all time', href:'#goals'},
   ];
   document.getElementById('stats').innerHTML = tiles.map(t =>
-    `<div class="stat"><div class="k">${t.k}</div><div class="v ${t.cls}">${t.v}</div><div class="sub">${t.sub}</div></div>`
+    `<a class="stat ${t.hot ? 'hot' : ''}" href="${t.href}"><span class="k">${t.k}</span><div class="v">${t.v}</div><div class="sub">${t.sub}</div></a>`
   ).join('');
 }
 
+const SEV_RANK = {critical:0, high:1, normal:2, low:3};
+
 function renderGates(S){
-  const gates = (S.gates || []).filter(g => g.status === 'pending');
+  const gates = (S.gates || []).filter(g => g.status === 'pending')
+    .sort((a,b) => (a.created_at || '').localeCompare(b.created_at || ''));
   const el = document.getElementById('gates');
-  if(!gates.length){ el.innerHTML = '<div class="attn-empty">No pending gates. Nothing needs your approval.</div>'; return; }
+  if(!gates.length){ el.innerHTML = '<div class="empty">No pending gates. Nothing is waiting on your approval.</div>'; return; }
   el.innerHTML = gates.map(g => `
     <div class="attn-item">
-      <div class="head">${pill(g.id,'gold')}${pill('by ' + esc(g.requesting_member_id),'dim')}<span class="muted">${timeAgo(g.created_at)}</span></div>
+      <div class="head">${pill(g.id,'warn')}${pill('by ' + esc(g.requesting_member_id),'dim')}<span class="when" title="${esc(tAttr(g.created_at))}">${timeAgo(g.created_at)}</span></div>
       <div class="title">${esc(g.action)}</div>
-      <div class="meta">on ${esc(g.target_entity_type)} ${esc(g.target_entity_id)}</div>
+      <div class="meta">on ${esc(g.target_entity_type)} <span class="mono">${esc(g.target_entity_id)}</span></div>
       ${g.context ? `<div class="body">${esc(g.context)}</div>` : ''}
       <div class="btn-row">
-        <button class="btn approve" onclick="openModal('gate-approve','${g.id}')">Approve</button>
-        <button class="btn reject" onclick="openModal('gate-reject','${g.id}')">Reject</button>
+        <button class="btn primary" onclick="openModal('gate-approve','${g.id}')">Approve</button>
+        <button class="btn danger" onclick="openModal('gate-reject','${g.id}')">Reject</button>
       </div>
     </div>`).join('');
 }
 
 function renderEscalations(S){
-  const escs = (S.escalations || []).filter(e => e.status !== 'resolved');
+  const escs = (S.escalations || []).filter(e => e.status !== 'resolved')
+    .sort((a,b) => (SEV_RANK[a.severity] ?? 9) - (SEV_RANK[b.severity] ?? 9) || (a.created_at || '').localeCompare(b.created_at || ''));
   const el = document.getElementById('escalations');
-  if(!escs.length){ el.innerHTML = '<div class="attn-empty">No open escalations. The floor is quiet.</div>'; return; }
-  el.innerHTML = escs.map(e => `
-    <div class="attn-item">
-      <div class="head">${pill(e.id, e.severity === 'critical' || e.severity === 'high' ? 'red' : 'gold')}
-        ${pill(e.severity,'dim')}${pill(e.status)}
+  if(!escs.length){ el.innerHTML = '<div class="empty">No open escalations. The floor is quiet.</div>'; return; }
+  el.innerHTML = escs.map(e => {
+    const sevCls = (e.severity === 'critical' || e.severity === 'high') ? 'bad' : 'warn';
+    const notified = e.notify_count > 1 ? `DM'd ${e.notify_count}×, last ${timeAgo(e.last_notified_at)}`
+                   : e.notify_count === 1 ? `DM'd ${timeAgo(e.last_notified_at)}` : 'DM not delivered';
+    return `
+    <div class="attn-item ${e.severity === 'critical' ? 'critical' : ''}">
+      <div class="head">${pill(e.id, sevCls)}${pill(e.severity, sevCls)}${e.status === 'acknowledged' ? pill('acknowledged','dim') : ''}
         ${pill('by ' + esc(e.raised_by_member_id),'dim')}
-        <span class="muted">${timeAgo(e.created_at)} · notified ×${e.notify_count ?? 0}</span></div>
+        <span class="when" title="${esc(tAttr(e.created_at))}">${timeAgo(e.created_at)}</span></div>
       <div class="title">${esc(e.title)}</div>
-      ${e.target_entity_id ? `<div class="meta">on ${esc(e.target_entity_type)} ${esc(e.target_entity_id)}</div>` : ''}
+      <div class="meta">${e.target_entity_id ? `on ${esc(e.target_entity_type)} <span class="mono">${esc(e.target_entity_id)}</span> · ` : ''}${esc(notified)}</div>
       ${e.body ? `<div class="body">${esc(e.body)}</div>` : ''}
       <div class="btn-row">
-        ${e.status === 'open' ? `<button class="btn gold" onclick="openModal('escalation-acknowledge','${e.id}')">Acknowledge</button>` : ''}
-        <button class="btn approve" onclick="openModal('escalation-resolve','${e.id}')">Resolve</button>
+        <button class="btn primary" onclick="openModal('escalation-resolve','${e.id}')">Resolve</button>
+        ${e.status === 'open' ? `<button class="btn" onclick="openModal('escalation-acknowledge','${e.id}')">Acknowledge</button>` : ''}
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 function renderRoster(S){
@@ -381,17 +524,18 @@ function renderRoster(S){
   const ics = members.filter(m => m.reports_to);
   const row = m => `
     <div class="member">
-      <div class="dot ${m.status === 'active' ? (m.current_units.length ? 'active' : 'idle') : 'paused'}"></div>
+      <div class="dot ${m.status !== 'active' ? 'paused' : (m.current_units.length ? 'working' : 'idle')}"
+           title="${m.status !== 'active' ? esc(m.status) : (m.current_units.length ? 'working' : 'idle')}"></div>
       <div class="who">
-        <div class="nm">${esc(m.name)} <span class="muted">${esc(m.id)}</span></div>
-        <div class="rl">${esc(m.role || '')}${m.reports_to ? ' · reports to ' + esc(m.reports_to) : ''}</div>
-        ${m.current_units.length ? `<div class="cu">→ ${esc(m.current_units[0].id)} ${esc(m.current_units[0].name)}</div>` : ''}
+        <div class="nm">${esc(m.name)}<span class="mid">${esc(m.id)}</span></div>
+        <div class="rl">${esc(m.role || '')}</div>
+        ${m.current_units.length ? `<div class="cu" title="${esc(m.current_units[0].name)}"><span class="uid">${esc(m.current_units[0].id)}</span> ${esc(m.current_units[0].name)}</div>` : ''}
       </div>
-      <div class="side">load ${m.load}<br>${timeAgo(m.last_activated)}</div>
+      <div class="side">load ${m.load}<br><span title="${esc(tAttr(m.last_activated))}">${timeAgo(m.last_activated)}</span></div>
     </div>`;
   document.getElementById('roster').innerHTML =
-    (managers.length ? `<div class="muted" style="margin-bottom:4px">MANAGEMENT</div>` + managers.map(row).join('') : '') +
-    (ics.length ? `<div class="muted" style="margin:10px 0 4px">CONTRIBUTORS</div>` + ics.map(row).join('') : '');
+    (managers.length ? `<div class="muted" style="margin-bottom:2px">MANAGEMENT</div>` + managers.map(row).join('') : '') +
+    (ics.length ? `<div class="muted" style="margin:14px 0 2px">CONTRIBUTORS</div>` + ics.map(row).join('') : '');
 }
 
 function renderPipeline(S){
@@ -401,38 +545,38 @@ function renderPipeline(S){
   const order = ['pending','in_progress','in_review','blocked','done','cancelled'];
   const counts = order.map(st => units.filter(u => u.status === st).length);
   const total = counts.reduce((a,b) => a+b, 0) || 1;
-  const bar = `<div class="pipebar">` + order.map((st,i) =>
-      counts[i] ? `<div style="width:${100*counts[i]/total}%;background:${STATUS_COLORS[st]}" title="${st}: ${counts[i]}"></div>` : ''
-    ).join('') + `</div>
-    <div class="pipelegend">` + order.map((st,i) =>
-      counts[i] ? `<span><span class="sw" style="background:${STATUS_COLORS[st]}"></span>${st} ${counts[i]}</span>` : ''
-    ).join('') + `</div>`;
+  const bar = `<div class="pipebar" role="img" aria-label="${order.map((st,i)=>counts[i]?`${st} ${counts[i]}`:'').filter(Boolean).join(', ')}">` +
+    order.map((st,i) => counts[i] ? `<div style="width:${100*counts[i]/total}%;background:${STATUS_COLORS[st]}" title="${st}: ${counts[i]}"></div>` : '').join('') +
+    `</div><div class="pipelegend">` +
+    order.map((st,i) => counts[i] ? `<span><span class="sw" style="background:${STATUS_COLORS[st]}"></span>${st} <b>${counts[i]}</b></span>` : '').join('') +
+    `</div>`;
 
   const projHtml = projects.map(p => {
     const pu = units.filter(u => u.project_id === p.id)
-      .sort((a,b) => (a.status === 'done') - (b.status === 'done') || String(a.id).localeCompare(String(b.id)));
+      .sort((a,b) => (a.status === 'done' || a.status === 'cancelled') - (b.status === 'done' || b.status === 'cancelled') || String(a.id).localeCompare(String(b.id)));
     if(!pu.length) return '';
     const op = ops[p.operation_id];
     return `<div class="proj">
-      <div class="pname">${esc(p.name)} <span class="muted">${op ? esc(op.name) + ' · ' : ''}${esc(p.status || '')}</span></div>
-      <table><tr><th>ID</th><th>Unit</th><th>Assignee</th><th>Status</th><th>Depends on</th></tr>
+      <div class="pname">${esc(p.name)}<span class="psub">${op ? esc(op.name) + ' · ' : ''}${esc(p.status || '')}</span></div>
+      <div class="tablewrap"><table>
+      <thead><tr><th>ID</th><th>Unit</th><th>Assignee</th><th>Status</th><th>Depends on</th></tr></thead><tbody>
       ${pu.map(u => {
         let deps = u.depends_on;
         if(typeof deps === 'string'){ try{ deps = JSON.parse(deps); }catch(_){ deps = []; } }
         return `<tr><td>${esc(u.id)}</td><td class="unit-name">${esc(u.name)}</td>
-          <td>${esc(u.assignee_member_id || u.claimed_by || '—')}</td>
+          <td class="mono">${esc(u.assignee_member_id || u.claimed_by || '—')}</td>
           <td>${pill(u.status)}</td>
-          <td class="muted">${(deps || []).map(esc).join(', ') || '—'}</td></tr>`;
+          <td class="mono muted">${(deps || []).map(esc).join(', ') || '—'}</td></tr>`;
       }).join('')}
-      </table></div>`;
+      </tbody></table></div></div>`;
   }).join('');
-  document.getElementById('pipeline').innerHTML = bar + (projHtml || '<div class="attn-empty">No projects yet.</div>');
+  document.getElementById('pipeline').innerHTML = bar + (projHtml || '<div class="empty">No projects yet.</div>');
 }
 
 function renderGoals(S){
   const goals = (S.goals || []).filter(g => g.status === 'active');
-  const el = document.getElementById('goals');
-  if(!goals.length){ el.innerHTML = '<div class="attn-empty">No active goals.</div>'; return; }
+  const el = document.getElementById('goalsList');
+  if(!goals.length){ el.innerHTML = '<div class="empty">No active goals. Set one so the firm has a scoreboard.</div>'; return; }
   el.innerHTML = goals.map(g => {
     let m = g.metric;
     if(typeof m === 'string'){ try{ m = JSON.parse(m); }catch(_){ m = {type: m}; } }
@@ -440,85 +584,90 @@ function renderGoals(S){
     const cur = m.current, target = m.value;
     const pct = (cur != null && target) ? Math.min(100, 100 * cur / target) : null;
     return `<div class="goal">
-      <div class="head" style="display:flex;gap:8px;align-items:center;margin-bottom:4px">
-        ${pill(g.id,'emerald')}${pill(g.level || 'goal','dim')}
-        <button class="btn" style="margin-left:auto;padding:3px 9px;font-size:11px" onclick="openModal('goal-metric','${g.id}')">Update</button>
-      </div>
+      <div class="ghead">${pill(g.id,'ok')}${pill(g.level || 'goal','dim')}
+        <button class="btn sm" style="margin-left:auto" onclick="openModal('goal-metric','${g.id}')">Update</button></div>
       <div class="gt">${esc(g.target)}</div>
-      <div class="gm">${m.type ? esc(m.type) + ' — ' : ''}current <b style="color:var(--fg1)">${cur ?? 'not baselined'}</b>${target ? ' / target ' + esc(target) + (m.unit ? ' ' + esc(m.unit) : '') : ''}</div>
-      ${pct != null ? `<div class="meter ${pct >= 100 ? 'over' : ''}"><div style="width:${pct}%"></div></div>` : ''}
-      <div class="muted" style="margin-top:4px">updated ${timeAgo(g.updated_at)}</div>
+      <div class="gm">${m.type ? esc(m.type) + ' — ' : ''}current <b>${cur ?? 'not baselined'}</b>${target ? ` / target ${esc(target)}${m.unit ? ' ' + esc(m.unit) : ''}` : ''}</div>
+      ${pct != null ? `<div class="meter" role="img" aria-label="${pct.toFixed(0)}% of target"><div style="width:${pct}%"></div></div>` : ''}
+      <div class="gfoot">updated <span title="${esc(tAttr(g.updated_at))}">${timeAgo(g.updated_at)}</span></div>
     </div>`;
   }).join('');
 }
 
 function renderCosts(S){
-  const costs = S.cost_by_member || [];
+  const costs = (S.cost_by_member || []).slice();
   const roster = Object.fromEntries((S.roster || []).map(m => [m.id, m]));
   const el = document.getElementById('costs');
-  if(!costs.length){ el.innerHTML = '<div class="attn-empty">No spend recorded yet.</div>'; return; }
+  if(!costs.length){ el.innerHTML = '<div class="empty">No spend recorded yet.</div>'; return; }
   const max = Math.max(...costs.map(c => c.total_usd || 0), 0.01);
   el.innerHTML = costs
     .sort((a,b) => (b.total_usd||0) - (a.total_usd||0))
     .map(c => `<div class="costrow">
-      <span>${esc(roster[c.member_id]?.name || c.member_id)}</span>
-      <div class="cb"><div style="width:${100*(c.total_usd||0)/max}%"></div></div>
+      <span title="${esc(c.member_id)}">${esc(roster[c.member_id]?.name || c.member_id)}</span>
+      <div class="cb" title="${money(c.total_usd)} · ${c.events} runs"><div style="width:${100*(c.total_usd||0)/max}%"></div></div>
       <span class="cv">${money(c.total_usd)}</span>
     </div>`).join('') +
-    `<div class="costrow" style="border-top:1px solid var(--border);margin-top:6px;padding-top:8px">
-      <span><b>Total</b></span><div></div>
-      <span class="cv" style="color:var(--primary)">${money(costs.reduce((a,c)=>a+(c.total_usd||0),0))}</span></div>`;
+    `<div class="costrow total"><span>Total</span><div></div>
+      <span class="cv">${money(costs.reduce((a,c)=>a+(c.total_usd||0),0))}</span></div>`;
 }
 
 function renderDocs(S){
   const docs = (S.documents || []).slice().reverse();
   const el = document.getElementById('docs');
-  if(!docs.length){ el.innerHTML = '<div class="attn-empty">No deliverables yet.</div>'; return; }
+  if(!docs.length){ el.innerHTML = '<div class="empty">No deliverables yet.</div>'; return; }
   el.innerHTML = docs.map(d => `
     <div class="doc">
-      <div>${pill(d.id,'emerald')} ${pill(d.type || 'doc','dim')} <span class="dn">${esc(d.name)}</span></div>
+      <div>${pill(d.id,'ok')} ${pill(d.type || 'doc','dim')} <span class="dn">${esc(d.name)}</span></div>
       <div class="dp">${esc(d.content_path)}</div>
-      <div class="muted">on ${esc(d.parent_entity_type)} ${esc(d.parent_entity_id)} · ${timeAgo(d.created_at)}</div>
+      <div class="dm2">on ${esc(d.parent_entity_type)} <span class="mono">${esc(d.parent_entity_id)}</span> · ${when(d.created_at)}</div>
     </div>`).join('');
 }
 
 function renderRuns(S){
   const runs = S.runs || [];
-  const el = document.getElementById('runs');
-  if(!runs.length){ el.innerHTML = '<tr><td class="attn-empty">No runs yet.</td></tr>'; return; }
-  el.innerHTML = `<tr><th>Run</th><th>Member</th><th>Unit</th><th>Status</th><th>Duration</th><th>Started</th></tr>` +
-    runs.map(r => `<tr>
-      <td>${esc(r.id)}</td><td>${esc(r.member_id)}</td><td>${esc(r.unit_id || '—')}</td>
-      <td>${pill(r.status)}</td><td>${dur(r.duration_sec)}</td><td class="muted">${timeAgo(r.started_at)}</td>
-    </tr>`).join('');
+  const el = document.getElementById('runsTable');
+  if(!runs.length){ el.innerHTML = '<tbody><tr><td class="empty">No runs yet.</td></tr></tbody>'; return; }
+  el.innerHTML = `<thead><tr><th>Run</th><th>Member</th><th>Unit</th><th>Status</th><th>Duration</th><th>Started</th></tr></thead><tbody>` +
+    runs.map(r => {
+      let errTitle = '';
+      if(r.error){ try{ const e = typeof r.error === 'string' ? JSON.parse(r.error) : r.error; errTitle = e.type || ''; }catch(_){ errTitle = String(r.error).slice(0,80); } }
+      return `<tr>
+      <td>${esc(r.id)}</td><td class="mono">${esc(r.member_id)}</td><td class="mono">${esc(r.unit_id || '—')}</td>
+      <td title="${esc(errTitle)}">${pill(r.status)}</td><td class="mono">${dur(r.duration_sec)}</td>
+      <td class="muted">${when(r.started_at)}</td>
+    </tr>`;
+    }).join('') + '</tbody>';
 }
 
 function renderRecords(S){
   const recs = S.records || [];
-  const el = document.getElementById('records');
-  if(!recs.length){ el.innerHTML = '<div class="attn-empty">No activity yet.</div>'; return; }
+  const el = document.getElementById('recordsFeed');
+  if(!recs.length){ el.innerHTML = '<div class="empty">No activity yet.</div>'; return; }
   el.innerHTML = recs.map(r => {
     const cls = /fail|error|reject|orphan/.test(r.event_type) ? 'bad'
-             : /escalation|gate|remind/.test(r.event_type) ? 'warn' : '';
+             : /escalation|gate|remind/.test(r.event_type) ? 'warn'
+             : /completed|done|approved|created/.test(r.event_type) ? 'ok' : 'neutral';
     return `<div class="evt">
-      <span class="t">${timeAgo(r.timestamp)}</span>
+      <span class="t" title="${esc(tAttr(r.timestamp))}">${timeAgo(r.timestamp)}</span>
       <span class="e"><span class="type ${cls}">${esc(r.event_type)}</span>
-        · <b>${esc(r.actor_id || r.actor_type)}</b> → ${esc(r.target_entity_type)} ${esc(r.target_entity_id)}</span>
+        · <b>${esc(r.actor_id || r.actor_type)}</b> → ${esc(r.target_entity_type)} <span class="mono">${esc(r.target_entity_id)}</span></span>
     </div>`;
   }).join('');
 }
 
 /* ---- modal + actions ---- */
 const MODAL_SPEC = {
-  'gate-approve':   {title:'Approve gate', sub:'Optional comment recorded on the gate.', btn:'Approve', field:'comment'},
-  'gate-reject':    {title:'Reject gate', sub:'Optional comment recorded on the gate.', btn:'Reject', field:'comment'},
-  'escalation-acknowledge': {title:'Acknowledge escalation', sub:'Marks it seen — stays on the board, reminders stop counting it as new.', btn:'Acknowledge', field:'resolution'},
-  'escalation-resolve':     {title:'Resolve escalation', sub:'Optional resolution note for the audit trail.', btn:'Resolve', field:'resolution'},
-  'goal-metric':    {title:'Update goal metric', sub:'Enter the current value (number).', btn:'Update', field:'current'},
+  'gate-approve':   {title:'Approve gate', sub:'Optional comment — recorded on the gate for the audit trail.', btn:'Approve', done:'Approved', field:'comment'},
+  'gate-reject':    {title:'Reject gate', sub:'Optional comment — recorded on the gate for the audit trail.', btn:'Reject', done:'Rejected', field:'comment'},
+  'escalation-acknowledge': {title:'Acknowledge escalation', sub:'Marks it seen. It stays on the board until resolved.', btn:'Acknowledge', done:'Acknowledged', field:'resolution'},
+  'escalation-resolve':     {title:'Resolve escalation', sub:'Optional resolution note for the audit trail.', btn:'Resolve', done:'Resolved', field:'resolution'},
+  'goal-metric':    {title:'Update goal metric', sub:'Enter the current value (a number).', btn:'Update', done:'Updated', field:'current'},
 };
 let modalCtx = null;
+let lastFocus = null;
 function openModal(action, id){
   modalCtx = {action, id};
+  lastFocus = document.activeElement;
   const spec = MODAL_SPEC[action];
   document.getElementById('mTitle').textContent = `${spec.title} — ${id}`;
   document.getElementById('mSub').textContent = spec.sub;
@@ -528,20 +677,31 @@ function openModal(action, id){
   document.getElementById('overlay').classList.add('show');
   ta.focus();
 }
-function closeModal(){ document.getElementById('overlay').classList.remove('show'); modalCtx = null; }
+function closeModal(){
+  document.getElementById('overlay').classList.remove('show');
+  modalCtx = null;
+  if(lastFocus && lastFocus.isConnected) lastFocus.focus();
+}
 document.getElementById('overlay').addEventListener('click', e => { if(e.target.id === 'overlay') closeModal(); });
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape' && document.getElementById('overlay').classList.contains('show')) closeModal();
+});
 document.getElementById('mConfirm').addEventListener('click', async () => {
   if(!modalCtx) return;
   const spec = MODAL_SPEC[modalCtx.action];
+  const btn = document.getElementById('mConfirm');
+  btn.disabled = true;
   const body = {}; body[spec.field] = document.getElementById('mText').value.trim();
   try{
     const r = await fetch(`/api/action/${modalCtx.action}/${modalCtx.id}`, {
       method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body),
     });
     const out = await r.json();
-    if(out.ok){ toast(`${spec.btn} — done`); } else { toast(out.error || 'Action failed', true); }
+    if(out.ok){ toast(`${spec.done} — recorded`); } else { toast(out.error || 'Action failed', true); }
   }catch(e){ toast('Action failed: ' + e, true); }
+  btn.disabled = false;
   closeModal();
+  lastHash = null;  // force re-render with fresh data
   poll();
 });
 let toastTimer = null;
