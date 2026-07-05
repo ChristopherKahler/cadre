@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cadre Boardroom</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg-deep:#060A0E; --bg-elevated:#080C12; --bg-surface:#0C1016; --bg-hover:#10141A;
+  --fg1:#F4F4F5; --fg2:#A1A1AA; --fg3:#71717A;
+  --primary:#10B981; --primary-glow:rgba(16,185,129,.30); --primary-soft:rgba(16,185,129,.10); --primary-ring:rgba(16,185,129,.22);
+  --secondary:#F5A623; --secondary-glow:rgba(245,166,35,.30); --secondary-soft:rgba(245,166,35,.10);
+  --tertiary:#06B6D4; --tertiary-soft:rgba(6,182,212,.10);
+  --danger:#EF4444; --danger-soft:rgba(239,68,68,.10);
+  --border:rgba(255,255,255,.06); --border-hover:rgba(255,255,255,.12); --border-accent:rgba(16,185,129,.30);
+  --font-display:'Space Grotesk',system-ui,sans-serif;
+  --font-body:'Inter',system-ui,sans-serif;
+  --font-mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
+  --shadow-card:0 8px 32px rgba(0,0,0,.40);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg-deep);color:var(--fg1);font:400 14px/1.5 var(--font-body);min-height:100vh}
+a{color:var(--primary);text-decoration:none}
+
+/* ---- shell ---- */
+.shell{max-width:1560px;margin:0 auto;padding:24px 24px 96px}
+.topbar{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;margin-bottom:8px}
+.topbar h1{font:700 28px/1.1 var(--font-display);letter-spacing:-.03em}
+.northstar{color:var(--fg2);font-size:13px;max-width:720px}
+.live{margin-left:auto;display:flex;align-items:center;gap:8px;font:500 11px var(--font-mono);letter-spacing:.18em;color:var(--fg3)}
+.live .dot{width:8px;height:8px;border-radius:999px;background:var(--primary);box-shadow:0 0 10px var(--primary-glow);animation:pulse 2s infinite}
+.live.stale .dot{background:var(--danger);box-shadow:0 0 10px rgba(239,68,68,.3);animation:none}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ---- pills / eyebrows ---- */
+.pill{display:inline-block;font:500 10px/1 var(--font-mono);letter-spacing:.14em;text-transform:uppercase;
+  padding:4px 8px;border-radius:4px;border:1px solid var(--border);color:var(--fg2);white-space:nowrap}
+.pill.emerald{color:var(--primary);border-color:var(--border-accent);background:var(--primary-soft)}
+.pill.gold{color:var(--secondary);border-color:rgba(245,166,35,.30);background:var(--secondary-soft)}
+.pill.cyan{color:var(--tertiary);border-color:rgba(6,182,212,.30);background:var(--tertiary-soft)}
+.pill.red{color:var(--danger);border-color:rgba(239,68,68,.30);background:var(--danger-soft)}
+.pill.dim{color:var(--fg3)}
+.eyebrow{font:500 12px/1 var(--font-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--fg3);margin-bottom:12px}
+.eyebrow .accent{color:var(--primary)}
+.eyebrow.gold .accent{color:var(--secondary)}
+
+/* ---- stat tiles ---- */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:20px 0}
+.stat{background:var(--bg-elevated);border:1px solid var(--border);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow-card)}
+.stat .k{font:500 10px var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--fg3)}
+.stat .v{font:700 30px/1.1 var(--font-display);letter-spacing:-.03em;margin-top:6px}
+.stat .v.emerald{color:var(--primary);text-shadow:0 0 30px var(--primary-glow)}
+.stat .v.gold{color:var(--secondary)}
+.stat .v.red{color:var(--danger)}
+.stat .sub{color:var(--fg3);font-size:11px;margin-top:2px}
+
+/* ---- layout grid ---- */
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
+.card{background:var(--bg-elevated);border:1px solid var(--border);border-radius:12px;padding:18px;box-shadow:var(--shadow-card)}
+.span12{grid-column:span 12}.span8{grid-column:span 8}.span6{grid-column:span 6}.span4{grid-column:span 4}
+@media(max-width:1100px){.span8,.span6,.span4{grid-column:span 12}}
+
+/* ---- board attention ---- */
+.attn{border-color:rgba(245,166,35,.25)}
+.attn-item{border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:10px;background:var(--bg-surface)}
+.attn-item .head{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+.attn-item .title{font-weight:600;font-size:14px}
+.attn-item .meta{color:var(--fg3);font-size:12px;margin-bottom:8px}
+.attn-item .body{color:var(--fg2);font-size:13px;white-space:pre-wrap;margin-bottom:10px}
+.attn-empty{color:var(--fg3);font-size:13px;padding:8px 0}
+
+/* ---- buttons ---- */
+.btn{font:600 12px var(--font-body);padding:7px 14px;border-radius:6px;border:1px solid var(--border);
+  background:var(--bg-hover);color:var(--fg1);cursor:pointer;transition:all 180ms}
+.btn:hover{border-color:var(--border-hover)}
+.btn.approve{background:var(--primary-soft);border-color:var(--border-accent);color:var(--primary)}
+.btn.approve:hover{box-shadow:0 0 16px var(--primary-ring)}
+.btn.reject{background:var(--danger-soft);border-color:rgba(239,68,68,.3);color:var(--danger)}
+.btn.gold{background:var(--secondary-soft);border-color:rgba(245,166,35,.3);color:var(--secondary)}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap}
+
+/* ---- roster ---- */
+.member{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border)}
+.member:last-child{border-bottom:none}
+.member .dot{width:9px;height:9px;border-radius:999px;margin-top:5px;flex:none}
+.dot.active{background:var(--primary);box-shadow:0 0 8px var(--primary-glow)}
+.dot.idle{background:var(--fg3)}
+.dot.paused{background:var(--secondary)}
+.member .who{min-width:0;flex:1}
+.member .nm{font-weight:600;font-size:14px}
+.member .rl{color:var(--fg3);font-size:12px}
+.member .cu{color:var(--fg2);font-size:12px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.member .side{text-align:right;flex:none;font:500 11px var(--font-mono);color:var(--fg3)}
+
+/* ---- units pipeline ---- */
+.proj{margin-bottom:16px}
+.proj .pname{font:700 15px var(--font-display);letter-spacing:-.02em;margin-bottom:8px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{font:500 10px var(--font-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--fg3);
+  text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)}
+td{padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:top;color:var(--fg2)}
+td:first-child{font:500 12px var(--font-mono);color:var(--fg3);white-space:nowrap}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--bg-hover)}
+.unit-name{color:var(--fg1)}
+
+/* ---- pipeline summary bar ---- */
+.pipebar{display:flex;height:10px;border-radius:5px;overflow:hidden;margin:8px 0 6px;background:var(--bg-surface)}
+.pipebar div{height:100%}
+.pipebar div+div{margin-left:2px}
+.pipelegend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--fg3)}
+.pipelegend .sw{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+
+/* ---- goals ---- */
+.goal{padding:10px 0;border-bottom:1px solid var(--border)}
+.goal:last-child{border-bottom:none}
+.goal .gt{font-size:13px;color:var(--fg1);margin-bottom:6px}
+.goal .gm{font:500 11px var(--font-mono);color:var(--fg3);margin-bottom:6px}
+.meter{height:8px;background:var(--bg-surface);border-radius:4px;overflow:hidden}
+.meter div{height:100%;background:var(--primary);border-radius:4px;box-shadow:0 0 12px var(--primary-glow)}
+.meter.over div{background:var(--secondary)}
+
+/* ---- cost bars ---- */
+.costrow{display:grid;grid-template-columns:110px 1fr 70px;gap:10px;align-items:center;padding:5px 0;font-size:12px}
+.costrow .cb{height:14px;background:var(--bg-surface);border-radius:4px;overflow:hidden}
+.costrow .cb div{height:100%;background:var(--primary);border-radius:4px 0 0 4px}
+.costrow .cv{font:500 12px var(--font-mono);color:var(--fg2);text-align:right}
+
+/* ---- feed ---- */
+.feed{max-height:460px;overflow-y:auto}
+.evt{display:flex;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:12px}
+.evt:last-child{border-bottom:none}
+.evt .t{color:var(--fg3);font:500 11px var(--font-mono);white-space:nowrap;flex:none;width:64px}
+.evt .e{color:var(--fg2);min-width:0}
+.evt .e b{color:var(--fg1);font-weight:600}
+.evt .type{font:500 10px var(--font-mono);letter-spacing:.08em;color:var(--primary)}
+.evt .type.warn{color:var(--secondary)}
+.evt .type.bad{color:var(--danger)}
+
+/* ---- docs ---- */
+.doc{padding:8px 0;border-bottom:1px solid var(--border);font-size:13px}
+.doc:last-child{border-bottom:none}
+.doc .dn{color:var(--fg1);font-weight:500}
+.doc .dp{font:400 11px var(--font-mono);color:var(--fg3);word-break:break-all;margin-top:2px}
+
+/* ---- modal ---- */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);display:none;align-items:center;justify-content:center;z-index:50}
+.overlay.show{display:flex}
+.modal{background:var(--bg-elevated);border:1px solid var(--border-hover);border-radius:12px;
+  box-shadow:0 24px 64px rgba(0,0,0,.55);padding:24px;width:min(520px,92vw)}
+.modal h3{font:700 18px var(--font-display);letter-spacing:-.02em;margin-bottom:6px}
+.modal .msub{color:var(--fg2);font-size:13px;margin-bottom:14px}
+.modal textarea{width:100%;min-height:88px;background:var(--bg-surface);border:1px solid var(--border);
+  border-radius:8px;color:var(--fg1);font:400 13px var(--font-body);padding:10px;resize:vertical;margin-bottom:14px}
+.modal textarea:focus{outline:none;border-color:var(--border-accent)}
+.modal .btn-row{justify-content:flex-end}
+.toast{position:fixed;bottom:20px;right:20px;background:var(--bg-elevated);border:1px solid var(--border-accent);
+  border-radius:8px;padding:12px 18px;font-size:13px;color:var(--fg1);box-shadow:var(--shadow-card);z-index:60;display:none}
+.toast.err{border-color:rgba(239,68,68,.4)}
+section{margin-top:24px}
+.muted{color:var(--fg3);font-size:12px}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="topbar">
+    <span class="pill emerald" id="firmPill">[ FIRM ]</span>
+    <h1 id="firmName">—</h1>
+    <span class="northstar" id="northStar"></span>
+    <span class="live" id="liveWrap"><span class="dot"></span><span id="liveText">CONNECTING</span></span>
+  </div>
+  <div class="muted" id="notifyState"></div>
+
+  <div class="stats" id="stats"></div>
+
+  <section>
+    <div class="eyebrow gold"><span class="accent">[ BOARD ATTENTION ]</span> — items waiting on you</div>
+    <div class="grid">
+      <div class="card attn span6">
+        <div class="eyebrow">PENDING GATES</div>
+        <div id="gates"></div>
+      </div>
+      <div class="card attn span6">
+        <div class="eyebrow">OPEN ESCALATIONS</div>
+        <div id="escalations"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="grid">
+      <div class="card span4">
+        <div class="eyebrow"><span class="accent">[ ROSTER ]</span></div>
+        <div id="roster"></div>
+      </div>
+      <div class="card span8">
+        <div class="eyebrow"><span class="accent">[ OPERATIONS ]</span> — unit pipeline</div>
+        <div id="pipeline"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="grid">
+      <div class="card span4">
+        <div class="eyebrow"><span class="accent">[ GOALS ]</span></div>
+        <div id="goals"></div>
+      </div>
+      <div class="card span4">
+        <div class="eyebrow"><span class="accent">[ SPEND ]</span> — per member</div>
+        <div id="costs"></div>
+      </div>
+      <div class="card span4">
+        <div class="eyebrow"><span class="accent">[ DELIVERABLES ]</span></div>
+        <div id="docs" class="feed"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="grid">
+      <div class="card span6">
+        <div class="eyebrow"><span class="accent">[ RUNS ]</span> — recent member activity</div>
+        <div style="overflow-x:auto"><table id="runs"></table></div>
+      </div>
+      <div class="card span6">
+        <div class="eyebrow"><span class="accent">[ RECORDS ]</span> — audit feed</div>
+        <div id="records" class="feed"></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <h3 id="mTitle"></h3>
+    <div class="msub" id="mSub"></div>
+    <textarea id="mText" placeholder=""></textarea>
+    <div class="btn-row">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn approve" id="mConfirm"></button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+let STATE = null;
+let pollTimer = null;
+
+const STATUS_COLORS = {
+  done:'var(--primary)', completed:'var(--primary)',
+  in_progress:'var(--tertiary)', running:'var(--tertiary)', in_review:'var(--tertiary)',
+  pending:'var(--secondary)', blocked:'var(--secondary)',
+  failed:'var(--danger)', timed_out:'var(--danger)',
+  cancelled:'var(--fg3)', orphaned:'var(--fg3)',
+};
+const STATUS_PILL = {
+  done:'emerald', completed:'emerald',
+  in_progress:'cyan', running:'cyan', in_review:'cyan',
+  pending:'gold', blocked:'gold',
+  failed:'red', timed_out:'red',
+  cancelled:'dim', orphaned:'dim', open:'gold', acknowledged:'cyan', resolved:'emerald',
+  active:'emerald', paused:'gold',
+};
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pill = (txt, cls) => `<span class="pill ${cls || STATUS_PILL[txt] || ''}">${esc(txt)}</span>`;
+
+function timeAgo(iso){
+  if(!iso) return '—';
+  const d = new Date(iso.includes('T') ? iso : iso.replace(' ','T') + 'Z');
+  if(isNaN(d)) return iso;
+  const s = (Date.now() - d.getTime()) / 1000;
+  if(s < 0) return 'now';
+  if(s < 90) return Math.round(s) + 's ago';
+  if(s < 5400) return Math.round(s/60) + 'm ago';
+  if(s < 172800) return Math.round(s/3600) + 'h ago';
+  return Math.round(s/86400) + 'd ago';
+}
+const dur = sec => sec == null ? '—' : (sec < 90 ? Math.round(sec) + 's' : Math.round(sec/60) + 'm');
+const money = v => '$' + (Math.round((v ?? 0) * 100) / 100).toFixed(2);
+
+async function poll(){
+  try{
+    const r = await fetch('/api/state');
+    STATE = await r.json();
+    render();
+    setLive(true);
+  }catch(e){
+    setLive(false);
+  }
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(poll, 5000);
+}
+function setLive(ok){
+  const w = document.getElementById('liveWrap');
+  w.classList.toggle('stale', !ok);
+  document.getElementById('liveText').textContent = ok ? 'LIVE' : 'DISCONNECTED';
+}
+
+function render(){
+  const S = STATE;
+  const firm = S.firm || {};
+  document.title = `${firm.name || firm.id} — Boardroom`;
+  document.getElementById('firmPill').textContent = `[ ${(firm.id || 'FIRM').toUpperCase()} ]`;
+  document.getElementById('firmName').textContent = firm.name || firm.id;
+  document.getElementById('northStar').textContent = firm.north_star || '';
+  document.getElementById('notifyState').textContent = S.notify_configured
+    ? '' : 'Board notifications not configured — set firm.notify_config to enable escalation DMs.';
+
+  renderStats(S); renderGates(S); renderEscalations(S); renderRoster(S);
+  renderPipeline(S); renderGoals(S); renderCosts(S); renderDocs(S);
+  renderRuns(S); renderRecords(S);
+}
+
+function renderStats(S){
+  const units = S.units || [];
+  const count = st => units.filter(u => st.includes(u.status)).length;
+  const pendingGates = (S.gates || []).filter(g => g.status === 'pending').length;
+  const openEsc = (S.escalations || []).filter(e => e.status === 'open').length;
+  const spend = (S.cost_by_member || []).reduce((a,c) => a + (c.total_usd || 0), 0);
+  const activeMembers = (S.roster || []).filter(m => m.status === 'active').length;
+  const runsToday = (S.runs || []).filter(r => r.started_at && (Date.now() - new Date(r.started_at).getTime()) < 86400e3).length;
+  const tiles = [
+    {k:'BOARD ITEMS', v:pendingGates + openEsc, cls:(pendingGates + openEsc) ? 'gold' : '', sub:`${pendingGates} gates · ${openEsc} escalations`},
+    {k:'UNITS IN FLIGHT', v:count(['pending','in_progress','in_review']), cls:'', sub:`${count(['blocked'])} blocked`},
+    {k:'UNITS DONE', v:count(['done']), cls:'emerald', sub:'all time'},
+    {k:'RUNS 24H', v:runsToday, cls:'', sub:`${(S.runs||[]).filter(r=>r.status==='running').length} running now`},
+    {k:'MEMBERS', v:activeMembers, cls:'', sub:`of ${(S.roster||[]).length} on roster`},
+    {k:'TOTAL SPEND', v:money(spend), cls:'', sub:'usage events, all time'},
+  ];
+  document.getElementById('stats').innerHTML = tiles.map(t =>
+    `<div class="stat"><div class="k">${t.k}</div><div class="v ${t.cls}">${t.v}</div><div class="sub">${t.sub}</div></div>`
+  ).join('');
+}
+
+function renderGates(S){
+  const gates = (S.gates || []).filter(g => g.status === 'pending');
+  const el = document.getElementById('gates');
+  if(!gates.length){ el.innerHTML = '<div class="attn-empty">No pending gates. Nothing needs your approval.</div>'; return; }
+  el.innerHTML = gates.map(g => `
+    <div class="attn-item">
+      <div class="head">${pill(g.id,'gold')}${pill('by ' + esc(g.requesting_member_id),'dim')}<span class="muted">${timeAgo(g.created_at)}</span></div>
+      <div class="title">${esc(g.action)}</div>
+      <div class="meta">on ${esc(g.target_entity_type)} ${esc(g.target_entity_id)}</div>
+      ${g.context ? `<div class="body">${esc(g.context)}</div>` : ''}
+      <div class="btn-row">
+        <button class="btn approve" onclick="openModal('gate-approve','${g.id}')">Approve</button>
+        <button class="btn reject" onclick="openModal('gate-reject','${g.id}')">Reject</button>
+      </div>
+    </div>`).join('');
+}
+
+function renderEscalations(S){
+  const escs = (S.escalations || []).filter(e => e.status !== 'resolved');
+  const el = document.getElementById('escalations');
+  if(!escs.length){ el.innerHTML = '<div class="attn-empty">No open escalations. The floor is quiet.</div>'; return; }
+  el.innerHTML = escs.map(e => `
+    <div class="attn-item">
+      <div class="head">${pill(e.id, e.severity === 'critical' || e.severity === 'high' ? 'red' : 'gold')}
+        ${pill(e.severity,'dim')}${pill(e.status)}
+        ${pill('by ' + esc(e.raised_by_member_id),'dim')}
+        <span class="muted">${timeAgo(e.created_at)} · notified ×${e.notify_count ?? 0}</span></div>
+      <div class="title">${esc(e.title)}</div>
+      ${e.target_entity_id ? `<div class="meta">on ${esc(e.target_entity_type)} ${esc(e.target_entity_id)}</div>` : ''}
+      ${e.body ? `<div class="body">${esc(e.body)}</div>` : ''}
+      <div class="btn-row">
+        ${e.status === 'open' ? `<button class="btn gold" onclick="openModal('escalation-acknowledge','${e.id}')">Acknowledge</button>` : ''}
+        <button class="btn approve" onclick="openModal('escalation-resolve','${e.id}')">Resolve</button>
+      </div>
+    </div>`).join('');
+}
+
+function renderRoster(S){
+  const members = S.roster || [];
+  const managers = members.filter(m => !m.reports_to);
+  const ics = members.filter(m => m.reports_to);
+  const row = m => `
+    <div class="member">
+      <div class="dot ${m.status === 'active' ? (m.current_units.length ? 'active' : 'idle') : 'paused'}"></div>
+      <div class="who">
+        <div class="nm">${esc(m.name)} <span class="muted">${esc(m.id)}</span></div>
+        <div class="rl">${esc(m.role || '')}${m.reports_to ? ' · reports to ' + esc(m.reports_to) : ''}</div>
+        ${m.current_units.length ? `<div class="cu">→ ${esc(m.current_units[0].id)} ${esc(m.current_units[0].name)}</div>` : ''}
+      </div>
+      <div class="side">load ${m.load}<br>${timeAgo(m.last_activated)}</div>
+    </div>`;
+  document.getElementById('roster').innerHTML =
+    (managers.length ? `<div class="muted" style="margin-bottom:4px">MANAGEMENT</div>` + managers.map(row).join('') : '') +
+    (ics.length ? `<div class="muted" style="margin:10px 0 4px">CONTRIBUTORS</div>` + ics.map(row).join('') : '');
+}
+
+function renderPipeline(S){
+  const units = S.units || [];
+  const projects = S.projects || [];
+  const ops = Object.fromEntries((S.operations || []).map(o => [o.id, o]));
+  const order = ['pending','in_progress','in_review','blocked','done','cancelled'];
+  const counts = order.map(st => units.filter(u => u.status === st).length);
+  const total = counts.reduce((a,b) => a+b, 0) || 1;
+  const bar = `<div class="pipebar">` + order.map((st,i) =>
+      counts[i] ? `<div style="width:${100*counts[i]/total}%;background:${STATUS_COLORS[st]}" title="${st}: ${counts[i]}"></div>` : ''
+    ).join('') + `</div>
+    <div class="pipelegend">` + order.map((st,i) =>
+      counts[i] ? `<span><span class="sw" style="background:${STATUS_COLORS[st]}"></span>${st} ${counts[i]}</span>` : ''
+    ).join('') + `</div>`;
+
+  const projHtml = projects.map(p => {
+    const pu = units.filter(u => u.project_id === p.id)
+      .sort((a,b) => (a.status === 'done') - (b.status === 'done') || String(a.id).localeCompare(String(b.id)));
+    if(!pu.length) return '';
+    const op = ops[p.operation_id];
+    return `<div class="proj">
+      <div class="pname">${esc(p.name)} <span class="muted">${op ? esc(op.name) + ' · ' : ''}${esc(p.status || '')}</span></div>
+      <table><tr><th>ID</th><th>Unit</th><th>Assignee</th><th>Status</th><th>Depends on</th></tr>
+      ${pu.map(u => {
+        let deps = u.depends_on;
+        if(typeof deps === 'string'){ try{ deps = JSON.parse(deps); }catch(_){ deps = []; } }
+        return `<tr><td>${esc(u.id)}</td><td class="unit-name">${esc(u.name)}</td>
+          <td>${esc(u.assignee_member_id || u.claimed_by || '—')}</td>
+          <td>${pill(u.status)}</td>
+          <td class="muted">${(deps || []).map(esc).join(', ') || '—'}</td></tr>`;
+      }).join('')}
+      </table></div>`;
+  }).join('');
+  document.getElementById('pipeline').innerHTML = bar + (projHtml || '<div class="attn-empty">No projects yet.</div>');
+}
+
+function renderGoals(S){
+  const goals = (S.goals || []).filter(g => g.status === 'active');
+  const el = document.getElementById('goals');
+  if(!goals.length){ el.innerHTML = '<div class="attn-empty">No active goals.</div>'; return; }
+  el.innerHTML = goals.map(g => {
+    let m = g.metric;
+    if(typeof m === 'string'){ try{ m = JSON.parse(m); }catch(_){ m = {type: m}; } }
+    m = m || {};
+    const cur = m.current, target = m.value;
+    const pct = (cur != null && target) ? Math.min(100, 100 * cur / target) : null;
+    return `<div class="goal">
+      <div class="head" style="display:flex;gap:8px;align-items:center;margin-bottom:4px">
+        ${pill(g.id,'emerald')}${pill(g.level || 'goal','dim')}
+        <button class="btn" style="margin-left:auto;padding:3px 9px;font-size:11px" onclick="openModal('goal-metric','${g.id}')">Update</button>
+      </div>
+      <div class="gt">${esc(g.target)}</div>
+      <div class="gm">${m.type ? esc(m.type) + ' — ' : ''}current <b style="color:var(--fg1)">${cur ?? 'not baselined'}</b>${target ? ' / target ' + esc(target) + (m.unit ? ' ' + esc(m.unit) : '') : ''}</div>
+      ${pct != null ? `<div class="meter ${pct >= 100 ? 'over' : ''}"><div style="width:${pct}%"></div></div>` : ''}
+      <div class="muted" style="margin-top:4px">updated ${timeAgo(g.updated_at)}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderCosts(S){
+  const costs = S.cost_by_member || [];
+  const roster = Object.fromEntries((S.roster || []).map(m => [m.id, m]));
+  const el = document.getElementById('costs');
+  if(!costs.length){ el.innerHTML = '<div class="attn-empty">No spend recorded yet.</div>'; return; }
+  const max = Math.max(...costs.map(c => c.total_usd || 0), 0.01);
+  el.innerHTML = costs
+    .sort((a,b) => (b.total_usd||0) - (a.total_usd||0))
+    .map(c => `<div class="costrow">
+      <span>${esc(roster[c.member_id]?.name || c.member_id)}</span>
+      <div class="cb"><div style="width:${100*(c.total_usd||0)/max}%"></div></div>
+      <span class="cv">${money(c.total_usd)}</span>
+    </div>`).join('') +
+    `<div class="costrow" style="border-top:1px solid var(--border);margin-top:6px;padding-top:8px">
+      <span><b>Total</b></span><div></div>
+      <span class="cv" style="color:var(--primary)">${money(costs.reduce((a,c)=>a+(c.total_usd||0),0))}</span></div>`;
+}
+
+function renderDocs(S){
+  const docs = (S.documents || []).slice().reverse();
+  const el = document.getElementById('docs');
+  if(!docs.length){ el.innerHTML = '<div class="attn-empty">No deliverables yet.</div>'; return; }
+  el.innerHTML = docs.map(d => `
+    <div class="doc">
+      <div>${pill(d.id,'emerald')} ${pill(d.type || 'doc','dim')} <span class="dn">${esc(d.name)}</span></div>
+      <div class="dp">${esc(d.content_path)}</div>
+      <div class="muted">on ${esc(d.parent_entity_type)} ${esc(d.parent_entity_id)} · ${timeAgo(d.created_at)}</div>
+    </div>`).join('');
+}
+
+function renderRuns(S){
+  const runs = S.runs || [];
+  const el = document.getElementById('runs');
+  if(!runs.length){ el.innerHTML = '<tr><td class="attn-empty">No runs yet.</td></tr>'; return; }
+  el.innerHTML = `<tr><th>Run</th><th>Member</th><th>Unit</th><th>Status</th><th>Duration</th><th>Started</th></tr>` +
+    runs.map(r => `<tr>
+      <td>${esc(r.id)}</td><td>${esc(r.member_id)}</td><td>${esc(r.unit_id || '—')}</td>
+      <td>${pill(r.status)}</td><td>${dur(r.duration_sec)}</td><td class="muted">${timeAgo(r.started_at)}</td>
+    </tr>`).join('');
+}
+
+function renderRecords(S){
+  const recs = S.records || [];
+  const el = document.getElementById('records');
+  if(!recs.length){ el.innerHTML = '<div class="attn-empty">No activity yet.</div>'; return; }
+  el.innerHTML = recs.map(r => {
+    const cls = /fail|error|reject|orphan/.test(r.event_type) ? 'bad'
+             : /escalation|gate|remind/.test(r.event_type) ? 'warn' : '';
+    return `<div class="evt">
+      <span class="t">${timeAgo(r.timestamp)}</span>
+      <span class="e"><span class="type ${cls}">${esc(r.event_type)}</span>
+        · <b>${esc(r.actor_id || r.actor_type)}</b> → ${esc(r.target_entity_type)} ${esc(r.target_entity_id)}</span>
+    </div>`;
+  }).join('');
+}
+
+/* ---- modal + actions ---- */
+const MODAL_SPEC = {
+  'gate-approve':   {title:'Approve gate', sub:'Optional comment recorded on the gate.', btn:'Approve', field:'comment'},
+  'gate-reject':    {title:'Reject gate', sub:'Optional comment recorded on the gate.', btn:'Reject', field:'comment'},
+  'escalation-acknowledge': {title:'Acknowledge escalation', sub:'Marks it seen — stays on the board, reminders stop counting it as new.', btn:'Acknowledge', field:'resolution'},
+  'escalation-resolve':     {title:'Resolve escalation', sub:'Optional resolution note for the audit trail.', btn:'Resolve', field:'resolution'},
+  'goal-metric':    {title:'Update goal metric', sub:'Enter the current value (number).', btn:'Update', field:'current'},
+};
+let modalCtx = null;
+function openModal(action, id){
+  modalCtx = {action, id};
+  const spec = MODAL_SPEC[action];
+  document.getElementById('mTitle').textContent = `${spec.title} — ${id}`;
+  document.getElementById('mSub').textContent = spec.sub;
+  document.getElementById('mConfirm').textContent = spec.btn;
+  const ta = document.getElementById('mText');
+  ta.value = ''; ta.placeholder = spec.field;
+  document.getElementById('overlay').classList.add('show');
+  ta.focus();
+}
+function closeModal(){ document.getElementById('overlay').classList.remove('show'); modalCtx = null; }
+document.getElementById('overlay').addEventListener('click', e => { if(e.target.id === 'overlay') closeModal(); });
+document.getElementById('mConfirm').addEventListener('click', async () => {
+  if(!modalCtx) return;
+  const spec = MODAL_SPEC[modalCtx.action];
+  const body = {}; body[spec.field] = document.getElementById('mText').value.trim();
+  try{
+    const r = await fetch(`/api/action/${modalCtx.action}/${modalCtx.id}`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body),
+    });
+    const out = await r.json();
+    if(out.ok){ toast(`${spec.btn} — done`); } else { toast(out.error || 'Action failed', true); }
+  }catch(e){ toast('Action failed: ' + e, true); }
+  closeModal();
+  poll();
+});
+let toastTimer = null;
+function toast(msg, isErr){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'toast' + (isErr ? ' err' : ''); t.style.display = 'block';
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.style.display = 'none', 3500);
+}
+
+poll();
+</script>
+</body>
+</html>

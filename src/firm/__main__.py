@@ -158,6 +158,28 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Firm scope. Defaults to $FIRM_ID or 'chrisai'.",
     )
 
+    # ---- dashboard subparser ----
+    dash_parser = subparsers.add_parser(
+        "dashboard",
+        help="Serve the Boardroom dashboard — local web command center over the firm DB.",
+    )
+    dash_parser.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
+    dash_parser.add_argument(
+        "--host", default="127.0.0.1",
+        help="Bind address (default 127.0.0.1 — local only).",
+    )
+    dash_parser.add_argument(
+        "--port", type=int, default=8484,
+        help="Port to serve on (default 8484).",
+    )
+    dash_parser.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. Defaults to $FIRM_ID or 'chrisai'.",
+    )
+
     # ---- run subparser ----
     run_parser = subparsers.add_parser(
         "run",
@@ -265,6 +287,18 @@ def main(argv: list[str] | None = None) -> int:
             workspace,
             dry_run=args.dry_run,
             abort=args.abort,
+            firm_id=firm_id,
+        )
+
+    if args.command == "dashboard":
+        from firm.dashboard.server import run_dashboard
+
+        workspace = args.workspace if args.workspace is not None else Path.cwd()
+        firm_id = args.firm_id or os.environ.get("FIRM_ID", "chrisai")
+        return run_dashboard(
+            workspace,
+            host=args.host,
+            port=args.port,
             firm_id=firm_id,
         )
 
