@@ -354,4 +354,4 @@ def test_registries_cover_all_tables() -> None:
     from firm.core.repo import JSON_COLUMNS
     assert IMMUTABLE_TABLES <= ALL_TABLES
     assert set(JSON_COLUMNS.keys()) <= ALL_TABLES
-    assert len(ALL_TABLES) == 15  # 14 entity tables + budget_period (003_pulse)
+    assert len(ALL_TABLES) == 16  # 14 entity tables + budget_period (003_pulse) + escalation (004)

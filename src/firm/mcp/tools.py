@@ -16,10 +16,10 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from firm.core.db import connect, get_db_path
-from firm.core.migrate import apply_migrations
 from firm.services import comment as comment_svc
 from firm.services import contract as contract_svc
 from firm.services import document as document_svc
+from firm.services import escalation as escalation_svc
 from firm.services import firm_svc as firm_svc_mod
 from firm.services import gate as gate_svc
 from firm.services import goal as goal_svc
@@ -249,6 +249,60 @@ def firm_reject_gate(gate_id: str, approver_comment: str = "") -> str:
     """Reject a pending gate request."""
     data = {"approver_comment": approver_comment} if approver_comment else None
     result = _safe(gate_svc.reject_gate, gate_id, data)
+    return json.dumps(result, default=str)
+
+
+# ---------------------------------------------------------------------------
+# Escalation tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def firm_escalate(raised_by_member_id: str, title: str, body: str = "", severity: str = "normal", target_entity_type: str = "", target_entity_id: str = "", firm_id: str = "chrisai") -> str:
+    """Escalate an item directly to the Board (DMs the Board immediately). Use for blockers, decisions, or anything needing Board attention that is NOT an approval request (use firm_request_gate for approvals). Re-raising the same open issue is deduped automatically — the Board is only re-notified after the reminder window, so escalate freely. severity: low|normal|high|critical."""
+    data: dict[str, Any] = {
+        "raised_by_member_id": raised_by_member_id,
+        "title": title,
+    }
+    if body:
+        data["body"] = body
+    if severity:
+        data["severity"] = severity
+    if target_entity_type:
+        data["target_entity_type"] = target_entity_type
+    if target_entity_id:
+        data["target_entity_id"] = target_entity_id
+    result = _safe(escalation_svc.raise_escalation, firm_id, data)
+    return json.dumps(result, default=str)
+
+
+@mcp.tool()
+def firm_list_escalations(firm_id: str = "chrisai", status: str = "", raised_by: str = "") -> str:
+    """List escalations. Filter by status (open|acknowledged|resolved) or raising member."""
+    kwargs: dict[str, Any] = {}
+    if status:
+        kwargs["status"] = status
+    if raised_by:
+        kwargs["raised_by"] = raised_by
+    result = _safe(escalation_svc.list_escalations, firm_id, **kwargs)
+    return json.dumps(result, default=str)
+
+
+@mcp.tool()
+def firm_view_escalation(escalation_id: str) -> str:
+    """View a single escalation by ID (e.g. ESC-001)."""
+    result = _safe(escalation_svc.view_escalation, escalation_id)
+    return json.dumps(result, default=str)
+
+
+@mcp.tool()
+def firm_resolve_escalation(escalation_id: str, status: str = "resolved", resolution: str = "") -> str:
+    """Resolve or acknowledge an escalation (Board action). status: acknowledged|resolved."""
+    result = _safe(
+        escalation_svc.resolve_escalation,
+        escalation_id,
+        status=status,
+        resolution=resolution or None,
+    )
     return json.dumps(result, default=str)
 
 

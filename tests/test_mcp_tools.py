@@ -275,3 +275,32 @@ class TestUpdateGoalMetric:
         ))
         result = json.loads(mcp_tools.firm_update_goal_metric(goal["id"]))
         assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# firm_escalate — Board escalation with dedup (arity guard)
+# ---------------------------------------------------------------------------
+
+
+class TestEscalationTools:
+
+    def test_escalate_and_resolve_roundtrip(self):
+        result = json.loads(mcp_tools.firm_escalate(
+            "MEM-001", "Need a Board decision on X", body="details",
+            severity="high",
+        ))
+        assert "error" not in result
+        assert result["deduped"] is False
+        esc_id = result["escalation"]["id"]
+
+        # duplicate raise → deduped, no second row
+        dup = json.loads(mcp_tools.firm_escalate(
+            "MEM-001", "Need a Board decision on X",
+        ))
+        assert dup["deduped"] is True
+        assert len(json.loads(mcp_tools.firm_list_escalations(status="open"))) == 1
+
+        resolved = json.loads(mcp_tools.firm_resolve_escalation(
+            esc_id, resolution="decided",
+        ))
+        assert resolved["status"] == "resolved"

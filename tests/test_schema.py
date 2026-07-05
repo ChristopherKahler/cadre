@@ -34,6 +34,7 @@ EXPECTED_ENTITY_TABLES = {
     "firm_secret",
     "document",
     "budget_period",
+    "escalation",
 }
 
 

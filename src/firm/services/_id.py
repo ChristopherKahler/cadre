@@ -25,6 +25,7 @@ PREFIX_REGISTRY: dict[str, str] = {
     "records": "LOG",
     "usage_event": "USG",
     "firm_secret": "KEY",
+    "escalation": "ESC",
 }
 
 SUB_UNIT_PREFIX = "SUB"

@@ -14,6 +14,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+from firm import notify
 from firm.core import repo
 from firm.services._id import next_id
 from firm.services._records import log_event
@@ -75,6 +76,20 @@ def request_gate(
 
     created = repo.create(conn, "gate", row_data)
 
+    # Board notification — structural, best-effort (a Gate IS a board item;
+    # delivery failure must never block the request itself). A gate is a
+    # single created row, so this fires exactly once per gate — reminder
+    # cadence for lingering gates stays with the Board Proxy pulse.
+    member = repo.get(conn, "member", data["requesting_member_id"])
+    dm_lines = [
+        f"🚪 Gate {gate_id} requested by {member['name']} ({member['id']})",
+        f"*{data['action'][:300]}*",
+        f"On: {data['target_entity_type']} {data['target_entity_id']}",
+    ]
+    if data.get("context"):
+        dm_lines.append(str(data["context"])[:400])
+    outcome = notify.send_board_dm(conn, firm_id, "\n".join(dm_lines))
+
     # Records entry
     log_event(
         conn,
@@ -82,6 +97,7 @@ def request_gate(
         event_type="gate.requested",
         actor={"type": "member", "id": data["requesting_member_id"]},
         target_ref={"type": "gate", "id": gate_id},
+        details={"notified": outcome["sent"], "notify_reason": outcome["reason"]},
     )
 
     return created

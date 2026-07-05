@@ -31,6 +31,7 @@ ALL_TABLES: frozenset[str] = frozenset({
     "firm_secret",
     "document",
     "budget_period",
+    "escalation",
 })
 
 #: Tables whose rows cannot be UPDATEd or DELETEd (enforced at DB level by triggers).
@@ -41,7 +42,7 @@ _TABLES_WITH_UPDATED_AT: frozenset[str] = ALL_TABLES - IMMUTABLE_TABLES
 
 #: Columns that store JSON-encoded Python values (list/dict), per table.
 JSON_COLUMNS: dict[str, frozenset[str]] = {
-    "firm": frozenset({"operator", "core_values", "partners", "schedule"}),
+    "firm": frozenset({"operator", "core_values", "partners", "schedule", "notify_config"}),
     "contract": frozenset({"runtime_config", "skill_loadout", "domain_loadout",
                            "pulse_config", "validation_config", "budget_config"}),
     "member": frozenset({"suggested_skills", "suggested_domains", "budget"}),
