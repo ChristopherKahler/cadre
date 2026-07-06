@@ -1028,6 +1028,22 @@ function renderRosterCanvas(S){
 
 /* ======================= MEMBER PROFILE ======================= */
 let profileCtx = null;
+let promptRaw = '';
+async function copyPrompt(){
+  try{
+    await navigator.clipboard.writeText(promptRaw);
+    toast('Prompt copied to clipboard');
+  }catch(_){
+    // clipboard API can be denied — fall back to a selectable textarea
+    const ta = document.createElement('textarea');
+    ta.value = promptRaw;
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    toast(ok ? 'Prompt copied to clipboard' : 'Copy failed — select the text manually', !ok);
+  }
+}
 document.querySelectorAll('.dwr-tab').forEach(t => t.addEventListener('click', () => {
   document.querySelectorAll('.dwr-tab').forEach(x => x.classList.toggle('active', x === t));
   document.querySelectorAll('.dwr-sec').forEach(x => x.classList.toggle('active', x.id === 'tab-' + t.dataset.tab));
@@ -1101,8 +1117,12 @@ function renderProfile(P){
         <span class="e"><span class="type neutral">${esc(r.event_type)}</span> → ${esc(r.target_entity_type)} <span class="mono" style="font-size:11px">${esc(r.target_entity_id)}</span></span></div>`).join('') : '<div class="evt"><span class="empty">Nothing yet.</span></div>'}</div>`;
 
   // Prompt
+  promptRaw = P.prompt_preview || '';
   document.getElementById('tab-prompt').innerHTML = `
-    <div class="seclabel">Assembled prompt preview — what this member actually receives</div>
+    <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px">
+      <div class="seclabel" style="margin-bottom:0;flex:1">Assembled prompt preview — what this member actually receives</div>
+      <button class="btn sm" onclick="copyPrompt()">Copy to clipboard</button>
+    </div>
     <div class="promptpre">${esc(P.prompt_preview)}</div>`;
 
   // Manage
