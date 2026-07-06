@@ -391,3 +391,57 @@ class TestSpawnPidTracking:
             spawn_member_run("prompt", timeout_sec=60)
 
         assert 77 not in _active_pids
+
+
+class TestSpawnModelOverride:
+    """pulse_config.model → --model flag (per-contract cost lever)."""
+
+    @staticmethod
+    def _mock_proc():
+        p = mock.MagicMock()
+        p.pid = 7
+        p.communicate.return_value = ("", "")
+        p.returncode = 0
+        return p
+
+    def test_model_flag_included_when_set(self):
+        with (
+            mock.patch(
+                "firm.pulse.spawn.resolve_claude_bin",
+                return_value=("/usr/bin/claude-test", "test"),
+            ),
+            mock.patch(
+                "firm.pulse.spawn.subprocess.Popen", return_value=self._mock_proc(),
+            ) as mock_popen,
+        ):
+            spawn_member_run("p", model="haiku")
+        cmd = mock_popen.call_args[0][0]
+        i = cmd.index("--model")
+        assert cmd[i + 1] == "haiku"
+        assert cmd[-2:] == ["-p", "p"]
+
+    def test_no_model_flag_by_default(self):
+        with (
+            mock.patch(
+                "firm.pulse.spawn.resolve_claude_bin",
+                return_value=("/usr/bin/claude-test", "test"),
+            ),
+            mock.patch(
+                "firm.pulse.spawn.subprocess.Popen", return_value=self._mock_proc(),
+            ) as mock_popen,
+        ):
+            spawn_member_run("p")
+        assert "--model" not in mock_popen.call_args[0][0]
+
+
+def test_contract_model_extraction():
+    import json as _json
+    from firm.contracts.claude_code import ClaudeCodeRuntime
+    assert ClaudeCodeRuntime._get_model(
+        {"pulse_config": _json.dumps({"timeout_sec": 600, "model": "haiku"})}
+    ) == "haiku"
+    assert ClaudeCodeRuntime._get_model({"pulse_config": _json.dumps({})}) is None
+    assert ClaudeCodeRuntime._get_model({}) is None
+    assert ClaudeCodeRuntime._get_model(
+        {"pulse_config": {"model": "sonnet"}}
+    ) == "sonnet"

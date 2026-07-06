@@ -32,13 +32,16 @@ class ClaudeCodeRuntime:
         unit_id = unit["id"]
 
         timeout = self._get_timeout(contract)
+        model = self._get_model(contract)
         prompt = assemble_prompt(conn, firm_id, member_id, unit_id, cwd=cwd)
-        spawn_result = spawn_member_run(prompt, timeout_sec=timeout, cwd=cwd)
+        spawn_result = spawn_member_run(
+            prompt, timeout_sec=timeout, cwd=cwd, model=model,
+        )
 
         return InvokeResult(
             handle=RunHandle(
                 pid=spawn_result.pid,
-                metadata={"timeout_sec": timeout},
+                metadata={"timeout_sec": timeout, "model": model},
             ),
             stdout=spawn_result.stdout,
             stderr=spawn_result.stderr,
@@ -65,14 +68,22 @@ class ClaudeCodeRuntime:
         return True
 
     @staticmethod
-    def _get_timeout(contract: dict[str, Any]) -> int:
-        """Extract timeout_sec from contract.pulse_config, default 300."""
+    def _pulse_config(contract: dict[str, Any]) -> dict[str, Any]:
         pc = contract.get("pulse_config")
         if isinstance(pc, str):
             try:
                 pc = json.loads(pc)
             except (json.JSONDecodeError, TypeError):
                 pc = None
-        if isinstance(pc, dict):
-            return int(pc.get("timeout_sec", 300))
-        return 300
+        return pc if isinstance(pc, dict) else {}
+
+    @staticmethod
+    def _get_timeout(contract: dict[str, Any]) -> int:
+        """Extract timeout_sec from contract.pulse_config, default 300."""
+        return int(ClaudeCodeRuntime._pulse_config(contract).get("timeout_sec", 300))
+
+    @staticmethod
+    def _get_model(contract: dict[str, Any]) -> str | None:
+        """Extract the model override from contract.pulse_config (cost lever)."""
+        model = ClaudeCodeRuntime._pulse_config(contract).get("model")
+        return str(model) if model else None

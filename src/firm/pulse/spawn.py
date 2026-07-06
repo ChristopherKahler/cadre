@@ -81,6 +81,7 @@ def spawn_member_run(
     *,
     timeout_sec: int = 300,
     cwd: str | None = None,
+    model: str | None = None,
 ) -> SpawnResult:
     """Spawn a ``claude --print`` process and capture output on completion.
 
@@ -88,6 +89,9 @@ def spawn_member_run(
         prompt: The assembled one-shot prompt string.
         timeout_sec: Maximum wall-clock seconds before SIGTERM.
         cwd: Working directory for the child process.
+        model: Optional ``--model`` override from the Member's Contract
+            (``pulse_config.model``) — the per-contract cost lever; cheap
+            roles don't need the top model. None = runtime default.
 
     Returns:
         SpawnResult with captured stdout/stderr and process metadata.
@@ -102,7 +106,10 @@ def spawn_member_run(
             timed_out=False,
         )
 
-    cmd = [claude_bin, *_CLAUDE_FLAGS, "-p", prompt]
+    cmd = [claude_bin, *_CLAUDE_FLAGS]
+    if model:
+        cmd += ["--model", model]
+    cmd += ["-p", prompt]
 
     try:
         proc = subprocess.Popen(

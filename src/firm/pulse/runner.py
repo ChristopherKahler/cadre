@@ -303,10 +303,13 @@ def _execute_run(
                 for d in validation_result.details
                 if not d.get("passed")
             )
+            retry_model = result.handle.metadata.get("model")
             parsed = retry_on_failure(
                 result.prompt_snapshot,
                 failure_context,
-                lambda p: spawn_member_run(p, timeout_sec=timeout, cwd=cwd),
+                lambda p: spawn_member_run(
+                    p, timeout_sec=timeout, cwd=cwd, model=retry_model,
+                ),
                 parse_stream,
             )
             validation_result = validate_output(parsed, validation_config, cwd)
