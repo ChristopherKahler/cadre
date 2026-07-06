@@ -386,6 +386,38 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
 .field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--brand-primary);
   box-shadow:0 0 0 3px rgba(var(--brand-primary-rgb),.14)}
 
+/* ---- evidence chips + your-move + artifacts ---- */
+.desk{margin:10px 0 12px}
+.desk .dl{font:500 9.5px var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--brand-text-dim);margin-bottom:6px}
+.deskchips{display:flex;gap:6px;flex-wrap:wrap}
+.docchip{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--brand-text);cursor:pointer;
+  background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:9999px;padding:4px 12px;transition:border-color 140ms}
+.docchip:hover{border-color:var(--brand-primary)}
+.docchip svg{width:12px;height:12px;color:var(--brand-primary);flex:none}
+.docchip .dt{color:var(--brand-text-dim);font:500 9.5px var(--font-mono);text-transform:uppercase;letter-spacing:.08em}
+.yourmove{display:flex;gap:8px;align-items:flex-start;background:rgba(var(--brand-accent-rgb),.07);
+  border:1px solid rgba(var(--brand-accent-rgb),.25);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:12.5px;color:var(--brand-text-secondary)}
+.yourmove b{color:var(--brand-warning);font:600 10px var(--font-mono);letter-spacing:.12em;text-transform:uppercase;padding-top:2px;flex:none}
+.eref{color:var(--brand-primary);cursor:pointer;border-bottom:1px dotted rgba(var(--brand-primary-rgb),.5);font-family:var(--font-mono);font-size:.92em}
+.eref:hover{border-bottom-style:solid}
+.acat{border:1px solid var(--brand-border);border-radius:10px;margin-bottom:10px;overflow:hidden;background:var(--brand-surface)}
+.acat-head{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;user-select:none}
+.acat-head:hover{background:var(--brand-hover-bg)}
+.acat-head .caret{transition:transform 180ms;color:var(--brand-text-dim);font-size:11px}
+.acat.open .caret{transform:rotate(90deg)}
+.acat-head .ct{font:600 13px var(--font-body);color:var(--brand-text);text-transform:capitalize}
+.acat-head .cn{margin-left:auto;font:600 10.5px var(--font-mono);background:var(--brand-tint-1);border-radius:9999px;padding:2px 8px;color:var(--brand-text-secondary)}
+.acat-body{display:none;border-top:1px solid var(--brand-border)}
+.acat.open .acat-body{display:block}
+.arow{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--brand-border);cursor:pointer;font-size:13px;min-width:0}
+.arow:last-child{border-bottom:none}
+.arow:hover{background:var(--brand-hover-bg)}
+.arow svg{width:14px;height:14px;color:var(--brand-primary);flex:none}
+.arow .an{color:var(--brand-text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.arow .am{color:var(--brand-text-dim);font:400 11px var(--font-mono);white-space:nowrap}
+@keyframes rowflash{0%{background:rgba(var(--brand-primary-rgb),.22)}100%{background:transparent}}
+tr.flash td{animation:rowflash 2.2s ease-out}
+
 /* ---- modal / toast ---- */
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:50}
 .overlay.show{display:flex}
@@ -659,12 +691,14 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
     <div class="dwr-tabs">
       <button class="dwr-tab active" data-tab="overview">Overview</button>
       <button class="dwr-tab" data-tab="activity">Activity</button>
+      <button class="dwr-tab" data-tab="artifacts">Artifacts</button>
       <button class="dwr-tab" data-tab="prompt">Prompt</button>
       <button class="dwr-tab" data-tab="manage">Manage</button>
     </div>
     <div class="dwr-body">
       <div class="dwr-sec active" id="tab-overview"></div>
       <div class="dwr-sec" id="tab-activity"></div>
+      <div class="dwr-sec" id="tab-artifacts"></div>
       <div class="dwr-sec" id="tab-prompt"></div>
       <div class="dwr-sec" id="tab-manage"></div>
     </div>
@@ -825,6 +859,50 @@ function renderStats(S){
 
 const SEV_RANK = {critical:0, high:1, normal:2, low:3};
 
+/* Entity references in Board-item text become clickable — the paper trail
+   is always one click away, never a hunt. */
+function entityExists(id){
+  const S = STATE || {};
+  if(/^DOC-/.test(id)) return (S.documents || []).some(d => d.id === id);
+  if(/^(UNT|UNIT|SUB)-/.test(id)) return (S.units || []).some(u => u.id === id);
+  if(/^MEM-/.test(id)) return (S.roster || []).some(m => m.id === id);
+  if(/^(GL|GOAL)-/.test(id)) return (S.goals || []).some(g => g.id === id);
+  if(/^RUN-/.test(id)) return true;
+  if(/^(PRJ|PROJ)-/.test(id)) return (S.projects || []).some(x => x.id === id);
+  return false;
+}
+function refClick(id){
+  if(/^DOC-/.test(id)) return openDoc(id);
+  if(/^(UNT|UNIT|SUB)-/.test(id)) return gotoUnit(id);
+  if(/^MEM-/.test(id)) return openProfile(id);
+  if(/^(GL|GOAL)-/.test(id)) return show('goals');
+  if(/^RUN-/.test(id)) return show('runs');
+  if(/^(PRJ|PROJ)-/.test(id)) return show('ops');
+}
+function linkify(text){
+  return esc(text).replace(/\b(DOC|UNT|UNIT|SUB|MEM|GL|GOAL|RUN|PRJ|PROJ)-\d+\b/g, id =>
+    entityExists(id) ? `<span class="eref" role="link" onclick="event.stopPropagation();refClick('${id}')" title="Open ${id}">${id}</span>` : id
+  );
+}
+function gotoUnit(unitId){
+  closeProfile(); closeDoc();
+  show('ops');
+  setTimeout(() => {
+    const row = document.getElementById('unit-' + unitId);
+    if(row){
+      row.scrollIntoView({behavior:'smooth', block:'center'});
+      row.classList.remove('flash'); void row.offsetWidth; row.classList.add('flash');
+    } else { toast(unitId + ' is not in the pipeline view'); }
+  }, 120);
+}
+const DOCICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>`;
+function deskChips(docs){
+  if(!docs || !docs.length) return '';
+  return `<div class="desk"><div class="dl">On your desk — click to read</div><div class="deskchips">` +
+    docs.map(d => `<span class="docchip" role="button" onclick="event.stopPropagation();openDoc('${esc(d.id)}')">${DOCICON}<span class="dt">${esc(d.type || 'doc')}</span>${esc(d.name)}</span>`).join('') +
+    `</div></div>`;
+}
+
 function renderGates(S){
   const gates = (S.gates || []).filter(g => g.status === 'pending')
     .sort((a,b) => (a.created_at || '').localeCompare(b.created_at || ''));
@@ -833,9 +911,11 @@ function renderGates(S){
   el.innerHTML = gates.map(g => `
     <div class="attn-item">
       <div class="head">${pill(g.id,'warn')}${pill('by ' + esc(g.requesting_member_id),'dim')}<span class="when" title="${esc(tAttr(g.created_at))}">${timeAgo(g.created_at)}</span></div>
-      <div class="title">${esc(g.action)}</div>
-      <div class="meta">on ${esc(g.target_entity_type)} <span class="mono">${esc(g.target_entity_id)}</span></div>
-      ${g.context ? `<div class="body">${esc(g.context)}</div>` : ''}
+      <div class="title">${linkify(g.action)}</div>
+      <div class="meta">on ${esc(g.target_entity_type)} ${linkify(g.target_entity_id)}</div>
+      ${g.context ? `<div class="body">${linkify(g.context)}</div>` : ''}
+      ${deskChips(g.related_docs)}
+      <div class="yourmove"><b>Your move</b><span>Read the evidence above, then Approve or Reject below. Your comment lands in the audit trail and the requester sees the verdict next pulse.</span></div>
       <div class="btn-row">
         <button class="btn primary sm" onclick="openModal('gate-approve','${g.id}')">Approve</button>
         <button class="btn danger sm" onclick="openModal('gate-reject','${g.id}')">Reject</button>
@@ -857,9 +937,11 @@ function renderEscalations(S){
       <div class="head">${pill(e.id, sevCls)}${pill(e.severity, sevCls)}${e.status === 'acknowledged' ? pill('acknowledged','dim') : ''}
         ${pill('by ' + esc(e.raised_by_member_id),'dim')}
         <span class="when" title="${esc(tAttr(e.created_at))}">${timeAgo(e.created_at)}</span></div>
-      <div class="title">${esc(e.title)}</div>
-      <div class="meta">${e.target_entity_id ? `on ${esc(e.target_entity_type)} <span class="mono">${esc(e.target_entity_id)}</span> · ` : ''}${esc(notified)}</div>
-      ${e.body ? `<div class="body">${esc(e.body)}</div>` : ''}
+      <div class="title">${linkify(e.title)}</div>
+      <div class="meta">${e.target_entity_id ? `on ${esc(e.target_entity_type)} ${linkify(e.target_entity_id)} · ` : ''}${esc(notified)}</div>
+      ${e.body ? `<div class="body">${linkify(e.body)}</div>` : ''}
+      ${deskChips(e.related_docs)}
+      <div class="yourmove"><b>Your move</b><span>${esc(e.raised_by_member_id)} needs a decision from you. Resolve with a note once handled${e.status === 'open' ? ', or Acknowledge to mark it seen while you work on it' : ''}. Reminders stop when you act.</span></div>
       <div class="btn-row">
         <button class="btn primary sm" onclick="openModal('escalation-resolve','${e.id}')">Resolve</button>
         ${e.status === 'open' ? `<button class="btn sm" onclick="openModal('escalation-acknowledge','${e.id}')">Acknowledge</button>` : ''}
@@ -1116,6 +1198,26 @@ function renderProfile(P){
       <div class="evt"><span class="t">${timeAgo(r.timestamp)}</span>
         <span class="e"><span class="type neutral">${esc(r.event_type)}</span> → ${esc(r.target_entity_type)} <span class="mono" style="font-size:11px">${esc(r.target_entity_id)}</span></span></div>`).join('') : '<div class="evt"><span class="empty">Nothing yet.</span></div>'}</div>`;
 
+  // Artifacts — grouped by category, collapsible, click to read
+  const groups = {};
+  (P.artifacts || []).forEach(a => (groups[a.type] = groups[a.type] || []).push(a));
+  const cats = Object.keys(groups).sort();
+  document.getElementById('tab-artifacts').innerHTML = cats.length ? `
+    <div class="seclabel">${P.artifacts.length} artifact${P.artifacts.length === 1 ? '' : 's'} produced — grouped by type</div>` +
+    cats.map((c, i) => `
+      <div class="acat ${cats.length === 1 || i === 0 ? 'open' : ''}">
+        <div class="acat-head" onclick="this.parentElement.classList.toggle('open')">
+          <span class="caret">▶</span><span class="ct">${esc(c)}</span><span class="cn">${groups[c].length}</span>
+        </div>
+        <div class="acat-body">${groups[c].map(a => `
+          <div class="arow" role="button" tabindex="0" onclick="openDoc('${esc(a.id)}')"
+               onkeydown="if(event.key==='Enter')openDoc('${esc(a.id)}')">
+            ${DOCICON}<span class="an">${esc(a.name)}</span>
+            <span class="am">${esc(a.id)} · on ${esc(a.parent_entity_id)} · ${timeAgo(a.created_at)}</span>
+          </div>`).join('')}</div>
+      </div>`).join('')
+    : '<div class="empty">Nothing produced yet. Their first deliverable will land here.</div>';
+
   // Prompt
   promptRaw = P.prompt_preview || '';
   document.getElementById('tab-prompt').innerHTML = `
@@ -1201,7 +1303,7 @@ function renderPipeline(S){
       ${pu.map(u => {
         let deps = u.depends_on;
         if(typeof deps === 'string'){ try{ deps = JSON.parse(deps); }catch(_){ deps = []; } }
-        return `<tr><td>${esc(u.id)}</td><td class="unit-name">${esc(u.name)}</td>
+        return `<tr id="unit-${esc(u.id)}"><td>${esc(u.id)}</td><td class="unit-name">${esc(u.name)}</td>
           <td class="mono" style="font-size:12px">${esc(u.assignee_member_id || u.claimed_by || '—')}</td>
           <td>${pill(u.status)}</td>
           <td class="mono muted" style="font-size:11.5px">${(deps || []).map(esc).join(', ') || '—'}</td>

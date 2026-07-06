@@ -346,3 +346,53 @@ def test_standing_notes_reach_member_identity():
     identity = _render_member_identity(conn, "MEM-001", "/tmp")
     assert "Standing Notes" in identity
     assert "THE BOARD: Prefer faceless formats this month." in identity
+
+
+# ---------------------------------------------------------------------------
+# Evidence resolution + member artifacts
+# ---------------------------------------------------------------------------
+
+
+@mock.patch("firm.services.gate.notify.send_board_dm", return_value={"sent": False, "reason": "test"})
+def test_pending_gate_carries_related_docs(mock_dm):
+    conn = _fresh_conn()
+    create(conn, "document", {
+        "id": "DOC-001", "firm_id": "chrisai", "name": "The report",
+        "type": "report", "content_path": "docs/r.md",
+        "parent_entity_type": "unit", "parent_entity_id": "UNIT-001",
+    })
+    create(conn, "document", {
+        "id": "DOC-002", "firm_id": "chrisai", "name": "Other doc",
+        "type": "brief", "content_path": "docs/o.md",
+        "parent_entity_type": "firm", "parent_entity_id": "chrisai",
+    })
+    from firm.services.gate import request_gate
+    request_gate(conn, "chrisai", {
+        "requesting_member_id": "MEM-001",
+        "action": "Approve the report — see also DOC-002 for context",
+        "target_entity_type": "unit", "target_entity_id": "UNIT-001",
+    })
+
+    state = assemble_state(conn, "chrisai")
+    gate = state["gates"][0]
+    ids = {d["id"] for d in gate["related_docs"]}
+    assert ids == {"DOC-001", "DOC-002"}  # target-attached + text-referenced
+
+
+def test_member_profile_artifacts_grouped_by_producer(tmp_path):
+    from firm.dashboard.server import member_profile
+    conn = _fresh_conn()
+    create(conn, "document", {
+        "id": "DOC-001", "firm_id": "chrisai", "name": "Produced by unit",
+        "type": "report", "content_path": "docs/a.md",
+        "parent_entity_type": "unit", "parent_entity_id": "UNIT-001",
+    })
+    create(conn, "document", {
+        "id": "DOC-002", "firm_id": "chrisai", "name": "Someone else's",
+        "type": "report", "content_path": "docs/b.md",
+        "parent_entity_type": "firm", "parent_entity_id": "chrisai",
+    })
+
+    P = member_profile(conn, tmp_path, "MEM-001")
+    assert [a["id"] for a in P["artifacts"]] == ["DOC-001"]
+    assert P["artifacts"][0]["type"] == "report"

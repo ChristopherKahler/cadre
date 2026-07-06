@@ -13,6 +13,7 @@ firm workspace: ``cadre dashboard --workspace ~/firms/whatever``.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -88,6 +89,39 @@ def assemble_state(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
 
     gates = repo.find(conn, "gate", firm_id=firm_id)
     escalations = repo.find(conn, "escalation", firm_id=firm_id)
+
+    # Evidence resolution — every Board item carries its paper trail so the
+    # operator never hunts: docs attached to the item's target entity plus
+    # any DOC-nnn referenced in the item's own text.
+    all_docs = repo.find(conn, "document", firm_id=firm_id)
+    docs_by_id = {d["id"]: d for d in all_docs}
+    docs_by_parent: dict[str, list[dict[str, Any]]] = {}
+    for d in all_docs:
+        docs_by_parent.setdefault(str(d.get("parent_entity_id")), []).append(d)
+
+    def _slim(d: dict[str, Any]) -> dict[str, Any]:
+        return {"id": d["id"], "name": d["name"], "type": d.get("type")}
+
+    def _related_docs(target_id: str | None, *texts: str | None) -> list[dict[str, Any]]:
+        found: dict[str, dict[str, Any]] = {}
+        for d in docs_by_parent.get(str(target_id), []):
+            found[d["id"]] = d
+        blob = " ".join(t for t in texts if t)
+        for ref in re.findall(r"DOC-\d+", blob):
+            if ref in docs_by_id:
+                found[ref] = docs_by_id[ref]
+        return [_slim(d) for d in found.values()]
+
+    for g in gates:
+        if g.get("status") == "pending":
+            g["related_docs"] = _related_docs(
+                g.get("target_entity_id"), g.get("action"), g.get("context"),
+            )
+    for e in escalations:
+        if e.get("status") != "resolved":
+            e["related_docs"] = _related_docs(
+                e.get("target_entity_id"), e.get("title"), e.get("body"),
+            )
     goals = repo.find(conn, "goal", firm_id=firm_id)
     documents = repo.find(conn, "document", firm_id=firm_id)
 
@@ -237,6 +271,29 @@ def member_profile(
     ]
     notes.sort(key=lambda c: c.get("created_at") or "", reverse=True)
 
+    # Artifacts — documents whose producing unit belongs to this member,
+    # or that the member authored directly.
+    member_unit_ids = {
+        u["id"] for u in repo.find(conn, "unit", firm_id=firm_id)
+        if u.get("assignee_member_id") == member_id or u.get("claimed_by") == member_id
+    }
+    artifacts = []
+    for d in repo.find(conn, "document", firm_id=firm_id):
+        produced = (
+            d.get("author_id") == member_id
+            or (d.get("parent_entity_type") == "unit"
+                and d.get("parent_entity_id") in member_unit_ids)
+        )
+        if produced:
+            artifacts.append({
+                "id": d["id"], "name": d["name"], "type": d.get("type") or "doc",
+                "content_path": d.get("content_path"),
+                "parent_entity_type": d.get("parent_entity_type"),
+                "parent_entity_id": d.get("parent_entity_id"),
+                "created_at": d.get("created_at"),
+            })
+    artifacts.sort(key=lambda d: d.get("created_at") or "", reverse=True)
+
     instructions_file = _instructions_path(workspace, member_id)
     instructions = instructions_file.read_text(encoding="utf-8") if instructions_file.exists() else ""
 
@@ -283,6 +340,7 @@ def member_profile(
         "recent_runs": recent_runs,
         "records": records,
         "notes": notes,
+        "artifacts": artifacts,
         "instructions": instructions,
         "current_units": current,
         "prompt_preview": prompt_preview,
