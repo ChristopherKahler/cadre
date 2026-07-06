@@ -88,7 +88,13 @@ button{font-family:var(--font-body)}
   color:var(--brand-text-secondary);font:500 12px var(--font-body);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fs-menu a:hover{background:var(--brand-surface);color:var(--brand-text)}
 .fs-menu a.cur{color:var(--brand-primary)}
+.fs-menu a .fs-run{width:7px;height:7px;border-radius:9999px;flex:none;margin-left:auto;
+  background:var(--brand-success);box-shadow:0 0 8px color-mix(in srgb, var(--brand-success) 80%, transparent);
+  animation:pulse 1.1s infinite}
+.fs-menu a .fs-run.stale{background:var(--brand-warning);box-shadow:none;animation:none}
+@media(prefers-reduced-motion:reduce){.fs-menu a .fs-run{animation:none}}
 .fs-menu a .fs-badge{margin-left:auto;font:600 10px var(--font-mono);color:var(--brand-warning)}
+.fs-menu a .fs-run + .fs-badge{margin-left:8px}
 .fs-menu .fs-sep{height:1px;background:var(--brand-border);margin:5px 4px}
 .sb-firm{text-align:center;color:var(--brand-text-dim);font-size:11.5px;margin:-6px 0 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .app.rail .sb-firm{display:none}
@@ -1914,7 +1920,7 @@ async function initFirmSwitch(){
     document.getElementById('fsName').textContent = cur ? cur.name : BASE.slice(3);
     document.getElementById('fsMenu').innerHTML =
       '<a href="/">⌂ All boardrooms</a><div class="fs-sep"></div>' +
-      firms.map(f => `<a href="/f/${esc(f.id)}/" class="${BASE === '/f/' + f.id ? 'cur' : ''}">${esc(f.name)}${f.needs_you ? `<span class="fs-badge">${f.needs_you}</span>` : ''}</a>`).join('');
+      firms.map(f => `<a href="/f/${esc(f.id)}/" class="${BASE === '/f/' + f.id ? 'cur' : ''}">${esc(f.name)}${f.running ? `<span class="fs-run${f.stale_runs ? ' stale' : ''}" title="${f.running} running${f.stale_runs ? `, ${f.stale_runs} stale` : ''}"></span>` : ''}${f.needs_you ? `<span class="fs-badge">${f.needs_you}</span>` : ''}</a>`).join('');
     document.getElementById('firmSwitch').hidden = false;
     const btn = document.getElementById('fsBtn'), menu = document.getElementById('fsMenu');
     btn.addEventListener('click', e => {
