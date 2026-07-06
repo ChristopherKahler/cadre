@@ -821,7 +821,17 @@ const when = iso => `<span title="${esc(tAttr(iso))}">${timeAgo(iso)}</span>`;
 const dur = sec => sec == null ? '—' : (sec < 90 ? Math.round(sec) + 's' : Math.round(sec/60) + 'm');
 const money = v => '$' + (Math.round((v ?? 0) * 100) / 100).toFixed(2);
 
-/* ---- polling ---- */
+/* ---- realtime: SSE push with polling fallback ---- */
+let sseOk = false;
+function connectSSE(){
+  if(!window.EventSource) return;
+  const sse = new EventSource('/api/events');
+  sse.addEventListener('change', () => poll());
+  sse.onopen = () => { sseOk = true; setLive(true); };
+  sse.onerror = () => { sseOk = false; };  // EventSource retries itself
+}
+
+/* ---- polling (fallback heartbeat; SSE does the real-time work) ---- */
 async function poll(){
   try{
     const r = await fetch('/api/state');
@@ -837,11 +847,11 @@ async function poll(){
     setLive(false);
   }
   clearTimeout(pollTimer);
-  pollTimer = setTimeout(poll, 5000);
+  pollTimer = setTimeout(poll, sseOk ? 30000 : 5000);
 }
 function setLive(ok){
   document.getElementById('liveWrap').classList.toggle('stale', !ok);
-  document.getElementById('liveText').textContent = ok ? 'LIVE' : 'OFFLINE';
+  document.getElementById('liveText').textContent = ok ? (sseOk ? 'LIVE · PUSH' : 'LIVE') : 'OFFLINE';
 }
 function withScrollKept(ids, fn){
   const pos = {};
@@ -1770,6 +1780,7 @@ function toast(msg, isErr){
 }
 
 show(location.hash.replace('#/','') || 'dashboard');
+connectSSE();
 poll();
 </script>
 </body>

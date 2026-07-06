@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -482,6 +483,9 @@ def make_handler(workspace: Path, firm_id: str) -> type[BaseHTTPRequestHandler]:
             if self.path in ("/", "/index.html"):
                 self._send(200, _INDEX_HTML.read_bytes(), "text/html; charset=utf-8")
                 return
+            if self.path == "/api/events":
+                self._stream_events()
+                return
             if self.path == "/api/state":
                 conn = connect(db_path)
                 try:
@@ -510,6 +514,37 @@ def make_handler(workspace: Path, firm_id: str) -> type[BaseHTTPRequestHandler]:
                     conn.close()
                 return
             self._send(404, {"error": "not found"})
+
+        def _stream_events(self) -> None:
+            """SSE push: watch SQLite data_version (bumped by any other
+            connection's commit) and tell the client the moment the firm
+            changes — escalations, gates, runs land sub-second instead of
+            on the poll cadence. Stdlib-only; EventSource auto-reconnects."""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            conn = connect(db_path)
+            try:
+                last = conn.execute("PRAGMA data_version").fetchone()[0]
+                self.wfile.write(b"retry: 2000\n\n")
+                self.wfile.flush()
+                ticks = 0
+                while True:
+                    time.sleep(0.5)
+                    ticks += 1
+                    cur = conn.execute("PRAGMA data_version").fetchone()[0]
+                    if cur != last:
+                        last = cur
+                        self.wfile.write(b"event: change\ndata: {}\n\n")
+                        self.wfile.flush()
+                    elif ticks % 30 == 0:
+                        self.wfile.write(b": ping\n\n")  # keep-alive
+                        self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass  # client went away — thread ends
+            finally:
+                conn.close()
 
         def do_POST(self) -> None:
             # Routes: /api/action/<action>/<entity_id>
