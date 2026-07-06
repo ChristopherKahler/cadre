@@ -280,8 +280,9 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
   stroke-linecap:round;animation:edgeflow 3.2s linear infinite}
 @keyframes edgeflow{to{stroke-dashoffset:-19}}
 @media(prefers-reduced-motion:reduce){.edge-flow{animation:none;opacity:.3}}
-.mcard{position:absolute;width:228px;background:var(--brand-elevated);border:1px solid var(--brand-border);
+.mcard{position:absolute;width:228px;height:110px;box-sizing:border-box;overflow:hidden;background:var(--brand-elevated);border:1px solid var(--brand-border);
   border-radius:12px;padding:14px;box-shadow:var(--shadow-card);cursor:pointer;transition:border-color 160ms,box-shadow 160ms}
+.mcard.working{border-color:rgba(var(--brand-success-rgb),.45)}
 .mcard:hover{border-color:var(--brand-primary);box-shadow:0 0 24px rgba(var(--brand-primary-rgb),.18)}
 .mcard .mtop{display:flex;gap:10px;align-items:center;margin-bottom:8px}
 .avatar{width:38px;height:38px;border-radius:9999px;flex:none;display:flex;align-items:center;justify-content:center;
@@ -1166,7 +1167,7 @@ function renderRecent(S){
 }
 
 /* ======================= ROSTER CANVAS ======================= */
-const CARD_W = 228, CARD_H = 96, GAP_X = 36, GAP_Y = 92;
+const CARD_W = 228, CARD_H = 110, GAP_X = 36, GAP_Y = 92;
 let view = {x: 60, y: 40, k: 1};
 let viewInit = false;
 
@@ -1264,14 +1265,15 @@ function renderRosterCanvas(S){
     const m = byId[id];
     const running = ((S.runs || []).some(r => r.status === 'running' && r.member_id === m.id));
     const working = m.current_units.length > 0;
+    const active = m.status === 'active' && (running || working);
     const dotCls = m.status !== 'active' ? 'warn' : (working ? 'ok' : '');
-    const stateTxt = m.status !== 'active' ? m.status : (working ? 'working' : 'idle');
-    return `<div class="mcard" style="left:${pt.x}px;top:${pt.y}px" onclick="openProfile('${esc(m.id)}')"
+    const stateTxt = m.status !== 'active' ? m.status : (running ? 'running' : (working ? 'working' : 'idle'));
+    return `<div class="mcard${active ? ' working' : ''}" style="left:${pt.x}px;top:${pt.y}px" onclick="openProfile('${esc(m.id)}')"
         role="button" tabindex="0" onkeydown="if(event.key==='Enter')openProfile('${esc(m.id)}')" title="Open ${esc(m.name)}">
       <div class="mtop"><div class="avatar">${esc(initials(m.name))}</div>
         <div style="min-width:0"><div class="mname">${esc(m.name)}</div><div class="mrole">${esc(m.role || '')}</div></div></div>
       <div class="mfoot"><span class="sdot ${dotCls}"></span>${stateTxt} · load ${m.load} · ${timeAgo(m.last_activated)}</div>
-      ${working ? `<div class="mcu">→ ${esc(m.current_units[0].id)} ${esc(m.current_units[0].name)}</div>` : ''}
+      <div class="mcu">${working ? `→ ${esc(m.current_units[0].id)} ${esc(m.current_units[0].name)}` : '&nbsp;'}</div>
     </div>`;
   }).join('');
 
