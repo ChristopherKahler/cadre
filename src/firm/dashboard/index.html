@@ -1214,15 +1214,35 @@ function copyBoardItem(kind, id){
     item.body ? `BODY: ${item.body}` : null,
     docs ? `EVIDENCE: ${docs}` : null,
     ``,
+    `NOTE: this escalation was auto-acknowledged when I copied it — it is in-hand; resolving it is YOUR job once I give the verdict.`,
     `Brief me on this escalation, recommend a resolution as co-Board, and execute my verdict (escalation-resolve with queue_followup unless I say otherwise).`,
   ];
+  lines.push(
+    `Close the loop: after executing, re-fetch /f/${firm}/api/state and CONFIRM the item is no longer ` +
+    `${kind === 'gate' ? 'pending' : 'open or acknowledged'} — the dashboard clears itself the moment the status flips. ` +
+    `Name any follow-up work you dispatched. If my verdict parks it instead, say exactly what remains open and why.`);
   const text = lines.filter(l => l !== null).join('\n');
+  // Copying an OPEN escalation marks it acknowledged ("in-hand") so the card
+  // reflects that a decision is in flight; the /boardroom verdict resolves it
+  // and SSE clears the board seconds later. Gates have no in-between state.
+  const ack = (kind === 'escalation' && item.status === 'open')
+    ? postAction('escalation-acknowledge/' + item.id,
+        {resolution: 'Taken to /boardroom — decision in progress.'})
+    : Promise.resolve({ok: true, skipped: true});
+  const doneMsg = kind === 'escalation'
+    ? `${item.id} copied + acknowledged — resolve lands from /boardroom`
+    : `${item.id} copied — the /boardroom verdict clears the board`;
   navigator.clipboard.writeText(text).then(
-    () => toast(`${item.id} copied — paste into a /boardroom session`),
+    async () => {
+      const a = await ack;
+      if(!a.ok){ toast(a.error || 'Acknowledge failed (copy still succeeded)', true); return; }
+      toast(doneMsg);
+      if(!a.skipped){ lastHash = null; poll(); }
+    },
     () => { // clipboard API can be denied — fall back to a selectable textarea
       const ta = document.createElement('textarea');
       ta.value = text; document.body.appendChild(ta); ta.select();
-      try{ document.execCommand('copy'); toast(`${item.id} copied — paste into a /boardroom session`); }
+      try{ document.execCommand('copy'); toast(doneMsg); }
       catch(e){ toast('Copy failed — clipboard blocked', true); }
       ta.remove();
     });
@@ -1678,17 +1698,30 @@ function renderGoals(S){
   const goals = (S.goals || []).filter(g => g.status === 'active');
   const el = document.getElementById('goalsList');
   if(!goals.length){ el.innerHTML = '<div class="goal"><div class="empty">No active goals. Set one so the firm has a scoreboard.</div></div>'; return; }
+  // Firms store goals in two shapes: metric=name + target=prose (chrisai)
+  // or metric=name + target=metric-JSON (wastelander) — and updates may put
+  // JSON in either column. Parse both, merge (metric column wins on
+  // conflict), and label with whatever ISN'T JSON. Never render raw JSON.
+  const asObj = v => {
+    if(v && typeof v === 'object' && !Array.isArray(v)) return v;
+    if(typeof v !== 'string') return null;
+    try{ const p = JSON.parse(v); return (p && typeof p === 'object' && !Array.isArray(p)) ? p : null; }
+    catch(_){ return null; }
+  };
   el.innerHTML = goals.map(g => {
-    let m = g.metric;
-    if(typeof m === 'string'){ try{ m = JSON.parse(m); }catch(_){ m = {type: m}; } }
-    m = m || {};
+    const mj = asObj(g.metric), tj = asObj(g.target);
+    const m = {...(tj || {}), ...(mj || {})};
+    const label = [mj ? null : g.metric, tj ? null : g.target]
+      .filter(v => v != null && v !== '').join(' — ') || m.name || g.id;
     const cur = m.current, target = m.value;
-    const pct = (cur != null && target) ? Math.min(100, 100 * cur / target) : null;
+    const fmt = v => typeof v === 'number' ? v.toLocaleString() : esc(v);
+    const pct = (cur != null && typeof target === 'number' && target > 0)
+      ? Math.min(100, 100 * cur / target) : null;
     return `<div class="goal">
       <div class="ghead">${pill(g.id,'ok')}${pill(g.level || 'goal','dim')}
         <button class="btn sm" style="margin-left:auto" onclick="openGoalModal('${g.id}')">Update</button></div>
-      <div class="gt">${esc(g.target)}</div>
-      <div class="gm">${m.type ? esc(m.type) + ' — ' : ''}current <b>${cur ?? 'not baselined'}</b>${target ? ` / target ${esc(target)}${m.unit ? ' ' + esc(m.unit) : ''}` : ''}</div>
+      <div class="gt">${esc(label)}</div>
+      <div class="gm">${m.type ? esc(m.type) + ' — ' : ''}current <b>${cur != null ? fmt(cur) : 'not baselined'}</b>${target != null ? ` / target ${fmt(target)}${m.unit ? ' ' + esc(m.unit) : ''}` : ''}${m.direction ? ` · ${esc(String(m.direction).replace(/_/g,' '))}` : ''}</div>
       ${pct != null ? `<div class="meter" role="img" aria-label="${pct.toFixed(0)}% of target"><div style="width:${pct}%"></div></div>` : ''}
       <div class="gfoot">updated <span title="${esc(tAttr(g.updated_at))}">${timeAgo(g.updated_at)}</span></div>
     </div>`;
