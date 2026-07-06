@@ -508,6 +508,9 @@ tr.flash td{animation:rowflash 2.2s ease-out}
           <span>Records</span>
         </button>
       </div>
+      <div class="navgroup" id="customNav" hidden>
+        <div class="navlabel">Firm views</div>
+      </div>
     </div>
     <div class="sb-foot">
       <div class="live" id="liveWrap" role="status" aria-live="polite"><span class="dot"></span><span id="liveText">CONNECTING</span></div>
@@ -780,10 +783,71 @@ function show(view){
   document.getElementById('scrollArea').scrollTop = 0;
   app.classList.remove('mobile-open');
   if(location.hash !== '#/' + view) history.replaceState(null, '', '#/' + view);
+  if(CUSTOM_VIEWS[view]) ensureFragment(view);
 }
 document.querySelectorAll('.navitem[data-view]').forEach(b =>
   b.addEventListener('click', () => show(b.dataset.view)));
 window.addEventListener('hashchange', () => show(location.hash.replace('#/','')));
+
+/* ---- firm-supplied custom views (.firm/dashboard/views.json) ---- */
+const CUSTOM_VIEWS = {};   // id -> {title, files, loaded}
+async function initCustomViews(){
+  let views = [];
+  try{
+    const r = await fetch('/api/views');
+    if(r.ok) views = (await r.json()).views || [];
+  }catch(e){ /* no manifest — nothing to mount */ }
+  if(!views.length) return;
+  const group = document.getElementById('customNav');
+  group.hidden = false;
+  for(const v of views){
+    VIEWS[v.id] = v.title;
+    CUSTOM_VIEWS[v.id] = {title: v.title, files: v.files, loaded: false};
+    const btn = document.createElement('button');
+    btn.className = 'navitem'; btn.dataset.view = v.id; btn.title = v.title;
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8L20 10.6l-5 3.9 1.8 6-4.8-3.6-4.8 3.6 1.8-6-5-3.9 6.1-1.8z"/></svg><span></span>';
+    btn.querySelector('span').textContent = v.title;
+    btn.addEventListener('click', () => show(v.id));
+    group.appendChild(btn);
+    const page = document.createElement('div');
+    page.className = 'page'; page.id = 'page-' + v.id;
+    document.getElementById('scrollArea').appendChild(page);
+  }
+  // deep link to a custom view survives the initial route
+  const want = location.hash.replace('#/','');
+  if(CUSTOM_VIEWS[want] && currentView !== want) show(want);
+}
+async function ensureFragment(id){
+  const cv = CUSTOM_VIEWS[id];
+  if(!cv || cv.loaded) return;
+  cv.loaded = true;
+  const page = document.getElementById('page-' + id);
+  try{
+    const r = await fetch('/api/views/' + id + '/fragment');
+    if(!r.ok) throw new Error('fragment ' + r.status);
+    page.innerHTML = await r.text();
+    // innerHTML never executes scripts — recreate them so fragments can boot
+    page.querySelectorAll('script').forEach(old => {
+      const s = document.createElement('script');
+      s.textContent = old.textContent;
+      old.replaceWith(s);
+    });
+  }catch(e){
+    cv.loaded = false;
+    page.innerHTML = '<div class="pagehead"><h1>' + cv.title + '</h1><p>View failed to load: ' + e.message + '</p></div>';
+  }
+}
+/* Bridge for fragments: read shell state, post Board actions, fetch declared firm files. */
+window.CadreShell = {
+  state: () => STATE,
+  post: (path, body) => postAction(path, body),
+  viewFile: async (viewId, key) => {
+    const r = await fetch('/api/views/' + viewId + '/file/' + key);
+    if(!r.ok) throw new Error(key + ' ' + r.status);
+    const ct = r.headers.get('Content-Type') || '';
+    return ct.includes('json') ? r.json() : r.text();
+  },
+};
 
 /* ---- status semantics ---- */
 const STATUS_PILL = {
@@ -949,6 +1013,7 @@ function renderRunPanel(){
 }
 
 function render(){
+  document.dispatchEvent(new CustomEvent('cadre:state', {detail: STATE}));
   const S = STATE;
   const firm = S.firm || {};
   document.title = `${firm.name || firm.id} — Boardroom`;
@@ -1782,6 +1847,7 @@ function toast(msg, isErr){
 show(location.hash.replace('#/','') || 'dashboard');
 connectSSE();
 poll();
+initCustomViews();
 </script>
 </body>
 </html>

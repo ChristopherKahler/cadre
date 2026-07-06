@@ -36,6 +36,83 @@ from firm.services._records import log_event
 
 _INDEX_HTML = Path(__file__).parent / "index.html"
 
+_VIEW_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
+
+
+# ---------------------------------------------------------------------------
+# Firm-supplied custom views (.firm/dashboard/views.json)
+# ---------------------------------------------------------------------------
+
+def load_custom_views(workspace: Path) -> list[dict[str, Any]]:
+    """Parse the firm's custom-view manifest, if any.
+
+    Manifest shape::
+
+        {"views": [{"id": "table", "title": "The Table",
+                    "fragment": "dashboard/views/table.html",
+                    "files": {"game_state": "game/game_state.json"}}]}
+
+    ``fragment`` and every ``files`` value are resolved relative to
+    ``<workspace>/.firm/`` — a firm can only expose its own state, never
+    arbitrary paths. Malformed manifests degrade to no custom views;
+    individual bad entries are skipped.
+    """
+    manifest = workspace / ".firm" / "dashboard" / "views.json"
+    if not manifest.exists():
+        return []
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    views = []
+    for v in data.get("views", []):
+        if not isinstance(v, dict):
+            continue
+        vid = str(v.get("id") or "")
+        if not _VIEW_ID_RE.fullmatch(vid) or not v.get("fragment"):
+            continue
+        files = v.get("files") or {}
+        if not isinstance(files, dict):
+            files = {}
+        views.append({
+            "id": vid,
+            "title": str(v.get("title") or vid),
+            "fragment": str(v["fragment"]),
+            "files": {str(k): str(p) for k, p in files.items()},
+        })
+    return views
+
+
+def _firm_file(workspace: Path, rel: str) -> Path:
+    """Resolve *rel* inside <workspace>/.firm and refuse escapes."""
+    root = (workspace / ".firm").resolve()
+    path = (root / rel).resolve()
+    if root != path and root not in path.parents:
+        raise ValueError(f"path {rel!r} escapes the firm directory")
+    return path
+
+
+def read_view_fragment(workspace: Path, view: dict[str, Any]) -> bytes:
+    path = _firm_file(workspace, view["fragment"])
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"cannot read fragment {view['fragment']!r}: {exc}") from exc
+
+
+def read_view_file(workspace: Path, view: dict[str, Any], key: str) -> tuple[bytes, str]:
+    """Read a manifest-declared data file. Returns (content, content_type)."""
+    rel = view["files"].get(key)
+    if rel is None:
+        raise ValueError(f"file key {key!r} not declared for view {view['id']!r}")
+    path = _firm_file(workspace, rel)
+    try:
+        content = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"cannot read {rel!r}: {exc}") from exc
+    ctype = "application/json" if rel.endswith(".json") else "text/plain; charset=utf-8"
+    return content, ctype
+
 
 # ---------------------------------------------------------------------------
 # State assembly
@@ -492,6 +569,32 @@ def make_handler(workspace: Path, firm_id: str) -> type[BaseHTTPRequestHandler]:
                     self._send(200, assemble_state(conn, firm_id))
                 finally:
                     conn.close()
+                return
+            if self.path == "/api/views":
+                views = load_custom_views(workspace)
+                self._send(200, {"views": [
+                    {"id": v["id"], "title": v["title"], "files": sorted(v["files"])}
+                    for v in views
+                ]})
+                return
+            if self.path.startswith("/api/views/"):
+                parts = self.path.strip("/").split("/")
+                # /api/views/<id>/fragment  |  /api/views/<id>/file/<key>
+                views = {v["id"]: v for v in load_custom_views(workspace)}
+                view = views.get(parts[2]) if len(parts) >= 4 else None
+                try:
+                    if view is None:
+                        raise ValueError("unknown view")
+                    if parts[3] == "fragment" and len(parts) == 4:
+                        self._send(200, read_view_fragment(workspace, view),
+                                   "text/html; charset=utf-8")
+                    elif parts[3] == "file" and len(parts) == 5:
+                        content, ctype = read_view_file(workspace, view, parts[4])
+                        self._send(200, content, ctype)
+                    else:
+                        raise ValueError("unknown view route")
+                except ValueError as exc:
+                    self._send(404, {"error": str(exc)})
                 return
             if self.path.startswith("/api/member/"):
                 member_id = self.path.rsplit("/", 1)[1]

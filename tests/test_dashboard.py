@@ -396,3 +396,89 @@ def test_member_profile_artifacts_grouped_by_producer(tmp_path):
     P = member_profile(conn, tmp_path, "MEM-001")
     assert [a["id"] for a in P["artifacts"]] == ["DOC-001"]
     assert P["artifacts"][0]["type"] == "report"
+
+
+# ---------------------------------------------------------------------------
+# Custom views seam (.firm/dashboard/views.json)
+# ---------------------------------------------------------------------------
+
+def _write_manifest(tmp_path, views):
+    import json as _json
+    d = tmp_path / ".firm" / "dashboard"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "views.json").write_text(_json.dumps({"views": views}), encoding="utf-8")
+
+
+def test_load_custom_views_absent_manifest(tmp_path):
+    from firm.dashboard.server import load_custom_views
+    assert load_custom_views(tmp_path) == []
+
+
+def test_load_custom_views_parses_and_skips_bad_entries(tmp_path):
+    from firm.dashboard.server import load_custom_views
+    _write_manifest(tmp_path, [
+        {"id": "table", "title": "The Table", "fragment": "dashboard/views/table.html",
+         "files": {"game_state": "game/game_state.json"}},
+        {"id": "BAD ID!", "fragment": "x.html"},          # invalid id
+        {"id": "no-fragment", "title": "nope"},            # missing fragment
+        "not-a-dict",
+    ])
+    views = load_custom_views(tmp_path)
+    assert [v["id"] for v in views] == ["table"]
+    assert views[0]["title"] == "The Table"
+    assert views[0]["files"] == {"game_state": "game/game_state.json"}
+
+
+def test_load_custom_views_malformed_json_degrades(tmp_path):
+    from firm.dashboard.server import load_custom_views
+    d = tmp_path / ".firm" / "dashboard"
+    d.mkdir(parents=True)
+    (d / "views.json").write_text("{nope", encoding="utf-8")
+    assert load_custom_views(tmp_path) == []
+
+
+def test_read_view_fragment_and_file(tmp_path):
+    from firm.dashboard.server import load_custom_views, read_view_file, read_view_fragment
+    _write_manifest(tmp_path, [
+        {"id": "table", "fragment": "dashboard/views/table.html",
+         "files": {"game_state": "game/game_state.json", "log": "game/log.jsonl"}},
+    ])
+    vd = tmp_path / ".firm" / "dashboard" / "views"
+    vd.mkdir(parents=True)
+    (vd / "table.html").write_text("<h1>hi</h1>", encoding="utf-8")
+    gd = tmp_path / ".firm" / "game"
+    gd.mkdir(parents=True)
+    (gd / "game_state.json").write_text('{"mode": "campaign"}', encoding="utf-8")
+    (gd / "log.jsonl").write_text('{"kind": "narration"}\n', encoding="utf-8")
+
+    view = load_custom_views(tmp_path)[0]
+    assert read_view_fragment(tmp_path, view) == b"<h1>hi</h1>"
+    content, ctype = read_view_file(tmp_path, view, "game_state")
+    assert ctype == "application/json"
+    assert b"campaign" in content
+    content, ctype = read_view_file(tmp_path, view, "log")
+    assert ctype.startswith("text/plain")
+
+
+def test_read_view_file_undeclared_key_rejected(tmp_path):
+    from firm.dashboard.server import load_custom_views, read_view_file
+    _write_manifest(tmp_path, [
+        {"id": "table", "fragment": "dashboard/views/table.html", "files": {}},
+    ])
+    view = load_custom_views(tmp_path)[0]
+    with pytest.raises(ValueError, match="not declared"):
+        read_view_file(tmp_path, view, "secrets")
+
+
+def test_view_paths_cannot_escape_firm_dir(tmp_path):
+    from firm.dashboard.server import load_custom_views, read_view_file, read_view_fragment
+    (tmp_path / "outside.txt").write_text("secret", encoding="utf-8")
+    _write_manifest(tmp_path, [
+        {"id": "evil", "fragment": "../outside.txt",
+         "files": {"leak": "../../outside.txt"}},
+    ])
+    view = load_custom_views(tmp_path)[0]
+    with pytest.raises(ValueError, match="escapes"):
+        read_view_fragment(tmp_path, view)
+    with pytest.raises(ValueError, match="escapes"):
+        read_view_file(tmp_path, view, "leak")
