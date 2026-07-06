@@ -336,6 +336,7 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
 /* ---- modal checkbox ---- */
 .mcheck{display:flex;align-items:flex-start;gap:8px;margin:10px 2px 0;cursor:pointer;
   color:var(--brand-text-secondary);font-size:12.5px;line-height:1.45}
+.mcheck[hidden]{display:none}  /* honor the hidden attr — openModal toggles it per action; without this the flex display leaks the escalation follow-up checkbox onto gate modals */
 .mcheck input{margin-top:2px;accent-color:var(--brand-primary)}
 
 /* ---- settings page ---- */
