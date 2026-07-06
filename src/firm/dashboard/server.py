@@ -302,6 +302,16 @@ def _run_duration_sec(run: dict[str, Any]) -> float | None:
     return (e - s).total_seconds()
 
 
+def _parse_pulse_config(contract: dict[str, Any]) -> dict[str, Any]:
+    pc = contract.get("pulse_config")
+    if isinstance(pc, str) and pc:
+        try:
+            pc = json.loads(pc)
+        except json.JSONDecodeError:
+            return {}
+    return pc if isinstance(pc, dict) else {}
+
+
 def assemble_state(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
     """Build the full dashboard payload from the firm DB."""
     firm = repo.get(conn, "firm", firm_id) or {"id": firm_id, "name": firm_id}
@@ -421,10 +431,22 @@ def assemble_state(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
 
     budget_periods = repo.find(conn, "budget_period", firm_id=firm_id)
 
+    contract_settings = []
+    for c in contracts.values():
+        pc = _parse_pulse_config(c)
+        contract_settings.append({
+            "id": c["id"],
+            "name": c.get("name"),
+            "members": [m["name"] for m in members if m.get("contract_id") == c["id"]],
+            "model": pc.get("model"),
+            "timeout_sec": pc.get("timeout_sec"),
+        })
+
     return {
         "generated_at": datetime.now(tz=timezone.utc).isoformat(),
         "firm": firm,
         "roster": roster,
+        "contract_settings": contract_settings,
         "operations": operations,
         "projects": projects,
         "units": units,
@@ -685,6 +707,29 @@ def perform_action(
             entity_id,
             body.get("body") or "",
         )
+    if action == "contract-model":
+        # Per-contract model override (pulse_config.model — the cost lever).
+        # entity_id = contract id; body.model = alias/full id, empty = inherit
+        # the account default. Takes effect on the next spawn; no restart.
+        contract = repo.get(conn, "contract", entity_id)
+        if not contract:
+            raise ValueError(f"unknown contract {entity_id!r}")
+        pc = _parse_pulse_config(contract)
+        model = str(body.get("model") or "").strip()
+        if model:
+            pc["model"] = model
+        else:
+            pc.pop("model", None)
+        repo.update(conn, "contract", entity_id, {"pulse_config": json.dumps(pc)})
+        log_event(
+            conn,
+            firm_id=contract["firm_id"],
+            event_type="contract.updated",
+            actor={"type": "board", "id": None},
+            target_ref={"type": "contract", "id": entity_id},
+            details={"pulse_config.model": model or "(inherit default)"},
+        )
+        return {"contract_id": entity_id, "model": model or None}
     if action == "unit-create":
         data: dict[str, Any] = {
             "name": body.get("name"),

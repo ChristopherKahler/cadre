@@ -333,6 +333,11 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
 .commissionrow select{flex:1;min-width:0;background:var(--brand-surface);border:1px solid var(--brand-border);
   border-radius:8px;padding:7px 10px;color:var(--brand-text-secondary);font:500 12px var(--font-body)}
 
+/* ---- settings page ---- */
+#settingsTable select{background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:8px;
+  padding:6px 10px;color:var(--brand-text);font:500 12px var(--font-body);cursor:pointer}
+#settingsTable select:focus{outline:none;border-color:var(--brand-primary)}
+
 /* ---- custom-view nav row: embedded view + new-tab full-screen icon ---- */
 .navitem-row{display:flex;align-items:center;gap:2px}
 .navitem-row .navitem{flex:1;min-width:0}
@@ -566,6 +571,10 @@ tr.flash td{animation:rowflash 2.2s ease-out}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
           <span>Pulse now</span>
         </button>
+        <button class="navitem" data-view="settings" title="Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span>Settings</span>
+        </button>
       </div>
       <div class="navgroup" id="customNav" hidden>
         <div class="navlabel">Firm views</div>
@@ -691,6 +700,13 @@ tr.flash td{animation:rowflash 2.2s ease-out}
       <div class="page" id="page-records">
         <div class="pagehead"><h1>Records</h1><p>The immutable audit feed — everything that happened, in order.</p></div>
         <div class="listcard" id="recordsFeed"></div>
+      </div>
+
+      <!-- ============ SETTINGS ============ -->
+      <div class="page" id="page-settings">
+        <div class="pagehead"><h1>Settings</h1><p>Runtime levers per contract. Model changes take effect on the next spawn — no restart, and every change lands in Records.</p></div>
+        <div class="seclabel">Member models — <span class="mono" style="font-size:11px">pulse_config.model → claude --model</span>; blank inherits your account default</div>
+        <div class="listcard"><div class="tablewrap"><table id="settingsTable"></table></div></div>
       </div>
 
     </div>
@@ -834,7 +850,7 @@ document.getElementById('sbTrigger').addEventListener('click', () => {
 /* Hub tenancy: served under /f/<firm> the server stamps data-base on <html>;
    standalone it's absent and BASE is ''. Every API URL goes through BASE. */
 const BASE = document.documentElement.dataset.base || '';
-const VIEWS = {dashboard:'Dashboard', roster:'Roster', ops:'Operations', goals:'Goals & spend', docs:'Deliverables', runs:'Runs', records:'Records'};
+const VIEWS = {dashboard:'Dashboard', roster:'Roster', ops:'Operations', goals:'Goals & spend', docs:'Deliverables', runs:'Runs', records:'Records', settings:'Settings'};
 let currentView = 'dashboard';
 function show(view){
   if(!VIEWS[view]) view = 'dashboard';
@@ -1109,7 +1125,7 @@ function render(){
   withScrollKept([], () => {
     renderStats(S); renderGates(S); renderEscalations(S); renderRecent(S);
     renderRosterCanvas(S); renderPipeline(S); renderGoals(S); renderCosts(S);
-    renderDocs(S); renderRuns(S); renderRecords(S);
+    renderDocs(S); renderRuns(S); renderRecords(S); renderSettings(S);
     updateEngagement();
   });
 }
@@ -1875,6 +1891,46 @@ function renderRuns(S){
       <td class="muted">${when(r.started_at)}</td>
     </tr>`;
     }).join('') + '</tbody>';
+}
+
+const MODEL_OPTS = [
+  ['', 'Account default'],
+  ['opus', 'Opus'],
+  ['sonnet', 'Sonnet'],
+  ['haiku', 'Haiku'],
+];
+function renderSettings(S){
+  const rows = S.contract_settings || [];
+  const el = document.getElementById('settingsTable');
+  if(!el) return;
+  if(!rows.length){ el.innerHTML = '<tbody><tr><td class="empty">No contracts yet.</td></tr></tbody>'; return; }
+  // Don't clobber a dropdown mid-interaction on the poll cadence.
+  if(el.contains(document.activeElement)) return;
+  el.innerHTML = `<thead><tr><th>Members</th><th>Contract</th><th>Model</th><th>Timeout</th></tr></thead><tbody>` +
+    rows.map(c => {
+      const cur = c.model || '';
+      const known = MODEL_OPTS.some(([v]) => v === cur);
+      const opts = MODEL_OPTS.map(([v, label]) =>
+        `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`).join('')
+        + (known ? '' : `<option value="${esc(cur)}" selected>${esc(cur)}</option>`);
+      return `<tr>
+        <td>${esc(c.members.join(', ') || '—')}</td>
+        <td class="mono" style="font-size:12px">${esc(c.name || c.id)}</td>
+        <td><select onchange="setContractModel('${esc(c.id)}', this)">${opts}</select></td>
+        <td class="mono" style="font-size:12px">${c.timeout_sec != null ? c.timeout_sec + 's' : '—'}</td>
+      </tr>`;
+    }).join('') + '</tbody>';
+}
+async function setContractModel(contractId, sel){
+  sel.disabled = true;
+  const out = await postAction('contract-model/' + contractId, {model: sel.value});
+  if(out.ok){
+    toast(`Model ${sel.value ? 'set to ' + sel.value : 'reset to account default'} — applies next spawn`);
+    lastHash = null; poll();
+  } else {
+    toast(out.error || 'Model update failed', true);
+  }
+  sel.disabled = false;
 }
 
 function renderRecords(S){

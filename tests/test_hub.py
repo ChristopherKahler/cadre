@@ -298,6 +298,36 @@ def test_pulse_only_targets_single_member():
     assert "not targeted" in reasons.get("MEM-001", "")
 
 
+def test_contract_model_action(firms_root: Path):
+    from firm.dashboard.server import perform_action
+
+    db = firms_root / "alpha-co" / ".firm" / "firm.db"
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    create(conn, "contract", {
+        "id": "CON-001", "firm_id": "alpha", "name": "Alpha Contract",
+        "runtime_type": "claude_code",
+        "pulse_config": json.dumps({"timeout_sec": 600}),
+    })
+
+    out = perform_action(conn, "contract-model", "CON-001", {"model": "haiku"})
+    assert out["model"] == "haiku"
+    pc = json.loads(dict(conn.execute(
+        "SELECT pulse_config FROM contract WHERE id='CON-001'").fetchone())["pulse_config"])
+    assert pc == {"timeout_sec": 600, "model": "haiku"}  # timeout preserved
+
+    out = perform_action(conn, "contract-model", "CON-001", {"model": ""})
+    assert out["model"] is None
+    pc = json.loads(dict(conn.execute(
+        "SELECT pulse_config FROM contract WHERE id='CON-001'").fetchone())["pulse_config"])
+    assert "model" not in pc
+
+    state = assemble_state(conn, "alpha")
+    assert any(c["id"] == "CON-001" and c["timeout_sec"] == 600
+               for c in state["contract_settings"])
+    conn.close()
+
+
 def test_hub_discovers_new_firm_live(hub_server: str, firms_root: Path):
     _make_firm(firms_root, "gamma-co", "gamma", "Gamma Co")
     status, body = _get(hub_server + "/api/hub")
