@@ -195,6 +195,41 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Firm scope. Defaults to $FIRM_ID or 'chrisai'.",
     )
 
+    # ---- roll subparser ----
+    roll_parser = subparsers.add_parser(
+        "roll",
+        help="Roll dice (game firms) — OS randomness, result written to Records.",
+    )
+    roll_parser.add_argument("expr", help="Dice expression, e.g. 1d20+5 or 3d6.")
+    roll_parser.add_argument(
+        "--reason", required=True,
+        help="What the roll is for (e.g. 'Fen: Sleight of Hand vs gate ledger').",
+    )
+    roll_parser.add_argument(
+        "--member", dest="member_id", default=None,
+        help="Acting member ID (omit for a Board roll).",
+    )
+    roll_parser.add_argument(
+        "--target-type", dest="target_type", default=None,
+        help="Records target entity type (default: firm).",
+    )
+    roll_parser.add_argument(
+        "--target-id", dest="target_id", default=None,
+        help="Records target entity ID (default: the firm).",
+    )
+    roll_parser.add_argument(
+        "--adv", action="store_true",
+        help="Advantage — roll the expression twice, keep the higher total.",
+    )
+    roll_parser.add_argument(
+        "--dis", action="store_true",
+        help="Disadvantage — roll the expression twice, keep the lower total.",
+    )
+    roll_parser.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
+
     # ---- run subparser ----
     run_parser = subparsers.add_parser(
         "run",
@@ -322,6 +357,21 @@ def main(argv: list[str] | None = None) -> int:
             host=args.host,
             port=args.port,
             firm_id=firm_id,
+        )
+
+    if args.command == "roll":
+        from firm.cli.roll import run_roll
+
+        workspace = args.workspace if args.workspace is not None else Path.cwd()
+        return run_roll(
+            workspace,
+            args.expr,
+            reason=args.reason,
+            member_id=args.member_id,
+            target_type=args.target_type,
+            target_id=args.target_id,
+            advantage=args.adv,
+            disadvantage=args.dis,
         )
 
     if args.command == "run":
