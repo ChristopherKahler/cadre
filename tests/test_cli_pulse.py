@@ -154,15 +154,19 @@ class TestRunPulseCli:
         call_kwargs = mock_pulse.call_args
         assert call_kwargs.kwargs.get("dry_run") is True or call_kwargs[1].get("dry_run") is True
 
+    @mock.patch("firm.cli.pulse.dblock")
     @mock.patch("firm.cli.pulse.pulse")
     @mock.patch("firm.cli.pulse.connect")
     @mock.patch("firm.cli.pulse.get_db_path")
-    def test_normal_run(self, mock_db_path, mock_connect, mock_pulse, tmp_path, capsys):
+    def test_normal_run(self, mock_db_path, mock_connect, mock_pulse,
+                        mock_dblock, tmp_path, capsys):
         from firm.cli.pulse import run_pulse
 
         mock_db_path.return_value = tmp_path / ".firm" / "firm.db"
         (tmp_path / ".firm").mkdir()
         (tmp_path / ".firm" / "firm.db").touch()
+        mock_dblock.acquire.return_value = True
+        mock_dblock.make_holder_id.return_value = "test-host:1:x"
         mock_conn = mock.MagicMock()
         mock_connect.return_value = mock_conn
         mock_pulse.return_value = ActivationSummary(
@@ -207,29 +211,27 @@ class TestRunPulseCli:
 
 
 def test_concurrent_live_pulse_refused(tmp_path, capsys, monkeypatch):
-    import fcntl
     import json as _json
 
     from firm.core.db import connect
     from firm.core.migrate import apply_migrations
     from firm.cli.pulse import run_pulse
+    from firm.pulse import dblock
 
     ws = tmp_path
     firm_dir = ws / ".firm"
     firm_dir.mkdir()
     conn = connect(firm_dir / "firm.db")
     apply_migrations(conn)
-    conn.close()
 
     import firm.pulse.spawn as spawn_mod
     monkeypatch.setattr(spawn_mod, "resolve_claude_bin", lambda: ("/bin/true", "test"))
 
-    holder = open(firm_dir / "pulse.lock", "w")
-    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    try:
-        rc = run_pulse(ws, dry_run=False)
-    finally:
-        holder.close()
+    # Another machine's pulse holds the DB-row lock (fresh heartbeat).
+    assert dblock.acquire(conn, "chrisai", "other-host:1:aaaa")
+    conn.close()
+
+    rc = run_pulse(ws, dry_run=False)
 
     assert rc == 1
     out = _json.loads(capsys.readouterr().out.strip().splitlines()[-1])
@@ -237,12 +239,35 @@ def test_concurrent_live_pulse_refused(tmp_path, capsys, monkeypatch):
 
 
 def test_dry_run_ignores_lock(tmp_path, capsys):
-    import fcntl
     import json as _json
 
     from firm.core.db import connect
     from firm.core.migrate import apply_migrations
     from firm.cli.pulse import run_pulse
+    from firm.pulse import dblock
+
+    ws = tmp_path
+    firm_dir = ws / ".firm"
+    firm_dir.mkdir()
+    conn = connect(firm_dir / "firm.db")
+    apply_migrations(conn)
+    conn.execute("INSERT INTO firm (id, name) VALUES ('chrisai', 'ChrisAI')")
+    conn.commit()
+    assert dblock.acquire(conn, "chrisai", "other-host:1:aaaa")
+    conn.close()
+
+    rc = run_pulse(ws, dry_run=True)
+
+    assert rc == 0
+    out = _json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert out["ok"] is True
+
+
+def test_live_pulse_releases_lock_after_run(tmp_path, capsys, monkeypatch):
+    from firm.core.db import connect
+    from firm.core.migrate import apply_migrations
+    from firm.cli.pulse import run_pulse
+    from firm.pulse import dblock
 
     ws = tmp_path
     firm_dir = ws / ".firm"
@@ -253,13 +278,93 @@ def test_dry_run_ignores_lock(tmp_path, capsys):
     conn.commit()
     conn.close()
 
-    holder = open(firm_dir / "pulse.lock", "w")
-    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    try:
-        rc = run_pulse(ws, dry_run=True)
-    finally:
-        holder.close()
+    import firm.pulse.spawn as spawn_mod
+    monkeypatch.setattr(spawn_mod, "resolve_claude_bin", lambda: ("/bin/true", "test"))
 
+    rc = run_pulse(ws, dry_run=False)
+    assert rc == 0
+    capsys.readouterr()
+
+    conn = connect(firm_dir / "firm.db")
+    try:
+        assert dblock.current_holder(conn, "chrisai") is None
+    finally:
+        conn.close()
+
+
+def test_drain_queue_pulses_once_per_request(tmp_path, capsys, monkeypatch):
+    import json as _json
+
+    from firm.core.db import connect
+    from firm.core.migrate import apply_migrations
+    from firm.cli import pulse as pulse_cli
+    from firm.services import pulse_queue
+
+    ws = tmp_path
+    firm_dir = ws / ".firm"
+    firm_dir.mkdir()
+    conn = connect(firm_dir / "firm.db")
+    apply_migrations(conn)
+    conn.execute("INSERT INTO firm (id, name) VALUES ('chrisai', 'ChrisAI')")
+    pulse_queue.request_pulse(conn, "chrisai", requested_by="board")
+    pulse_queue.request_pulse(conn, "chrisai", requested_by="board")
+    conn.commit()
+    conn.close()
+
+    import firm.pulse.spawn as spawn_mod
+    monkeypatch.setattr(spawn_mod, "resolve_claude_bin", lambda: ("/bin/true", "test"))
+    pulses = []
+    monkeypatch.setattr(pulse_cli, "_pulse_once",
+                        lambda *a, **k: pulses.append(1) or {"ok": True, "ran": 0})
+
+    rc = pulse_cli.run_pulse(ws, drain_queue=True)
     assert rc == 0
     out = _json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert out["ok"] is True
+    assert out["ok"] and out["drained"] == 2 and len(pulses) == 2
+
+    conn = connect(firm_dir / "firm.db")
+    try:
+        assert pulse_queue.pending(conn, "chrisai") == []
+        done = conn.execute(
+            "SELECT COUNT(*) FROM pulse_request WHERE status='done'").fetchone()[0]
+        assert done == 2
+    finally:
+        conn.close()
+
+
+def test_drain_queue_abandons_on_lock_timeout(tmp_path, capsys, monkeypatch):
+    import json as _json
+
+    from firm.core.db import connect
+    from firm.core.migrate import apply_migrations
+    from firm.cli import pulse as pulse_cli
+    from firm.pulse import dblock
+    from firm.services import pulse_queue
+
+    ws = tmp_path
+    firm_dir = ws / ".firm"
+    firm_dir.mkdir()
+    conn = connect(firm_dir / "firm.db")
+    apply_migrations(conn)
+    conn.execute("INSERT INTO firm (id, name) VALUES ('chrisai', 'ChrisAI')")
+    pulse_queue.request_pulse(conn, "chrisai", requested_by="board")
+    conn.commit()
+    # a live (fresh-heartbeat) pulse holds the table and never lets go
+    assert dblock.acquire(conn, "chrisai", "other-host:1:bbbb")
+    conn.close()
+
+    import firm.pulse.spawn as spawn_mod
+    monkeypatch.setattr(spawn_mod, "resolve_claude_bin", lambda: ("/bin/true", "test"))
+    monkeypatch.setattr(pulse_cli, "_QUEUE_LOCK_WAIT_SEC", 0)
+
+    rc = pulse_cli.run_pulse(ws, drain_queue=True)
+    assert rc == 0
+    out = _json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert out["drained"] == 1 and out["results"][0]["reason"] == "lock-wait-timeout"
+
+    conn = connect(firm_dir / "firm.db")
+    try:
+        status = conn.execute("SELECT status FROM pulse_request").fetchone()[0]
+        assert status == "abandoned"
+    finally:
+        conn.close()

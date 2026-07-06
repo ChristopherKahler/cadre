@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from unittest import mock
 
@@ -543,6 +544,61 @@ def test_view_action_undeclared_rejected(tmp_path):
     view = load_custom_views(tmp_path)[0]
     with pytest.raises(ValueError, match="not declared"):
         run_view_action(tmp_path, view, "rm-rf", {})
+
+
+def _query_fixture(tmp_path):
+    """A firm db with a render-feed row + a log table, and a query manifest."""
+    from firm.core.db import connect, get_db_path
+    _write_manifest(tmp_path, [
+        {"id": "table", "fragment": "dashboard/views/table.html",
+         "queries": {
+             "inventory": "SELECT value FROM game_exports WHERE key='inventory'",
+             "log": "SELECT id, kind, text FROM game_story_log ORDER BY id",
+             "recent": "SELECT id, kind, text FROM game_story_log WHERE id > :after ORDER BY id",
+             "drop": "DROP TABLE game_story_log",
+         }},
+    ])
+    db_path = get_db_path(tmp_path)
+    conn = connect(db_path)
+    conn.execute("CREATE TABLE game_exports (key TEXT PRIMARY KEY, value TEXT)")
+    conn.execute("INSERT INTO game_exports VALUES ('inventory', '{\"packs\": {}}')")
+    conn.execute("CREATE TABLE game_story_log (id INTEGER PRIMARY KEY, kind TEXT, text TEXT)")
+    conn.execute("INSERT INTO game_story_log VALUES (1, 'narration', 'The haze parts.')")
+    conn.execute("INSERT INTO game_story_log VALUES (2, 'speech', 'Hold the line.')")
+    conn.commit()
+    conn.close()
+    from firm.dashboard.server import load_custom_views
+    return db_path, load_custom_views(tmp_path)[0]
+
+
+def test_view_query_single_json_value_served_verbatim(tmp_path):
+    from firm.dashboard.server import run_view_query
+    db_path, view = _query_fixture(tmp_path)
+    content, ctype = run_view_query(db_path, view, "inventory", {})
+    assert ctype == "application/json"
+    assert json.loads(content) == {"packs": {}}
+
+
+def test_view_query_rows_and_named_params(tmp_path):
+    from firm.dashboard.server import run_view_query
+    db_path, view = _query_fixture(tmp_path)
+    content, _ = run_view_query(db_path, view, "log", {})
+    rows = json.loads(content)["rows"]
+    assert [r["kind"] for r in rows] == ["narration", "speech"]
+    content, _ = run_view_query(db_path, view, "recent", {"after": "1"})
+    rows = json.loads(content)["rows"]
+    assert len(rows) == 1 and rows[0]["text"] == "Hold the line."
+    with pytest.raises(ValueError, match="needs params: after"):
+        run_view_query(db_path, view, "recent", {})
+
+
+def test_view_query_read_only_and_declared_only(tmp_path):
+    from firm.dashboard.server import run_view_query
+    db_path, view = _query_fixture(tmp_path)
+    with pytest.raises(ValueError, match="must be a SELECT"):
+        run_view_query(db_path, view, "drop", {})
+    with pytest.raises(ValueError, match="not declared"):
+        run_view_query(db_path, view, "undeclared", {})
 
 
 def test_view_action_failure_surfaces_error(tmp_path):

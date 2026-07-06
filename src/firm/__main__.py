@@ -162,6 +162,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Board-targeted pulse: activate ONLY this Member "
              "(frequency throttle waived for the target).",
     )
+    pulse_parser.add_argument(
+        "--drain-queue", action="store_true", dest="drain_queue",
+        help="Claim pending pulse_request rows and pulse once per request, "
+             "waiting for the pulse lock instead of failing on it.",
+    )
 
     # ---- notify subparser ----
     notify_parser = subparsers.add_parser(
@@ -365,6 +370,7 @@ def main(argv: list[str] | None = None) -> int:
             abort=args.abort,
             firm_id=firm_id,
             only=args.only,
+            drain_queue=args.drain_queue,
         )
 
     if args.command == "notify":

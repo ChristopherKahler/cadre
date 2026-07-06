@@ -24,9 +24,10 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs
 
 from firm.core import repo
-from firm.core.db import connect, get_db_path
+from firm.core.db import connect, db_is_remote, get_db_path
 from firm.core.migrate import apply_migrations
 from firm.pulse.orchestrator import (
     _REAP_GRACE_SEC,
@@ -88,6 +89,9 @@ def load_custom_views(workspace: Path) -> list[dict[str, Any]]:
         actions = v.get("actions") or {}
         if not isinstance(actions, dict):
             actions = {}
+        queries = v.get("queries") or {}
+        if not isinstance(queries, dict):
+            queries = {}
         views.append({
             "id": vid,
             "title": str(v.get("title") or vid),
@@ -95,6 +99,7 @@ def load_custom_views(workspace: Path) -> list[dict[str, Any]]:
             "files": {str(k): str(p) for k, p in files.items()},
             "dirs": {str(k): str(p) for k, p in dirs.items()},
             "actions": {str(k): a for k, a in actions.items() if isinstance(a, dict)},
+            "queries": {str(k): str(q) for k, q in queries.items()},
         })
     return views
 
@@ -134,6 +139,7 @@ _DIR_CTYPES = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
     ".webp": "image/webp", ".gif": "image/gif", ".svg": "image/svg+xml",
     ".json": "application/json", ".md": "text/plain; charset=utf-8",
+    ".jsonl": "text/plain; charset=utf-8",
 }
 
 
@@ -158,6 +164,52 @@ def read_view_dir_file(
         return path.read_bytes(), ctype
     except OSError as exc:
         raise ValueError(f"cannot read {key}/{filename}: {exc}") from exc
+
+
+_QUERY_PARAM_RE = re.compile(r":([a-zA-Z_][a-zA-Z0-9_]*)")
+
+
+def run_view_query(
+    db_path: Path, view: dict[str, Any], key: str, params: dict[str, str],
+) -> tuple[bytes, str]:
+    """Execute a manifest-declared read-only query against the firm DB.
+
+    The manifest names the exact SQL (trust boundary: it lives inside
+    ``.firm/``, same as the database); the request only supplies values for
+    the query's named ``:params``. SELECT/WITH only — the seam is a read
+    surface, writes stay with the firm's own tools.
+
+    Response shaping: a single-row single-column result whose value is a
+    JSON document is returned verbatim (the manifest can serve whole render
+    feeds, e.g. ``SELECT value FROM game_exports WHERE key='inventory'``);
+    anything else returns ``{"rows": [...]}``.
+    """
+    sql = view.get("queries", {}).get(key)
+    if sql is None:
+        raise ValueError(f"query {key!r} not declared for view {view['id']!r}")
+    if not re.match(r"^\s*(SELECT|WITH)\b", sql, re.I):
+        raise ValueError(f"query {key!r} must be a SELECT")
+    wanted = set(_QUERY_PARAM_RE.findall(sql))
+    missing = wanted - set(params)
+    if missing:
+        raise ValueError(f"query {key!r} needs params: {', '.join(sorted(missing))}")
+    conn = connect(db_path)
+    try:
+        conn.execute("PRAGMA query_only = ON")
+        cur = conn.execute(sql, {k: params[k] for k in wanted})
+        cols = [c[0] for c in cur.description or []]
+        rows = cur.fetchall()
+    except sqlite3.Error as exc:
+        raise ValueError(f"query {key!r} failed: {exc}") from exc
+    finally:
+        conn.close()
+    if len(rows) == 1 and len(cols) == 1:
+        val = rows[0][0]
+        if isinstance(val, str) and val.lstrip()[:1] in ("{", "["):
+            return val.encode(), "application/json"
+        return json.dumps(val, default=str).encode(), "application/json"
+    payload = {"rows": [dict(zip(cols, tuple(r))) for r in rows]}
+    return json.dumps(payload, default=str).encode(), "application/json"
 
 
 def run_view_action(
@@ -234,6 +286,12 @@ window.CadreShell = {
     const ct = r.headers.get('Content-Type') || '';
     return ct.includes('json') ? r.json() : r.text();
   },
+  viewQuery: async function(viewId, key, params){
+    const q = params ? '?' + new URLSearchParams(params) : '';
+    const r = await fetch(BASE + '/api/views/' + viewId + '/query/' + key + q);
+    if(!r.ok) throw new Error(key + ' ' + r.status);
+    return r.json();
+  },
   viewAction: async function(viewId, key, body){
     try{
       const r = await fetch(BASE + '/api/views/' + viewId + '/action/' + key, {
@@ -253,7 +311,10 @@ async function __poll(){
 }
 try{
   const es = new EventSource(BASE + '/api/events');
-  es.addEventListener('change', __poll);
+  es.addEventListener('change', function(){
+    document.dispatchEvent(new CustomEvent('cadre:change'));
+    __poll();
+  });
 }catch(e){}
 setInterval(__poll, 15000);
 __poll().then(async function(){
@@ -902,13 +963,15 @@ def _firm_get(
     if path == "/api/views":
         views = load_custom_views(workspace)
         _http_send(h, 200, {"views": [
-            {"id": v["id"], "title": v["title"], "files": sorted(v["files"])}
+            {"id": v["id"], "title": v["title"], "files": sorted(v["files"]),
+             "queries": sorted(v["queries"])}
             for v in views
         ]})
         return
     if path.startswith("/api/views/"):
-        parts = path.strip("/").split("/")
-        # /api/views/<id>/fragment  |  /api/views/<id>/file/<key>
+        route, _, qs = path.partition("?")
+        parts = route.strip("/").split("/")
+        # /api/views/<id>/fragment | .../file/<key> | .../query/<key>?p=v
         views = {v["id"]: v for v in load_custom_views(workspace)}
         view = views.get(parts[2]) if len(parts) >= 4 else None
         try:
@@ -919,6 +982,10 @@ def _firm_get(
                            "text/html; charset=utf-8")
             elif parts[3] == "file" and len(parts) == 5:
                 content, ctype = read_view_file(workspace, view, parts[4])
+                _http_send(h, 200, content, ctype)
+            elif parts[3] == "query" and len(parts) == 5:
+                params = {k: v[-1] for k, v in parse_qs(qs).items()}
+                content, ctype = run_view_query(db_path, view, parts[4], params)
                 _http_send(h, 200, content, ctype)
             elif parts[3] == "dir" and len(parts) == 6:
                 content, ctype = read_view_dir_file(
@@ -1194,7 +1261,7 @@ def run_dashboard(
     """Serve the Boardroom dashboard for *workspace*. Blocks until Ctrl-C."""
     workspace = workspace.expanduser().resolve()
     db_path = get_db_path(workspace)
-    if not db_path.exists():
+    if not db_is_remote() and not db_path.exists():
         print(json.dumps({
             "ok": False, "reason": "db-not-found", "workspace": str(workspace),
         }))

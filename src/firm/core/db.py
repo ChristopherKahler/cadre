@@ -1,11 +1,29 @@
-"""SQLite connection helpers for the firm framework."""
+"""SQLite connection helpers for the firm framework.
+
+One code path, two backends: by default connections open the local
+``.firm/firm.db`` file via stdlib sqlite3. When ``CADRE_DB_URL`` is set
+(a Turso / self-hosted sqld URL, with ``CADRE_DB_TOKEN`` for auth), every
+connection goes to that shared remote database instead — the multiplayer
+mode. Game and firm code never branches on the backend; the compat shim
+in :mod:`firm.core.libsql_compat` keeps sqlite3 semantics.
+
+Scope note: the override redirects ALL connects in the process, so it is
+for single-firm processes (a firm's pulse, engine commands, its dashboard).
+A hub serving multiple firms must not set it.
+"""
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
+
+
+def db_is_remote() -> bool:
+    """True when CADRE_DB_URL points this process at a shared remote DB."""
+    return bool(os.environ.get("CADRE_DB_URL"))
 
 
 def get_db_path(workspace: Path) -> Path:
@@ -13,13 +31,20 @@ def get_db_path(workspace: Path) -> Path:
     return workspace / ".firm" / "firm.db"
 
 
-def connect(db_path: Path) -> sqlite3.Connection:
-    """Open a SQLite connection with firm-standard settings.
+def connect(db_path: Path) -> Any:
+    """Open a firm DB connection with firm-standard settings.
 
     - ``PRAGMA foreign_keys = ON``
     - ``row_factory = sqlite3.Row`` (named column access)
-    - Parent directory is created if missing.
+    - Parent directory is created if missing (local mode).
+
+    With ``CADRE_DB_URL`` set, *db_path* is ignored and the connection goes
+    to the shared remote database via the libsql compat shim.
     """
+    url = os.environ.get("CADRE_DB_URL")
+    if url:
+        from firm.core.libsql_compat import connect_libsql
+        return connect_libsql(url, os.environ.get("CADRE_DB_TOKEN"))
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -28,8 +53,8 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
 
 @contextmanager
-def db_connection(workspace: Path) -> Iterator[sqlite3.Connection]:
-    """Context manager yielding a SQLite connection for *workspace*.
+def db_connection(workspace: Path) -> Iterator[Any]:
+    """Context manager yielding a firm DB connection for *workspace*.
 
     Commits on clean exit, rolls back on exception, always closes.
     """

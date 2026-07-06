@@ -35,6 +35,8 @@ EXPECTED_ENTITY_TABLES = {
     "document",
     "budget_period",
     "escalation",
+    "pulse_lock",
+    "pulse_request",
 }
 
 
