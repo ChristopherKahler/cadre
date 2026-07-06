@@ -135,9 +135,12 @@ class Connection:
             sql, params = _to_positional(sql, params)
         try:
             return Cursor(self._raw.execute(sql, tuple(params)))
-        except ValueError as exc:
-            if ("unsupported statement" in str(exc).lower()
-                    and sql.lstrip().upper().startswith("PRAGMA")):
+        except ValueError:
+            # Server-side pragma policies vary (sqld: "unsupported statement",
+            # Turso cloud: "SQL not allowed statement"). Pragmas are advisory
+            # tuning in firm code — a refused one becomes a no-op; callers that
+            # NEED a pragma's value (data_version) handle the empty cursor.
+            if sql.lstrip().upper().startswith("PRAGMA"):
                 return _NoopCursor()
             raise
 

@@ -37,6 +37,7 @@ EXPECTED_ENTITY_TABLES = {
     "escalation",
     "pulse_lock",
     "pulse_request",
+    "firm_rev",
 }
 
 

@@ -886,24 +886,39 @@ def _serve_index(h: BaseHTTPRequestHandler, base: str = "") -> None:
 
 
 def _sse_stream(h: BaseHTTPRequestHandler, db_path: Path) -> None:
-    """SSE push: watch SQLite data_version (bumped by any other
-    connection's commit) and tell the client the moment the firm
-    changes — escalations, gates, runs land sub-second instead of
-    on the poll cadence. Stdlib-only; EventSource auto-reconnects."""
+    """SSE push: tell the client the moment the firm changes — escalations,
+    gates, runs, game turns land sub-second instead of on the poll cadence.
+
+    Change signal, in order of preference:
+      1. ``PRAGMA data_version`` — bumped by any other connection's commit
+         (local SQLite, self-hosted sqld).
+      2. ``firm_rev.n`` — the write counter every firm write path bumps
+         (Turso cloud refuses the pragma; see core.db.bump_rev).
+    Stdlib-only; EventSource auto-reconnects."""
     h.send_response(200)
     h.send_header("Content-Type", "text/event-stream")
     h.send_header("Cache-Control", "no-store")
     h.end_headers()
     conn = connect(db_path)
+
+    def _token() -> tuple:
+        row = conn.execute("PRAGMA data_version").fetchone()
+        if row is not None:
+            return ("dv", row[0])
+        from firm.core.db import get_rev
+        return ("rev", get_rev(conn))
+
+    # Remote backends pay a network round-trip per check — ease the tick.
+    interval = 1.0 if db_is_remote() else 0.5
     try:
-        last = conn.execute("PRAGMA data_version").fetchone()[0]
+        last = _token()
         h.wfile.write(b"retry: 2000\n\n")
         h.wfile.flush()
         ticks = 0
         while True:
-            time.sleep(0.5)
+            time.sleep(interval)
             ticks += 1
-            cur = conn.execute("PRAGMA data_version").fetchone()[0]
+            cur = _token()
             if cur != last:
                 last = cur
                 h.wfile.write(b"event: change\ndata: {}\n\n")

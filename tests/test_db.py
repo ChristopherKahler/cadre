@@ -78,3 +78,34 @@ def test_db_connection_rolls_back_on_exception(tmp_path: Path) -> None:
     with db_connection(workspace) as conn:
         rows = conn.execute("SELECT COUNT(*) FROM t").fetchone()
         assert rows[0] == 0
+
+
+def test_bump_rev_counts_writes(tmp_path: Path) -> None:
+    from firm.core.db import bump_rev, get_rev
+    conn = connect(tmp_path / "firm.db")
+    try:
+        assert get_rev(conn) == 0
+        bump_rev(conn)
+        bump_rev(conn)
+        conn.commit()
+        assert get_rev(conn) == 2
+    finally:
+        conn.close()
+
+
+def test_log_event_bumps_rev(tmp_path: Path) -> None:
+    from firm.core.db import get_rev
+    from firm.core.migrate import apply_migrations
+    from firm.services._records import log_event
+    conn = connect(tmp_path / "firm.db")
+    try:
+        apply_migrations(conn)
+        conn.execute("INSERT INTO firm (id, name) VALUES ('f1', 'F1')")
+        before = get_rev(conn)
+        log_event(conn, firm_id="f1", event_type="unit.created",
+                  actor={"type": "board", "id": None},
+                  target_ref={"type": "unit", "id": "UNT-1"})
+        conn.commit()
+        assert get_rev(conn) == before + 1
+    finally:
+        conn.close()

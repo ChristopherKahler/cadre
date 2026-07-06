@@ -58,4 +58,9 @@ def log_event(
         "run_id": run_id,
     }
 
-    return repo.create(conn, "records", data)
+    row = repo.create(conn, "records", data)
+    # Every recorded event is a meaningful firm change — bump the write
+    # counter so remote-mode dashboards (no data_version) see it live.
+    from firm.core.db import bump_rev
+    bump_rev(conn)
+    return row

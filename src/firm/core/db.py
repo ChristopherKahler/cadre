@@ -52,6 +52,32 @@ def connect(db_path: Path) -> Any:
     return conn
 
 
+def bump_rev(conn: Any) -> None:
+    """Increment the firm's write counter (joins the caller's transaction).
+
+    Change-signal fallback for backends that refuse ``PRAGMA data_version``
+    (Turso cloud): every meaningful write path bumps it, the dashboard SSE
+    watcher polls it. Local SQLite keeps using data_version; the bump is
+    harmless there. Best-effort — never fails a write."""
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS firm_rev "
+            "(id INTEGER PRIMARY KEY CHECK (id = 1), n INTEGER NOT NULL DEFAULT 0)")
+        conn.execute(
+            "INSERT INTO firm_rev (id, n) VALUES (1, 1) "
+            "ON CONFLICT(id) DO UPDATE SET n = n + 1")
+    except Exception:
+        pass
+
+
+def get_rev(conn: Any) -> int:
+    try:
+        row = conn.execute("SELECT n FROM firm_rev WHERE id = 1").fetchone()
+        return int(row[0]) if row else 0
+    except Exception:
+        return 0
+
+
 @contextmanager
 def db_connection(workspace: Path) -> Iterator[Any]:
     """Context manager yielding a firm DB connection for *workspace*.
