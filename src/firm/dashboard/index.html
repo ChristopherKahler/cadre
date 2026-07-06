@@ -901,6 +901,7 @@ async function ensureFragment(id){
 }
 /* Bridge for fragments: read shell state, post Board actions, fetch declared firm files. */
 window.CadreShell = {
+  base: document.documentElement.dataset.base || '',
   state: () => STATE,
   post: (path, body) => postAction(path, body),
   viewFile: async (viewId, key) => {

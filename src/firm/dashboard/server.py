@@ -197,7 +197,7 @@ def run_view_action(
 
 
 _VIEW_PAGE_TEMPLATE = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="en" data-base="__BASE__"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>__TITLE__</title>
 <style>html,body{margin:0;padding:0;min-height:100%;background:#141109}
@@ -209,6 +209,7 @@ _VIEW_PAGE_TEMPLATE = """<!doctype html>
    so a fragment renders identically full-page and embedded. */
 const BASE = '__BASE__';
 window.CadreShell = {
+  base: BASE,
   _state: {},
   state: function(){ return this._state; },
   post: async function(path, body){
