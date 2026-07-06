@@ -868,7 +868,6 @@ function show(view){
   app.classList.remove('mobile-open');
   if(location.hash !== '#/' + view) history.replaceState(null, '', '#/' + view);
   if(view === 'roster' && !viewInit) requestAnimationFrame(fitCanvas);
-  if(CUSTOM_VIEWS[view]) ensureFragment(view);
 }
 document.querySelectorAll('.navitem[data-view]').forEach(b =>
   b.addEventListener('click', () => show(b.dataset.view)));
@@ -886,15 +885,16 @@ async function initCustomViews(){
   const group = document.getElementById('customNav');
   group.hidden = false;
   for(const v of views){
-    VIEWS[v.id] = v.title;
-    CUSTOM_VIEWS[v.id] = {title: v.title, files: v.files, loaded: false};
+    CUSTOM_VIEWS[v.id] = {title: v.title};
     const row = document.createElement('div');
     row.className = 'navitem-row';
     const btn = document.createElement('button');
     btn.className = 'navitem'; btn.dataset.view = v.id; btn.title = v.title;
     btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8L20 10.6l-5 3.9 1.8 6-4.8-3.6-4.8 3.6 1.8-6-5-3.9 6.1-1.8z"/></svg><span></span>';
     btn.querySelector('span').textContent = v.title;
-    btn.addEventListener('click', () => show(v.id));
+    btn.addEventListener('click', () => {
+      window.location.href = BASE + '/view/' + encodeURIComponent(v.id);
+    });
     const pop = document.createElement('a');
     pop.className = 'nav-pop';
     pop.href = BASE + '/view/' + encodeURIComponent(v.id);
@@ -903,33 +903,10 @@ async function initCustomViews(){
     pop.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
     row.appendChild(btn); row.appendChild(pop);
     group.appendChild(row);
-    const page = document.createElement('div');
-    page.className = 'page'; page.id = 'page-' + v.id;
-    document.getElementById('scrollArea').appendChild(page);
   }
-  // deep link to a custom view survives the initial route
+  // legacy deep link (#/<view>) → the full page
   const want = location.hash.replace('#/','');
-  if(CUSTOM_VIEWS[want] && currentView !== want) show(want);
-}
-async function ensureFragment(id){
-  const cv = CUSTOM_VIEWS[id];
-  if(!cv || cv.loaded) return;
-  cv.loaded = true;
-  const page = document.getElementById('page-' + id);
-  try{
-    const r = await fetch(BASE + '/api/views/' + id + '/fragment');
-    if(!r.ok) throw new Error('fragment ' + r.status);
-    page.innerHTML = await r.text();
-    // innerHTML never executes scripts — recreate them so fragments can boot
-    page.querySelectorAll('script').forEach(old => {
-      const s = document.createElement('script');
-      s.textContent = old.textContent;
-      old.replaceWith(s);
-    });
-  }catch(e){
-    cv.loaded = false;
-    page.innerHTML = '<div class="pagehead"><h1>' + cv.title + '</h1><p>View failed to load: ' + e.message + '</p></div>';
-  }
+  if(CUSTOM_VIEWS[want]) window.location.replace(BASE + '/view/' + encodeURIComponent(want));
 }
 /* Bridge for fragments: read shell state, post Board actions, fetch declared firm files. */
 window.CadreShell = {
