@@ -1069,10 +1069,10 @@ body{background:var(--canvas);color:var(--text);font:15px/1.5 system-ui,sans-ser
 h1{font-size:22px;font-weight:650;letter-spacing:-.01em}
 .sub{color:var(--dim);font-size:13px;margin:4px 0 28px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
-a.fcard{display:block;background:var(--card);border:1px solid var(--border);border-radius:14px;
-  padding:20px;text-decoration:none;color:inherit;transition:border-color 160ms}
-a.fcard:hover{border-color:var(--border-hi)}
-a.fcard.attn{border-color:rgba(212,169,74,.5)}
+.fcard{display:block;background:var(--card);border:1px solid var(--border);border-radius:14px;
+  padding:20px;color:inherit;cursor:pointer;transition:border-color 160ms}
+.fcard:hover{border-color:var(--border-hi)}
+.fcard.attn{border-color:rgba(212,169,74,.5)}
 .fname{font-size:16px;font-weight:650}
 .fid{font:500 10.5px ui-monospace,monospace;letter-spacing:.08em;color:var(--mono);text-transform:uppercase;margin-top:2px}
 .stats{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;margin-top:14px}
@@ -1107,7 +1107,9 @@ async function load(){
     document.getElementById('sub').textContent =
       firms.length + ' firm' + (firms.length === 1 ? '' : 's') + ' · one door.';
     document.getElementById('grid').innerHTML = firms.length ? firms.map(f => `
-      <a class="fcard${f.needs_you ? ' attn' : ''}" href="/f/${esc(f.id)}/">
+      <div class="fcard${f.needs_you ? ' attn' : ''}" role="link" tabindex="0"
+        onclick="location.href='/f/${esc(f.id)}/'"
+        onkeydown="if(event.key==='Enter')location.href='/f/${esc(f.id)}/'">
         <div class="fname">${esc(f.name)}</div>
         <div class="fid">${esc(f.id)}</div>
         <div class="stats">
@@ -1124,7 +1126,7 @@ async function load(){
         </div>
         ${f.views && f.views.length ? `<div class="views">${f.views.map(v =>
           `<a href="/f/${esc(f.id)}/view/${esc(v.id)}" onclick="event.stopPropagation()">${esc(v.title)} ↗</a>`).join('')}</div>` : ''}
-      </a>`).join('') : '<div class="empty">No firms found.</div>';
+      </div>`).join('') : '<div class="empty">No firms found.</div>';
   }catch(e){}
 }
 load(); setInterval(load, 10000);
