@@ -301,6 +301,13 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
 .canvashint{position:absolute;bottom:16px;left:16px;font:500 10.5px var(--font-mono);letter-spacing:.1em;
   text-transform:uppercase;color:var(--brand-text-dim);z-index:5}
 
+/* ---- custom-view toolbar (embedded fragments) ---- */
+.viewbar{display:flex;justify-content:flex-end;margin-bottom:10px}
+.viewbar a{font:500 11px var(--font-mono);letter-spacing:.08em;text-transform:uppercase;
+  color:var(--brand-text-secondary);text-decoration:none;border:1px solid var(--brand-border);
+  border-radius:9999px;padding:5px 12px;transition:color 160ms,border-color 160ms}
+.viewbar a:hover{color:var(--brand-primary);border-color:var(--brand-primary)}
+
 /* ---- profile drawer ---- */
 .drawerwrap{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;z-index:48}
 .drawerwrap.show{display:block}
@@ -477,7 +484,6 @@ tr.flash td{animation:rowflash 2.2s ease-out}
       <span class="wordmark">cadre.</span>
       <span class="wordmark mini">c.</span>
     </div>
-    <div class="sb-firm" id="sbFirm"></div>
     <div class="sb-content">
       <div class="navgroup">
         <div class="navlabel">Boardroom</div>
@@ -833,7 +839,8 @@ async function ensureFragment(id){
   try{
     const r = await fetch(BASE + '/api/views/' + id + '/fragment');
     if(!r.ok) throw new Error('fragment ' + r.status);
-    page.innerHTML = await r.text();
+    page.innerHTML = '<div class="viewbar"><a href="' + BASE + '/view/' + encodeURIComponent(id) +
+      '" target="_blank" rel="noopener">Open full screen ↗</a></div>' + await r.text();
     // innerHTML never executes scripts — recreate them so fragments can boot
     page.querySelectorAll('script').forEach(old => {
       const s = document.createElement('script');
@@ -1036,7 +1043,6 @@ function render(){
   const S = STATE;
   const firm = S.firm || {};
   document.title = `${firm.name || firm.id} — Boardroom`;
-  document.getElementById('sbFirm').textContent = firm.name || firm.id || '';
   document.getElementById('dashTitle').textContent = firm.name ? `${firm.name} — Boardroom` : 'Boardroom';
   document.getElementById('dashDesc').textContent = firm.north_star || '';
   document.getElementById('notifyState').textContent = S.notify_configured

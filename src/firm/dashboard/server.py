@@ -1125,7 +1125,7 @@ async function load(){
             <div class="v">${esc(ago(f.last_run_at))}</div></div>
         </div>
         ${f.views && f.views.length ? `<div class="views">${f.views.map(v =>
-          `<a href="/f/${esc(f.id)}/view/${esc(v.id)}" onclick="event.stopPropagation()">${esc(v.title)} ↗</a>`).join('')}</div>` : ''}
+          `<a href="/f/${esc(f.id)}/view/${esc(v.id)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${esc(v.title)} ↗</a>`).join('')}</div>` : ''}
       </div>`).join('') : '<div class="empty">No firms found.</div>';
   }catch(e){}
 }
