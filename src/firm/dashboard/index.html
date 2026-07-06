@@ -1248,6 +1248,36 @@ function copyBoardItem(kind, id){
     });
 }
 
+/* One-click dismiss — a REAL status change (escalation→resolved,
+   gate→rejected) with a standard note, never a client-side hide. Inline
+   arm/confirm guards against stray clicks; no browser dialogs. */
+let dismissTimer = null;
+async function dismissBoardItem(kind, id, btn){
+  if(!btn.dataset.armed){
+    btn.dataset.armed = '1';
+    btn.textContent = 'Confirm dismiss?';
+    btn.classList.add('danger');
+    clearTimeout(dismissTimer);
+    dismissTimer = setTimeout(() => {
+      btn.dataset.armed = ''; btn.textContent = 'Dismiss'; btn.classList.remove('danger');
+    }, 3500);
+    return;
+  }
+  clearTimeout(dismissTimer);
+  btn.disabled = true;
+  const note = 'Dismissed by the Board from the dashboard.';
+  const out = kind === 'gate'
+    ? await postAction('gate-reject/' + id, {comment: note})
+    : await postAction('escalation-resolve/' + id, {resolution: note, queue_followup: false});
+  if(out.ok){
+    toast(`${id} dismissed — ${kind === 'gate' ? 'rejected with a dismissal note' : 'resolved, no follow-up queued'}`);
+    lastHash = null; poll();
+  } else {
+    toast(out.error || 'Dismiss failed', true);
+    btn.disabled = false; btn.dataset.armed = ''; btn.textContent = 'Dismiss'; btn.classList.remove('danger');
+  }
+}
+
 function renderGates(S){
   const gates = (S.gates || []).filter(g => g.status === 'pending')
     .sort((a,b) => (a.created_at || '').localeCompare(b.created_at || ''));
@@ -1265,6 +1295,7 @@ function renderGates(S){
         <button class="btn primary sm" onclick="openModal('gate-approve','${g.id}')">Approve</button>
         <button class="btn danger sm" onclick="openModal('gate-reject','${g.id}')">Reject</button>
         <button class="btn sm" onclick="copyBoardItem('gate','${g.id}')" title="Copy as a /boardroom briefing for a Claude Code session">Copy for /boardroom</button>
+        <button class="btn sm" onclick="dismissBoardItem('gate','${g.id}',this)" title="Reject with a standard dismissal note — one click, audited">Dismiss</button>
       </div>
     </div>`).join('');
 }
@@ -1292,6 +1323,7 @@ function renderEscalations(S){
         <button class="btn primary sm" onclick="openModal('escalation-resolve','${e.id}')">Resolve</button>
         ${e.status === 'open' ? `<button class="btn sm" onclick="openModal('escalation-acknowledge','${e.id}')">Acknowledge</button>` : ''}
         <button class="btn sm" onclick="copyBoardItem('escalation','${e.id}')" title="Copy as a /boardroom briefing for a Claude Code session">Copy for /boardroom</button>
+        <button class="btn sm" onclick="dismissBoardItem('escalation','${e.id}',this)" title="Resolve with a standard dismissal note — one click, no follow-up, audited">Dismiss</button>
       </div>
     </div>`;
   }).join('');
