@@ -731,6 +731,35 @@ def perform_action(
             details={"pulse_config.model": model or "(inherit default)"},
         )
         return {"contract_id": entity_id, "model": model or None}
+    if action == "run-retry":
+        # Re-queue a failed/timed-out run's unit: release any stale claim so
+        # the next pulse re-spawns the member on it. entity_id = run id.
+        run = repo.get(conn, "member_run", entity_id)
+        if not run:
+            raise ValueError(f"run {entity_id!r} not found")
+        if run.get("status") not in ("failed", "timed_out"):
+            raise ValueError(f"run {entity_id!r} is {run.get('status')!r} — only "
+                             "failed/timed_out runs can be retried")
+        unit = repo.get(conn, "unit", run.get("unit_id") or "")
+        if not unit:
+            raise ValueError(f"run {entity_id!r} has no unit to retry")
+        if unit.get("status") not in ("pending", "in_progress", "blocked"):
+            raise ValueError(f"unit {unit['id']} is {unit.get('status')!r} — "
+                             "nothing left to retry")
+        if unit.get("claimed_by"):
+            unit_svc.release_unit(conn, unit["id"])
+        if unit.get("status") != "pending":
+            unit_svc.update_unit(conn, unit["id"], {"status": "pending"})
+        log_event(
+            conn,
+            firm_id=run["firm_id"],
+            event_type="run.retry_requested",
+            actor={"type": "board", "id": None},
+            target_ref={"type": "unit", "id": unit["id"]},
+            details={"failed_run": entity_id, "member": run.get("member_id")},
+        )
+        return {"unit": unit["id"],
+                "note": "re-queued — the member retries it on the next pulse"}
     if action == "unit-create":
         data: dict[str, Any] = {
             "name": body.get("name"),

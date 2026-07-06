@@ -1208,6 +1208,49 @@ function deskChips(docs){
     `</div></div>`;
 }
 
+/* Copy a gate/escalation as a self-contained /boardroom briefing —
+   paste into a Claude Code session to consult + execute the verdict there. */
+function copyBoardItem(kind, id){
+  const S = STATE || {};
+  const firm = (S.firm || {}).id || '';
+  const item = ((kind === 'gate' ? S.gates : S.escalations) || []).find(x => x.id === id);
+  if(!item){ toast('Item not found in current state', true); return; }
+  const docs = (item.related_docs || []).map(d => `${d.id} ${d.name}`).join('; ');
+  const lines = kind === 'gate' ? [
+    `/boardroom ${firm} — pending gate ${item.id}`,
+    ``,
+    `FIRM: ${firm}`,
+    `GATE: ${item.id} (pending) — requested by ${item.requesting_member_id} ${timeAgo(item.created_at)}`,
+    `ASKS: ${item.action || ''}`,
+    `TARGET: ${item.target_entity_type} ${item.target_entity_id}`,
+    item.context ? `CONTEXT: ${item.context}` : null,
+    docs ? `EVIDENCE: ${docs}` : null,
+    ``,
+    `Brief me on this gate, give me your recommendation as co-Board, and execute my verdict (gate-approve/gate-reject with my words as the comment).`,
+  ] : [
+    `/boardroom ${firm} — open escalation ${item.id}`,
+    ``,
+    `FIRM: ${firm}`,
+    `ESCALATION: ${item.id} (${item.severity}, ${item.status}) — raised by ${item.raised_by_member_id} ${timeAgo(item.created_at)}`,
+    `TITLE: ${item.title || ''}`,
+    item.target_entity_id ? `TARGET: ${item.target_entity_type} ${item.target_entity_id}` : null,
+    item.body ? `BODY: ${item.body}` : null,
+    docs ? `EVIDENCE: ${docs}` : null,
+    ``,
+    `Brief me on this escalation, recommend a resolution as co-Board, and execute my verdict (escalation-resolve with queue_followup unless I say otherwise).`,
+  ];
+  const text = lines.filter(l => l !== null).join('\n');
+  navigator.clipboard.writeText(text).then(
+    () => toast(`${item.id} copied — paste into a /boardroom session`),
+    () => { // clipboard API can be denied — fall back to a selectable textarea
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      try{ document.execCommand('copy'); toast(`${item.id} copied — paste into a /boardroom session`); }
+      catch(e){ toast('Copy failed — clipboard blocked', true); }
+      ta.remove();
+    });
+}
+
 function renderGates(S){
   const gates = (S.gates || []).filter(g => g.status === 'pending')
     .sort((a,b) => (a.created_at || '').localeCompare(b.created_at || ''));
@@ -1224,6 +1267,7 @@ function renderGates(S){
       <div class="btn-row">
         <button class="btn primary sm" onclick="openModal('gate-approve','${g.id}')">Approve</button>
         <button class="btn danger sm" onclick="openModal('gate-reject','${g.id}')">Reject</button>
+        <button class="btn sm" onclick="copyBoardItem('gate','${g.id}')" title="Copy as a /boardroom briefing for a Claude Code session">Copy for /boardroom</button>
       </div>
     </div>`).join('');
 }
@@ -1250,6 +1294,7 @@ function renderEscalations(S){
       <div class="btn-row">
         <button class="btn primary sm" onclick="openModal('escalation-resolve','${e.id}')">Resolve</button>
         ${e.status === 'open' ? `<button class="btn sm" onclick="openModal('escalation-acknowledge','${e.id}')">Acknowledge</button>` : ''}
+        <button class="btn sm" onclick="copyBoardItem('escalation','${e.id}')" title="Copy as a /boardroom briefing for a Claude Code session">Copy for /boardroom</button>
       </div>
     </div>`;
   }).join('');
