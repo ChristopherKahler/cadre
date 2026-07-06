@@ -836,6 +836,7 @@ function show(view){
   document.getElementById('scrollArea').scrollTop = 0;
   app.classList.remove('mobile-open');
   if(location.hash !== '#/' + view) history.replaceState(null, '', '#/' + view);
+  if(view === 'roster' && !viewInit) requestAnimationFrame(fitCanvas);
   if(CUSTOM_VIEWS[view]) ensureFragment(view);
 }
 document.querySelectorAll('.navitem[data-view]').forEach(b =>
@@ -1293,8 +1294,11 @@ function fitCanvas(){
   const wrap = document.getElementById('canvasWrap');
   const stage = document.getElementById('stage');
   if(!wrap || !stage || !stage.dataset.w) return;
+  // Hidden page (display:none) measures 0x0 — fitting now would lock in a
+  // garbage transform. Stay unfitted; show('roster') fits once visible.
+  if(wrap.clientWidth < 40 || wrap.clientHeight < 40) return;
   const w = +stage.dataset.w, h = +stage.dataset.h;
-  const k = Math.min(1, (wrap.clientWidth - 80) / w, (wrap.clientHeight - 80) / h);
+  const k = Math.max(.25, Math.min(1, (wrap.clientWidth - 80) / w, (wrap.clientHeight - 80) / h));
   view = {k, x: (wrap.clientWidth - w * k) / 2, y: 40};
   viewInit = true;
   applyView();
