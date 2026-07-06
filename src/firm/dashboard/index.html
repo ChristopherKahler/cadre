@@ -75,6 +75,21 @@ button{font-family:var(--font-body)}
 .wordmark.mini{display:none;font-size:22px}
 .app.rail .wordmark{display:none}
 .app.rail .wordmark.mini{display:block}
+.sb-switch{position:relative;margin:-4px 12px 10px}
+.app.rail .sb-switch{display:none}
+.sb-switch #fsBtn{width:100%;display:flex;align-items:center;justify-content:center;gap:6px;
+  background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:8px;
+  padding:6px 10px;color:var(--brand-text-secondary);font:500 11.5px var(--font-body);cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:border-color 160ms,color 160ms}
+.sb-switch #fsBtn:hover{border-color:var(--brand-border-hover);color:var(--brand-text)}
+.fs-menu{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:60;background:var(--brand-elevated);
+  border:1px solid var(--brand-border-hover);border-radius:10px;padding:5px;box-shadow:var(--shadow-card)}
+.fs-menu a{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;text-decoration:none;
+  color:var(--brand-text-secondary);font:500 12px var(--font-body);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fs-menu a:hover{background:var(--brand-surface);color:var(--brand-text)}
+.fs-menu a.cur{color:var(--brand-primary)}
+.fs-menu a .fs-badge{margin-left:auto;font:600 10px var(--font-mono);color:var(--brand-warning)}
+.fs-menu .fs-sep{height:1px;background:var(--brand-border);margin:5px 4px}
 .sb-firm{text-align:center;color:var(--brand-text-dim);font-size:11.5px;margin:-6px 0 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .app.rail .sb-firm{display:none}
 .sb-content{flex:1;overflow-y:auto;overflow-x:hidden}
@@ -484,6 +499,13 @@ tr.flash td{animation:rowflash 2.2s ease-out}
       <span class="wordmark">cadre.</span>
       <span class="wordmark mini">c.</span>
     </div>
+    <div class="sb-switch" id="firmSwitch" hidden>
+      <button id="fsBtn" aria-haspopup="menu" aria-expanded="false">
+        <span id="fsName">…</span>
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="fs-menu" id="fsMenu" role="menu" hidden></div>
+    </div>
     <div class="sb-content">
       <div class="navgroup">
         <div class="navlabel">Boardroom</div>
@@ -517,6 +539,13 @@ tr.flash td{animation:rowflash 2.2s ease-out}
         <button class="navitem" data-view="records" title="Records">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v3h4"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M15 8h-5"/><path d="M15 12h-5"/></svg>
           <span>Records</span>
+        </button>
+      </div>
+      <div class="navgroup">
+        <div class="navlabel">Engine</div>
+        <button class="navitem" id="pulseBtn" title="Fire a pulse now — spawns due Members immediately">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          <span>Pulse now</span>
         </button>
       </div>
       <div class="navgroup" id="customNav" hidden>
@@ -1873,6 +1902,46 @@ function toast(msg, isErr){
 show(location.hash.replace('#/','') || 'dashboard');
 connectSSE();
 poll();
+/* ---- firm switcher (hub-hosted only) ---- */
+async function initFirmSwitch(){
+  if(!BASE) return;   // standalone dashboard — no hub, no registry
+  try{
+    const r = await fetch('/api/hub');   // hub root — deliberately NOT BASE-prefixed
+    if(!r.ok) return;
+    const firms = (await r.json()).firms || [];
+    if(!firms.length) return;
+    const cur = firms.find(f => BASE === '/f/' + f.id);
+    document.getElementById('fsName').textContent = cur ? cur.name : BASE.slice(3);
+    document.getElementById('fsMenu').innerHTML =
+      '<a href="/">⌂ All boardrooms</a><div class="fs-sep"></div>' +
+      firms.map(f => `<a href="/f/${esc(f.id)}/" class="${BASE === '/f/' + f.id ? 'cur' : ''}">${esc(f.name)}${f.needs_you ? `<span class="fs-badge">${f.needs_you}</span>` : ''}</a>`).join('');
+    document.getElementById('firmSwitch').hidden = false;
+    const btn = document.getElementById('fsBtn'), menu = document.getElementById('fsMenu');
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      menu.hidden = !menu.hidden;
+      btn.setAttribute('aria-expanded', String(!menu.hidden));
+    });
+    document.addEventListener('click', () => { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); });
+  }catch(e){ /* hub unreachable — stay hidden */ }
+}
+initFirmSwitch();
+
+/* ---- manual pulse — the Board's wake-the-firm button ---- */
+document.getElementById('pulseBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('pulseBtn');
+  if(btn.disabled) return;
+  btn.disabled = true;
+  const out = await postAction('pulse/now', {});
+  if(out.ok){
+    toast(`Pulse fired — due Members spawn now. Watch Runs; the strip lights when they claim.`);
+    setTimeout(() => { btn.disabled = false; }, 15000);
+  } else {
+    toast(out.error || 'Pulse dispatch failed', true);
+    btn.disabled = false;
+  }
+});
+
 initCustomViews();
 </script>
 </body>

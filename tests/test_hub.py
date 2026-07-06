@@ -182,6 +182,36 @@ def test_hub_redirects_bare_firm_path(hub_server: str):
         assert exc.headers["Location"] == "/f/alpha/"
 
 
+def test_pulse_action_dispatches_detached(hub_server: str, monkeypatch):
+    from firm.dashboard import server as srv
+
+    calls: dict = {}
+
+    class FakeProc:
+        returncode = 0
+        stderr = ""
+        stdout = ""
+
+    def fake_run(cmd, **kw):
+        calls["cmd"] = cmd
+        return FakeProc()
+
+    monkeypatch.setattr(srv.subprocess, "run", fake_run)
+    req = urllib.request.Request(
+        hub_server + "/f/alpha/api/action/pulse/now",
+        data=b"{}", method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req) as resp:
+        out = json.loads(resp.read())
+    assert out["ok"] is True
+    assert out["result"]["unit"].startswith("pulse-alpha-")
+    cmd = calls["cmd"]
+    assert cmd[0] == "systemd-run"          # detached — never in-request
+    assert "--workspace" in cmd
+    assert "--firm-id" in cmd and "alpha" in cmd
+
+
 def test_hub_discovers_new_firm_live(hub_server: str, firms_root: Path):
     _make_firm(firms_root, "gamma-co", "gamma", "Gamma Co")
     status, body = _get(hub_server + "/api/hub")

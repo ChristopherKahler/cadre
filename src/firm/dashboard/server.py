@@ -13,9 +13,11 @@ firm workspace: ``cadre dashboard --workspace ~/firms/whatever``.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -853,6 +855,50 @@ def _firm_get(
     _http_send(h, 404, {"error": "not found"})
 
 
+def _slack_token_from_workspace(workspace: Path) -> str | None:
+    """Best-effort CADRE_SLACK_TOKEN from the workspace .mcp.json — the
+    operator convention keeps it there for the firm MCP server."""
+    mcp = workspace / ".mcp.json"
+    if not mcp.exists():
+        return None
+    m = re.search(
+        r"CADRE_SLACK_TOKEN=([^\s\"']+)",
+        mcp.read_text(encoding="utf-8", errors="replace"),
+    )
+    return m.group(1) if m else None
+
+
+def _fire_pulse(workspace: Path, firm_id: str) -> dict[str, Any]:
+    """Board-initiated pulse — detached via systemd-run so member runs
+    survive this HTTP request (a pulse blocks until its slowest member
+    finishes; never run it inside a request thread)."""
+    unit = f"pulse-{firm_id}-{int(time.time())}"
+    cmd = [
+        "systemd-run", "--user", "--collect", "--unit", unit,
+        "--working-directory", str(workspace),
+        f"--setenv=FIRM_ID={firm_id}",
+    ]
+    claude_bin = os.environ.get("CADRE_CLAUDE_BIN")
+    if not claude_bin:
+        nvm = Path.home() / ".nvm/versions/node/v22.11.0/bin/claude"
+        claude_bin = str(nvm) if nvm.exists() else None
+    if claude_bin:
+        cmd.append(f"--setenv=CADRE_CLAUDE_BIN={claude_bin}")
+    token = _slack_token_from_workspace(workspace)
+    if token:
+        cmd.append(f"--setenv=CADRE_SLACK_TOKEN={token}")
+    cmd += [
+        sys.executable, "-m", "firm", "pulse",
+        "--workspace", str(workspace), "--firm-id", firm_id,
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise ValueError(
+            f"pulse dispatch failed: {proc.stderr.strip() or proc.stdout.strip()}"
+        )
+    return {"unit": unit, "monitor": f"journalctl --user -u {unit}"}
+
+
 def _firm_post(
     h: BaseHTTPRequestHandler,
     workspace: Path,
@@ -891,6 +937,14 @@ def _firm_post(
         body = json.loads(raw or b"{}")
     except json.JSONDecodeError:
         _http_send(h, 400, {"error": "invalid JSON body"})
+        return
+    if action == "pulse":
+        # Board's wake-the-firm button — no DB work here; the pulse
+        # process owns all state changes and audit records.
+        try:
+            _http_send(h, 200, {"ok": True, "result": _fire_pulse(workspace, firm_id)})
+        except ValueError as exc:
+            _http_send(h, 400, {"ok": False, "error": str(exc)})
         return
     conn = connect(db_path)
     try:
