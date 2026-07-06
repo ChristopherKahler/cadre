@@ -333,6 +333,11 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
 .commissionrow select{flex:1;min-width:0;background:var(--brand-surface);border:1px solid var(--brand-border);
   border-radius:8px;padding:7px 10px;color:var(--brand-text-secondary);font:500 12px var(--font-body)}
 
+/* ---- modal checkbox ---- */
+.mcheck{display:flex;align-items:flex-start;gap:8px;margin:10px 2px 0;cursor:pointer;
+  color:var(--brand-text-secondary);font-size:12.5px;line-height:1.45}
+.mcheck input{margin-top:2px;accent-color:var(--brand-primary)}
+
 /* ---- settings page ---- */
 #settingsTable select{background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:8px;
   padding:6px 10px;color:var(--brand-text);font:500 12px var(--font-body);cursor:pointer}
@@ -718,6 +723,7 @@ tr.flash td{animation:rowflash 2.2s ease-out}
     <h3 id="mTitle"></h3>
     <div class="msub" id="mSub"></div>
     <textarea id="mText"></textarea>
+    <label class="mcheck" id="mCheckWrap" hidden><input type="checkbox" id="mCheck"> <span id="mCheckLabel"></span></label>
     <div class="btn-row">
       <button class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn primary" id="mConfirm"></button>
@@ -1954,7 +1960,8 @@ const MODAL_SPEC = {
   'gate-approve':   {title:'Approve gate', sub:'Optional comment — recorded on the gate for the audit trail.', btn:'Approve', done:'Approved', field:'comment'},
   'gate-reject':    {title:'Reject gate', sub:'Optional comment — recorded on the gate for the audit trail.', btn:'Reject', done:'Rejected', field:'comment'},
   'escalation-acknowledge': {title:'Acknowledge escalation', sub:'Marks it seen. It stays on the board until resolved.', btn:'Acknowledge', done:'Acknowledged', field:'resolution'},
-  'escalation-resolve':     {title:'Resolve escalation', sub:'Optional resolution note for the audit trail.', btn:'Resolve', done:'Resolved', field:'resolution'},
+  'escalation-resolve':     {title:'Resolve escalation', sub:'Optional resolution note for the audit trail.', btn:'Resolve', done:'Resolved', field:'resolution',
+    check:{key:'queue_followup', label:'Hand resolution back as work — queue a unit for the raiser and dispatch them now', on:true}},
   'unit-comment':   {title:'Comment on unit', sub:'Direction for whoever works this unit — injected into their next briefing as a Board comment.', btn:'Post', done:'Posted', field:'body'},
 };
 let modalCtx = null;
@@ -1968,6 +1975,12 @@ function openModal(action, id){
   document.getElementById('mConfirm').textContent = spec.btn;
   const ta = document.getElementById('mText');
   ta.value = ''; ta.placeholder = spec.field;
+  const cw = document.getElementById('mCheckWrap');
+  cw.hidden = !spec.check;
+  if(spec.check){
+    document.getElementById('mCheckLabel').textContent = spec.check.label;
+    document.getElementById('mCheck').checked = !!spec.check.on;
+  }
   document.getElementById('overlay').classList.add('show');
   ta.focus();
 }
@@ -1998,6 +2011,7 @@ document.getElementById('mConfirm').addEventListener('click', async () => {
     out = await postAction('comment-create/unit', {parent_entity_id: modalCtx.id, body: text});
   } else {
     const body = {}; body[spec.field] = text;
+    if(spec.check) body[spec.check.key] = document.getElementById('mCheck').checked;
     out = await postAction(`${modalCtx.action}/${modalCtx.id}`, body);
   }
   if(out.ok){ toast(`${spec.done} — recorded`); } else { toast(out.error || 'Action failed', true); }
@@ -2042,13 +2056,39 @@ async function initFirmSwitch(){
 initFirmSwitch();
 
 /* ---- manual pulse — the Board's wake-the-firm button ---- */
+async function watchPulseOutcome(firedAt){
+  // The dispatch is detached; poll last-pulse.json until it's newer than
+  // the click, then report the real outcome — a 0-ran pulse must say WHY.
+  for(let i = 0; i < 30; i++){
+    await new Promise(r => setTimeout(r, 3000));
+    try{
+      const r = await fetch(BASE + '/api/pulse-status');
+      const st = await r.json();
+      if(!st.available || (st.mtime * 1000) < firedAt) continue;
+      const s = st.summary || {};
+      if(s.ran === 0 && s.skipped > 0){
+        const reasons = Object.entries(s.skip_reasons || {})
+          .sort((a, b) => b[1] - a[1]).map(([r2, n]) => `${n}× ${r2}`).join(' · ');
+        toast(`Pulse ran but spawned nobody — ${reasons || s.skipped + ' skipped'}`, true);
+      } else if(s.ran === undefined && s.reason){
+        toast(`Pulse blocked: ${s.reason}`, true);
+      } else {
+        toast(`Pulse: ${s.ran ?? '?'} spawned · ${s.skipped ?? 0} skipped${s.errors ? ' · ' + s.errors + ' ERRORS' : ''}`);
+      }
+      lastHash = null; poll();
+      return;
+    }catch(e){}
+  }
+}
 document.getElementById('pulseBtn').addEventListener('click', async () => {
   const btn = document.getElementById('pulseBtn');
   if(btn.disabled) return;
   btn.disabled = true;
+  const firedAt = Date.now();
   const out = await postAction('pulse/now', {});
   if(out.ok){
-    toast(`Pulse fired — due Members spawn now. Watch Runs; the strip lights when they claim.`);
+    toast(`Pulse dispatched — outcome lands here in a few seconds…`);
+    watchPulseOutcome(firedAt);
     setTimeout(() => { btn.disabled = false; }, 15000);
   } else {
     toast(out.error || 'Pulse dispatch failed', true);

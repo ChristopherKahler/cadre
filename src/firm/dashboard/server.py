@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -840,6 +841,21 @@ def _firm_get(
         finally:
             conn.close()
         return
+    if path == "/api/pulse-status":
+        status_file = workspace / ".firm" / "last-pulse.json"
+        if not status_file.exists():
+            _http_send(h, 200, {"available": False})
+            return
+        try:
+            parsed = json.loads(status_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            parsed = None
+        _http_send(h, 200, {
+            "available": True,
+            "mtime": status_file.stat().st_mtime,
+            "summary": parsed,
+        })
+        return
     if path.startswith("/view/"):
         vid = path.strip("/").split("/")[1].split("?")[0]
         views = {v["id"]: v for v in load_custom_views(workspace)}
@@ -936,12 +952,20 @@ def _fire_pulse(
     token = _slack_token_from_workspace(workspace)
     if token:
         cmd.append(f"--setenv=CADRE_SLACK_TOKEN={token}")
-    cmd += [
+    pulse_argv = [
         sys.executable, "-m", "firm", "pulse",
         "--workspace", str(workspace), "--firm-id", firm_id,
     ]
     if only:
-        cmd += ["--only", only]
+        pulse_argv += ["--only", only]
+    # Route the summary to .firm/last-pulse.json so /api/pulse-status can
+    # report the outcome back to the Board (a detached dispatch can't).
+    status_file = workspace / ".firm" / "last-pulse.json"
+    cmd += [
+        "bash", "-c",
+        " ".join(shlex.quote(a) for a in pulse_argv)
+        + f" > {shlex.quote(str(status_file))} 2>&1",
+    ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         raise ValueError(
@@ -1058,6 +1082,35 @@ def _firm_post(
         try:
             result = create_commission(conn, workspace, firm_id, entity_id, body)
             _http_send(h, 200, {"ok": True, "result": result})
+        except ValueError as exc:
+            _http_send(h, 400, {"ok": False, "error": str(exc)})
+        finally:
+            conn.close()
+        return
+    if action == "escalation-resolve" and body.get("queue_followup"):
+        # Resolve AND hand the resolution back as work: the Board's answer
+        # becomes a claimed unit for the raiser plus a targeted dispatch —
+        # the loop that keeps turn-based firms (The Table) moving.
+        conn = connect(db_path)
+        try:
+            esc = repo.get(conn, "escalation", entity_id)
+            if not esc:
+                raise ValueError(f"unknown escalation {entity_id!r}")
+            resolved = perform_action(conn, "escalation-resolve", entity_id, body)
+            raiser = esc.get("raised_by_member_id")
+            followup = None
+            if raiser:
+                followup = create_commission(conn, workspace, firm_id, raiser, {
+                    "instructions": (
+                        f"The Board resolved your escalation {entity_id} "
+                        f"({esc.get('title')}). Resolution, verbatim: "
+                        f"{body.get('resolution') or '(no note)'} — act on this "
+                        "direction and continue."
+                    ),
+                })
+            _http_send(h, 200, {"ok": True, "result": {
+                "resolved": resolved, "followup": followup,
+            }})
         except ValueError as exc:
             _http_send(h, 400, {"ok": False, "error": str(exc)})
         finally:

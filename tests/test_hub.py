@@ -208,8 +208,10 @@ def test_pulse_action_dispatches_detached(hub_server: str, monkeypatch):
     assert out["result"]["unit"].startswith("pulse-alpha-")
     cmd = calls["cmd"]
     assert cmd[0] == "systemd-run"          # detached — never in-request
-    assert "--workspace" in cmd
-    assert "--firm-id" in cmd and "alpha" in cmd
+    joined = " ".join(cmd)
+    assert "--workspace" in joined
+    assert "--firm-id alpha" in joined
+    assert "last-pulse.json" in joined      # outcome lands for /api/pulse-status
 
 
 def test_commission_creates_unit_and_dispatches(hub_server: str, firms_root: Path, monkeypatch):
@@ -252,7 +254,7 @@ def test_commission_creates_unit_and_dispatches(hub_server: str, firms_root: Pat
     assert unit["assignee_member_id"] == "MEM-001"
 
     # Dispatch was member-targeted.
-    assert "--only" in calls["cmd"] and "MEM-001" in calls["cmd"]
+    assert "--only MEM-001" in " ".join(calls["cmd"])
 
     # The unit is claimed and the commission is on the record.
     conn = sqlite3.connect(db)
@@ -296,6 +298,53 @@ def test_pulse_only_targets_single_member():
     assert [r["member"]["id"] for r in summary.ran] == ["MEM-002"]
     reasons = {(s.get("member") or {}).get("id"): s["reason"] for s in summary.skipped}
     assert "not targeted" in reasons.get("MEM-001", "")
+
+
+def test_resolve_with_followup_commissions_raiser(hub_server: str, firms_root: Path, monkeypatch):
+    from firm.dashboard import server as srv
+
+    db = firms_root / "alpha-co" / ".firm" / "firm.db"
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    create(conn, "operation", {
+        "id": "OP-002", "firm_id": "alpha", "name": "Ops", "status": "active",
+    })
+    create(conn, "project", {
+        "id": "PRJ-002", "firm_id": "alpha", "operation_id": "OP-002",
+        "name": "Live", "status": "in_progress", "due_date": "2026-12-31",
+    })
+    create(conn, "escalation", {
+        "id": "ESC-010", "firm_id": "alpha", "status": "open",
+        "raised_by_member_id": "MEM-001", "title": "your move",
+        "dedupe_key": "alpha:your-move",
+    })
+    conn.commit()
+    conn.close()
+
+    class FakeProc:
+        returncode = 0
+        stderr = ""
+        stdout = ""
+
+    monkeypatch.setattr(srv.subprocess, "run", lambda cmd, **kw: FakeProc())
+
+    req = urllib.request.Request(
+        hub_server + "/f/alpha/api/action/escalation-resolve/ESC-010",
+        data=json.dumps({"resolution": "Hold and read it", "queue_followup": True}).encode(),
+        method="POST", headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req) as resp:
+        out = json.loads(resp.read())
+    assert out["ok"] is True
+    fu = out["result"]["followup"]
+    assert fu["unit"]["assignee_member_id"] == "MEM-001"
+    assert "Hold and read it" in fu["unit"]["description"]
+
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    assert conn.execute(
+        "SELECT status FROM escalation WHERE id='ESC-010'").fetchone()["status"] == "resolved"
+    conn.close()
 
 
 def test_contract_model_action(firms_root: Path):

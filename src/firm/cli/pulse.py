@@ -102,6 +102,14 @@ def run_pulse(
             "errors": len(summary.errors),
         }
 
+        if summary.skipped:
+            # Aggregate skip reasons so a 0-ran pulse explains itself
+            # (the dashboard's pulse feedback reads this).
+            reasons: dict[str, int] = {}
+            for s in summary.skipped:
+                reasons[s["reason"]] = reasons.get(s["reason"], 0) + 1
+            output["skip_reasons"] = reasons
+
         if summary.reaped:
             output["reaped"] = summary.reaped
 
