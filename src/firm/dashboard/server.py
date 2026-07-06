@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import subprocess
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -77,12 +78,16 @@ def load_custom_views(workspace: Path) -> list[dict[str, Any]]:
         dirs = v.get("dirs") or {}
         if not isinstance(dirs, dict):
             dirs = {}
+        actions = v.get("actions") or {}
+        if not isinstance(actions, dict):
+            actions = {}
         views.append({
             "id": vid,
             "title": str(v.get("title") or vid),
             "fragment": str(v["fragment"]),
             "files": {str(k): str(p) for k, p in files.items()},
             "dirs": {str(k): str(p) for k, p in dirs.items()},
+            "actions": {str(k): a for k, a in actions.items() if isinstance(a, dict)},
         })
     return views
 
@@ -148,6 +153,43 @@ def read_view_dir_file(
         raise ValueError(f"cannot read {key}/{filename}: {exc}") from exc
 
 
+def run_view_action(
+    workspace: Path, view: dict[str, Any], key: str, body: dict[str, Any],
+) -> dict[str, Any]:
+    """Execute a manifest-declared view action.
+
+    The firm's own views.json names the exact argv the GUI may invoke —
+    the request body only travels as a single JSON argument substituted
+    for the ``{json}`` placeholder (never through a shell). Trust boundary:
+    the manifest lives inside ``.firm/``, same as the database itself.
+    """
+    spec = view.get("actions", {}).get(key)
+    if spec is None:
+        raise ValueError(f"action {key!r} not declared for view {view['id']!r}")
+    argv = [str(a) for a in spec.get("cmd") or []]
+    if not argv:
+        raise ValueError(f"action {key!r} has no cmd")
+    payload = json.dumps(body or {}, separators=(",", ":"))
+    argv = [a.replace("{json}", payload) for a in argv]
+    try:
+        proc = subprocess.run(
+            argv, cwd=workspace, capture_output=True, text=True,
+            timeout=int(spec.get("timeout", 60)),
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"action {key!r} timed out"}
+    except OSError as exc:
+        return {"ok": False, "error": f"action {key!r} failed to exec: {exc}"}
+    out = proc.stdout.strip()
+    try:
+        result = json.loads(out.splitlines()[-1]) if out else {}
+    except (json.JSONDecodeError, IndexError):
+        result = {"output": out[:2000]}
+    ok = proc.returncode == 0 and result.get("ok", True)
+    err = (result.get("error") or proc.stderr.strip()[-500:]) if not ok else None
+    return {"ok": ok, "result": result, **({"error": err} if err else {})}
+
+
 _VIEW_PAGE_TEMPLATE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -176,6 +218,15 @@ window.CadreShell = {
     if(!r.ok) throw new Error(key + ' ' + r.status);
     const ct = r.headers.get('Content-Type') || '';
     return ct.includes('json') ? r.json() : r.text();
+  },
+  viewAction: async function(viewId, key, body){
+    try{
+      const r = await fetch('/api/views/' + viewId + '/action/' + key, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body || {}),
+      });
+      return await r.json();
+    }catch(e){ return {ok: false, error: String(e)}; }
   },
 };
 async function __poll(){
@@ -764,8 +815,26 @@ def make_handler(workspace: Path, firm_id: str) -> type[BaseHTTPRequestHandler]:
                 conn.close()
 
         def do_POST(self) -> None:
-            # Routes: /api/action/<action>/<entity_id>
             parts = self.path.strip("/").split("/")
+            # Routes: /api/views/<id>/action/<key> — firm-declared view actions
+            if len(parts) == 5 and parts[:2] == ["api", "views"] and parts[3] == "action":
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length) if length else b"{}"
+                try:
+                    body = json.loads(raw or b"{}")
+                except json.JSONDecodeError:
+                    self._send(400, {"ok": False, "error": "invalid JSON body"})
+                    return
+                views = {v["id"]: v for v in load_custom_views(workspace)}
+                view = views.get(parts[2])
+                try:
+                    if view is None:
+                        raise ValueError(f"unknown view {parts[2]!r}")
+                    self._send(200, run_view_action(workspace, view, parts[4], body))
+                except ValueError as exc:
+                    self._send(404, {"ok": False, "error": str(exc)})
+                return
+            # Routes: /api/action/<action>/<entity_id>
             if len(parts) != 4 or parts[:2] != ["api", "action"]:
                 self._send(404, {"error": "not found"})
                 return

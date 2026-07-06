@@ -519,3 +519,40 @@ def test_view_dir_serving_and_safety(tmp_path):
         read_view_dir_file(tmp_path, view, "art", "kael.exe")
     with pytest.raises(ValueError, match="cannot read"):
         read_view_dir_file(tmp_path, view, "art", "missing.png")
+
+
+def test_view_action_runs_declared_cmd(tmp_path):
+    import sys
+    from firm.dashboard.server import load_custom_views, run_view_action
+    _write_manifest(tmp_path, [
+        {"id": "table", "fragment": "dashboard/views/table.html",
+         "actions": {"echo": {"cmd": [sys.executable, "-c",
+             "import json,sys; d=json.loads('''{json}'''); "
+             "print(json.dumps({'ok': True, 'got': d['name']}))"]}}},
+    ])
+    view = load_custom_views(tmp_path)[0]
+    out = run_view_action(tmp_path, view, "echo", {"name": "Kael"})
+    assert out["ok"] and out["result"]["got"] == "Kael"
+
+
+def test_view_action_undeclared_rejected(tmp_path):
+    from firm.dashboard.server import load_custom_views, run_view_action
+    _write_manifest(tmp_path, [
+        {"id": "table", "fragment": "dashboard/views/table.html"},
+    ])
+    view = load_custom_views(tmp_path)[0]
+    with pytest.raises(ValueError, match="not declared"):
+        run_view_action(tmp_path, view, "rm-rf", {})
+
+
+def test_view_action_failure_surfaces_error(tmp_path):
+    import sys
+    from firm.dashboard.server import load_custom_views, run_view_action
+    _write_manifest(tmp_path, [
+        {"id": "table", "fragment": "dashboard/views/table.html",
+         "actions": {"boom": {"cmd": [sys.executable, "-c",
+             "import sys; print('{\"ok\": false, \"error\": \"engine says no\"}'); sys.exit(1)"]}}},
+    ])
+    view = load_custom_views(tmp_path)[0]
+    out = run_view_action(tmp_path, view, "boom", {})
+    assert not out["ok"] and "engine says no" in out["error"]

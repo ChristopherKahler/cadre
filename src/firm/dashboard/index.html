@@ -848,6 +848,14 @@ window.CadreShell = {
     const ct = r.headers.get('Content-Type') || '';
     return ct.includes('json') ? r.json() : r.text();
   },
+  viewAction: async (viewId, key, body) => {
+    try{
+      const r = await fetch('/api/views/' + viewId + '/action/' + key, {
+        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body || {}),
+      });
+      return await r.json();
+    }catch(e){ return {ok:false, error:String(e)}; }
+  },
 };
 
 /* ---- status semantics ---- */
