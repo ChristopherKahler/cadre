@@ -28,7 +28,9 @@ from firm.services import document as document_svc
 from firm.services import escalation as escalation_svc
 from firm.services import gate as gate_svc
 from firm.services import goal as goal_svc
+from firm.services import member as member_svc
 from firm.services import unit as unit_svc
+from firm.services._records import log_event
 
 _INDEX_HTML = Path(__file__).parent / "index.html"
 
@@ -181,6 +183,134 @@ def read_document(
 
 
 # ---------------------------------------------------------------------------
+# Member profile
+# ---------------------------------------------------------------------------
+
+def _instructions_path(workspace: Path, member_id: str) -> Path:
+    return workspace / ".firm" / "instructions" / f"{member_id}.md"
+
+
+def member_profile(
+    conn: sqlite3.Connection, workspace: Path, member_id: str,
+) -> dict[str, Any]:
+    """Everything the profile drawer needs, in one payload."""
+    member = repo.get(conn, "member", member_id)
+    if not member:
+        raise ValueError(f"member {member_id!r} not found")
+    firm_id = member["firm_id"]
+
+    contract = repo.get(conn, "contract", member["contract_id"]) if member.get("contract_id") else None
+
+    runs = sorted(
+        repo.find(conn, "member_run", member_id=member_id),
+        key=lambda r: r.get("started_at") or "", reverse=True,
+    )
+    durations = [d for d in (_run_duration_sec(r) for r in runs) if d is not None]
+    cost_row = conn.execute(
+        "SELECT COALESCE(SUM(dollar_equivalent),0) FROM usage_event WHERE member_id = ?",
+        (member_id,),
+    ).fetchone()
+    units_done = conn.execute(
+        "SELECT COUNT(*) FROM unit WHERE status='done' "
+        "AND (assignee_member_id = ? OR claimed_by = ?)",
+        (member_id, member_id),
+    ).fetchone()[0]
+    escalations_raised = conn.execute(
+        "SELECT COUNT(*) FROM escalation WHERE raised_by_member_id = ?",
+        (member_id,),
+    ).fetchone()[0]
+
+    recent_runs = runs[:10]
+    for r in recent_runs:
+        r["duration_sec"] = _run_duration_sec(r)
+        r.pop("prompt_snapshot", None)
+
+    records = sorted(
+        (r for r in repo.find(conn, "records", firm_id=firm_id)
+         if r.get("actor_id") == member_id or r.get("target_entity_id") == member_id),
+        key=lambda r: r.get("timestamp") or "", reverse=True,
+    )[:12]
+
+    notes = [
+        c for c in repo.find(conn, "comment", parent_entity_id=member_id)
+        if c.get("parent_entity_type") == "member" and not c.get("archived")
+    ]
+    notes.sort(key=lambda c: c.get("created_at") or "", reverse=True)
+
+    instructions_file = _instructions_path(workspace, member_id)
+    instructions = instructions_file.read_text(encoding="utf-8") if instructions_file.exists() else ""
+
+    # Prompt preview — identity + contract exactly as a run would render
+    # them, plus the live unit briefing when one is claimed.
+    from firm.pulse.prompt import (
+        _render_contract,
+        _render_member_identity,
+        _render_unit_briefing,
+    )
+    sections = [
+        _render_member_identity(conn, member_id, str(workspace)),
+    ]
+    contract_section = _render_contract(conn, member_id)
+    if contract_section:
+        sections.append(contract_section)
+    current = _member_current_units(conn, member_id)
+    if current:
+        sections.append(_render_unit_briefing(conn, current[0]["id"]))
+    prompt_preview = "\n\n---\n\n".join(sections)
+
+    completed = sum(1 for r in runs if r.get("status") == "completed")
+    failed = sum(1 for r in runs if r.get("status") in ("failed", "timed_out"))
+
+    return {
+        "member": member,
+        "contract": contract,
+        "contracts": repo.find(conn, "contract", firm_id=firm_id),
+        "members": [
+            {"id": m["id"], "name": m["name"]}
+            for m in repo.find(conn, "member", firm_id=firm_id)
+            if m["id"] != member_id
+        ],
+        "stats": {
+            "runs_total": len(runs),
+            "runs_completed": completed,
+            "runs_failed": failed,
+            "success_rate": round(100 * completed / len(runs)) if runs else None,
+            "total_cost_usd": cost_row[0],
+            "avg_duration_sec": round(sum(durations) / len(durations)) if durations else None,
+            "units_done": units_done,
+            "escalations_raised": escalations_raised,
+        },
+        "recent_runs": recent_runs,
+        "records": records,
+        "notes": notes,
+        "instructions": instructions,
+        "current_units": current,
+        "prompt_preview": prompt_preview,
+    }
+
+
+def write_instructions(
+    conn: sqlite3.Connection, workspace: Path, member_id: str, content: str,
+) -> dict[str, Any]:
+    """Write the member's standing instructions file (prompt-injected every run)."""
+    member = repo.get(conn, "member", member_id)
+    if not member:
+        raise ValueError(f"member {member_id!r} not found")
+    path = _instructions_path(workspace, member_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    log_event(
+        conn,
+        firm_id=member["firm_id"],
+        event_type="member.instructions_updated",
+        actor={"type": "board", "id": None},
+        target_ref={"type": "member", "id": member_id},
+        details={"bytes": len(content.encode())},
+    )
+    return {"ok": True, "path": str(path)}
+
+
+# ---------------------------------------------------------------------------
 # Board actions
 # ---------------------------------------------------------------------------
 
@@ -222,6 +352,18 @@ def perform_action(
             "body": body.get("body"),
             "author_type": "board",
         })
+    if action == "member-update":
+        data = {
+            k: body[k]
+            for k in ("role", "description", "status", "contract_id")
+            if body.get(k) not in (None, "")
+        }
+        if "reports_to_member_id" in body:
+            # Explicit null/"" means "reports to the Board" — a real change.
+            data["reports_to_member_id"] = body["reports_to_member_id"] or None
+        if not data:
+            raise ValueError("No member fields to update")
+        return member_svc.update_member(conn, entity_id, data)
     if action == "doc-revision":
         return document_svc.request_revision(
             conn,
@@ -289,6 +431,16 @@ def make_handler(workspace: Path, firm_id: str) -> type[BaseHTTPRequestHandler]:
                 finally:
                     conn.close()
                 return
+            if self.path.startswith("/api/member/"):
+                member_id = self.path.rsplit("/", 1)[1]
+                conn = connect(db_path)
+                try:
+                    self._send(200, member_profile(conn, workspace, member_id))
+                except ValueError as exc:
+                    self._send(400, {"error": str(exc)})
+                finally:
+                    conn.close()
+                return
             if self.path.startswith("/api/doc/"):
                 doc_id = self.path.rsplit("/", 1)[1]
                 conn = connect(db_path)
@@ -317,7 +469,12 @@ def make_handler(workspace: Path, firm_id: str) -> type[BaseHTTPRequestHandler]:
                 return
             conn = connect(db_path)
             try:
-                result = perform_action(conn, action, entity_id, body)
+                if action == "member-instructions":
+                    result = write_instructions(
+                        conn, workspace, entity_id, body.get("content") or "",
+                    )
+                else:
+                    result = perform_action(conn, action, entity_id, body)
                 self._send(200, {"ok": True, "result": result})
             except ValueError as exc:
                 self._send(400, {"ok": False, "error": str(exc)})

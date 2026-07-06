@@ -265,3 +265,84 @@ def test_doc_revision_without_producing_unit_fails_cleanly():
     })
     with pytest.raises(ValueError, match="producing unit"):
         perform_action(conn, "doc-revision", "DOC-011", {"body": "fix it"})
+
+
+# ---------------------------------------------------------------------------
+# Member profile + command surface
+# ---------------------------------------------------------------------------
+
+
+def test_member_profile_shape(tmp_path):
+    from firm.dashboard.server import member_profile
+    conn = _fresh_conn()
+    create(conn, "contract", {
+        "id": "CON-001", "firm_id": "chrisai", "name": "Standard",
+        "runtime_type": "claude_code",
+    })
+    from firm.services.member import update_member
+    update_member(conn, "MEM-001", {"contract_id": "CON-001"})
+    create(conn, "member_run", {
+        "id": "RUN-001", "firm_id": "chrisai", "member_id": "MEM-001",
+        "unit_id": "UNIT-001", "status": "completed",
+        "started_at": "2026-07-05T10:00:00+00:00",
+        "ended_at": "2026-07-05T10:04:00+00:00",
+    })
+
+    P = member_profile(conn, tmp_path, "MEM-001")
+
+    assert P["member"]["id"] == "MEM-001"
+    assert P["contract"]["name"] == "Standard"
+    assert P["stats"]["runs_total"] == 1
+    assert P["stats"]["success_rate"] == 100
+    assert P["stats"]["avg_duration_sec"] == 240
+    assert P["current_units"][0]["id"] == "UNIT-001"
+    assert "Your Identity" in P["prompt_preview"]
+    assert "Your Assignment" in P["prompt_preview"]  # has a claimed unit
+    assert P["instructions"] == ""
+    assert isinstance(P["contracts"], list) and len(P["contracts"]) == 1
+
+
+def test_member_update_switches_contract_and_manager():
+    conn = _fresh_conn()
+    create(conn, "contract", {
+        "id": "CON-002", "firm_id": "chrisai", "name": "Heavy",
+        "runtime_type": "claude_code",
+    })
+    create(conn, "member", {
+        "id": "MEM-002", "firm_id": "chrisai", "name": "Quill",
+        "role": "Writer", "status": "active", "reports_to_member_id": "MEM-001",
+    })
+
+    updated = perform_action(conn, "member-update", "MEM-002", {
+        "role": "Senior Writer", "contract_id": "CON-002",
+        "reports_to_member_id": None,
+    })
+    assert updated["role"] == "Senior Writer"
+    assert updated["contract_id"] == "CON-002"
+    assert updated["reports_to_member_id"] is None  # back to the Board
+
+
+def test_write_instructions_persists_and_reaches_prompt(tmp_path):
+    from firm.dashboard.server import write_instructions
+    from firm.pulse.prompt import _render_member_identity
+    conn = _fresh_conn()
+
+    write_instructions(conn, tmp_path, "MEM-001", "Always ship the hard case first.")
+
+    path = tmp_path / ".firm" / "instructions" / "MEM-001.md"
+    assert path.read_text() == "Always ship the hard case first."
+    identity = _render_member_identity(conn, "MEM-001", str(tmp_path))
+    assert "Always ship the hard case first." in identity
+    from firm.core.repo import find
+    assert len(find(conn, "records", event_type="member.instructions_updated")) == 1
+
+
+def test_standing_notes_reach_member_identity():
+    from firm.pulse.prompt import _render_member_identity
+    conn = _fresh_conn()
+    perform_action(conn, "comment-create", "member", {
+        "parent_entity_id": "MEM-001", "body": "Prefer faceless formats this month.",
+    })
+    identity = _render_member_identity(conn, "MEM-001", "/tmp")
+    assert "Standing Notes" in identity
+    assert "THE BOARD: Prefer faceless formats this month." in identity

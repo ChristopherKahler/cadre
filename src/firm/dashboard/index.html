@@ -267,6 +267,70 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
 .doc .dp{font:400 11px var(--font-mono);color:var(--brand-text-dim);word-break:break-all;margin-top:3px}
 .doc .dm2{color:var(--brand-text-dim);font-size:11.5px;margin-top:2px}
 
+/* ---- roster canvas (Miro-style org chart) ---- */
+.canvaswrap{position:relative;height:calc(100vh - 210px);min-height:480px;border:1px solid var(--brand-border);
+  border-radius:12px;overflow:hidden;background:var(--brand-surface);
+  background-image:radial-gradient(var(--dot) 1px, transparent 1px);background-size:24px 24px;
+  cursor:grab;user-select:none}
+.canvaswrap.panning{cursor:grabbing}
+.stage{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform}
+.stage svg{position:absolute;top:0;left:0;overflow:visible;pointer-events:none}
+.edge-base{stroke:var(--brand-primary);stroke-width:1.5;fill:none;opacity:.22}
+.edge-flow{stroke:var(--brand-primary);stroke-width:1.5;fill:none;opacity:.55;stroke-dasharray:5 14;
+  stroke-linecap:round;animation:edgeflow 3.2s linear infinite}
+@keyframes edgeflow{to{stroke-dashoffset:-19}}
+@media(prefers-reduced-motion:reduce){.edge-flow{animation:none;opacity:.3}}
+.mcard{position:absolute;width:228px;background:var(--brand-elevated);border:1px solid var(--brand-border);
+  border-radius:12px;padding:14px;box-shadow:var(--shadow-card);cursor:pointer;transition:border-color 160ms,box-shadow 160ms}
+.mcard:hover{border-color:var(--brand-primary);box-shadow:0 0 24px rgba(var(--brand-primary-rgb),.18)}
+.mcard .mtop{display:flex;gap:10px;align-items:center;margin-bottom:8px}
+.avatar{width:38px;height:38px;border-radius:9999px;flex:none;display:flex;align-items:center;justify-content:center;
+  font:600 14px var(--font-display);color:#fff;background:var(--brand-gradient);background-size:300% 100%}
+.mcard .mname{font:600 14px var(--font-body);color:var(--brand-text);line-height:1.2}
+.mcard .mrole{color:var(--brand-text-secondary);font-size:11.5px;line-height:1.3;margin-top:1px}
+.mcard .mfoot{display:flex;align-items:center;gap:7px;font:500 10.5px var(--font-mono);color:var(--brand-text-dim)}
+.mcard .mfoot .sdot{width:7px;height:7px}
+.mcard .mcu{margin-top:7px;font-size:11px;color:var(--brand-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mcard.board{background:var(--brand-wash);border-color:rgba(var(--brand-primary-rgb),.35);cursor:default}
+.mcard.board:hover{box-shadow:var(--shadow-card)}
+.canvasctl{position:absolute;bottom:14px;right:14px;display:flex;gap:6px;z-index:5}
+.canvasctl button{width:34px;height:34px;border-radius:8px;border:1px solid var(--brand-border);
+  background:var(--brand-elevated);color:var(--brand-text-secondary);cursor:pointer;font:600 15px var(--font-mono)}
+.canvasctl button:hover{border-color:var(--brand-border-hover);color:var(--brand-text)}
+.canvashint{position:absolute;bottom:16px;left:16px;font:500 10.5px var(--font-mono);letter-spacing:.1em;
+  text-transform:uppercase;color:var(--brand-text-dim);z-index:5}
+
+/* ---- profile drawer ---- */
+.drawerwrap{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;z-index:48}
+.drawerwrap.show{display:block}
+.drawer{position:absolute;top:0;right:0;bottom:0;width:min(560px,94vw);background:var(--brand-canvas);
+  border-left:1px solid var(--brand-border-hover);box-shadow:-16px 0 48px rgba(0,0,0,.35);
+  display:flex;flex-direction:column;transform:translateX(100%);transition:transform 260ms cubic-bezier(.16,1,.3,1)}
+.drawerwrap.show .drawer{transform:none}
+@media(prefers-reduced-motion:reduce){.drawer{transition:none}}
+.dwr-head{padding:22px 24px 16px;border-bottom:1px solid var(--brand-border);display:flex;gap:14px;align-items:center;flex:none}
+.dwr-head .avatar{width:52px;height:52px;font-size:19px}
+.dwr-head .who{flex:1;min-width:0}
+.dwr-head h3{font-size:19px;line-height:1.2}
+.dwr-head .drole{color:var(--brand-text-secondary);font-size:13px}
+.dwr-head .dmeta2{font:500 11px var(--font-mono);color:var(--brand-text-dim);margin-top:3px}
+.dwr-tabs{display:flex;gap:2px;padding:0 16px;border-bottom:1px solid var(--brand-border);flex:none}
+.dwr-tab{border:none;background:none;color:var(--brand-text-secondary);font:500 13px var(--font-body);
+  padding:11px 14px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.dwr-tab:hover{color:var(--brand-text)}
+.dwr-tab.active{color:var(--brand-primary);border-bottom-color:var(--brand-primary)}
+.dwr-body{flex:1;overflow-y:auto;padding:20px 24px}
+.dwr-sec{display:none}
+.dwr-sec.active{display:block}
+.pstats{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:20px}
+@media(max-width:560px){.pstats{grid-template-columns:1fr 1fr}}
+.pstat{background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:10px;padding:10px 12px}
+.pstat .k{font:500 9.5px var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--brand-text-dim)}
+.pstat .v{font:600 19px var(--font-mono);margin-top:4px;font-variant-numeric:tabular-nums}
+.promptpre{background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:10px;
+  padding:14px;font:400 11.5px/1.6 var(--font-mono);color:var(--brand-text-secondary);
+  white-space:pre-wrap;overflow-wrap:anywhere;max-height:none}
+
 /* ---- clickable rows / icon actions ---- */
 .doc.click{cursor:pointer;transition:background 140ms}
 .doc.click:hover{background:var(--brand-hover-bg)}
@@ -360,6 +424,10 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
           <span>Dashboard</span><span class="badge" id="navAttn">0</span>
         </button>
+        <button class="navitem" data-view="roster" title="Roster">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          <span>Roster</span>
+        </button>
         <button class="navitem" data-view="ops" title="Operations">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/></svg>
           <span>Operations</span>
@@ -437,6 +505,20 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
         </div>
       </div>
 
+      <!-- ============ ROSTER ============ -->
+      <div class="page" id="page-roster">
+        <div class="pagehead"><h1>Roster</h1><p>Your org, live. Drag to pan, scroll to zoom, click a member to open their profile and take command.</p></div>
+        <div class="canvaswrap" id="canvasWrap">
+          <div class="stage" id="stage"></div>
+          <div class="canvashint">drag · scroll · click a card</div>
+          <div class="canvasctl">
+            <button onclick="zoomBy(1.2)" title="Zoom in" aria-label="Zoom in">+</button>
+            <button onclick="zoomBy(1/1.2)" title="Zoom out" aria-label="Zoom out">−</button>
+            <button onclick="resetView()" title="Reset view" aria-label="Reset view">⌂</button>
+          </div>
+        </div>
+      </div>
+
       <!-- ============ OPERATIONS ============ -->
       <div class="page" id="page-ops">
         <div class="pagehead" style="display:flex;align-items:flex-start;gap:16px">
@@ -448,15 +530,9 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
             <div class="seclabel">Pipeline</div>
             <div class="card"><div id="pipesummary"></div></div>
           </div>
-          <div class="cardgrid" style="grid-template-columns:340px 1fr">
-            <div>
-              <div class="seclabel">Roster</div>
-              <div class="listcard" id="roster"></div>
-            </div>
-            <div>
-              <div class="seclabel">Units by project</div>
-              <div id="pipeline"></div>
-            </div>
+          <div>
+            <div class="seclabel">Units by project</div>
+            <div id="pipeline"></div>
           </div>
         </div>
       </div>
@@ -565,6 +641,32 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
   </div>
 </div>
 
+<div class="drawerwrap" id="drawerWrap">
+  <div class="drawer" role="dialog" aria-modal="true" aria-labelledby="pName">
+    <div class="dwr-head">
+      <div class="avatar" id="pAvatar"></div>
+      <div class="who">
+        <h3 id="pName"></h3>
+        <div class="drole" id="pRole"></div>
+        <div class="dmeta2" id="pMeta"></div>
+      </div>
+      <button class="btn sm" onclick="closeProfile()">Close</button>
+    </div>
+    <div class="dwr-tabs">
+      <button class="dwr-tab active" data-tab="overview">Overview</button>
+      <button class="dwr-tab" data-tab="activity">Activity</button>
+      <button class="dwr-tab" data-tab="prompt">Prompt</button>
+      <button class="dwr-tab" data-tab="manage">Manage</button>
+    </div>
+    <div class="dwr-body">
+      <div class="dwr-sec active" id="tab-overview"></div>
+      <div class="dwr-sec" id="tab-activity"></div>
+      <div class="dwr-sec" id="tab-prompt"></div>
+      <div class="dwr-sec" id="tab-manage"></div>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
@@ -593,7 +695,7 @@ document.getElementById('sbTrigger').addEventListener('click', () => {
 });
 
 /* ---- view router ---- */
-const VIEWS = {dashboard:'Dashboard', ops:'Operations', goals:'Goals & spend', docs:'Deliverables', runs:'Runs', records:'Records'};
+const VIEWS = {dashboard:'Dashboard', roster:'Roster', ops:'Operations', goals:'Goals & spend', docs:'Deliverables', runs:'Runs', records:'Records'};
 let currentView = 'dashboard';
 function show(view){
   if(!VIEWS[view]) view = 'dashboard';
@@ -686,7 +788,7 @@ function render(){
 
   withScrollKept([], () => {
     renderStats(S); renderGates(S); renderEscalations(S); renderRecent(S);
-    renderRoster(S); renderPipeline(S); renderGoals(S); renderCosts(S);
+    renderRosterCanvas(S); renderPipeline(S); renderGoals(S); renderCosts(S);
     renderDocs(S); renderRuns(S); renderRecords(S);
   });
 }
@@ -777,24 +879,266 @@ function renderRecent(S){
   `<div class="lrow"><button class="btn sm" onclick="show('records')">View full audit feed</button></div>`;
 }
 
-function renderRoster(S){
+/* ======================= ROSTER CANVAS ======================= */
+const CARD_W = 228, CARD_H = 96, GAP_X = 36, GAP_Y = 92;
+let view = {x: 60, y: 40, k: 1};
+let viewInit = false;
+
+function applyView(){
+  const st = document.getElementById('stage');
+  if(st) st.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.k})`;
+}
+function zoomBy(f){
+  const wrap = document.getElementById('canvasWrap');
+  const cx = wrap.clientWidth / 2, cy = wrap.clientHeight / 2;
+  const k2 = Math.min(2.5, Math.max(.25, view.k * f));
+  view.x = cx - (cx - view.x) * (k2 / view.k);
+  view.y = cy - (cy - view.y) * (k2 / view.k);
+  view.k = k2;
+  applyView();
+}
+function resetView(){ viewInit = false; fitCanvas(); }
+
+function layoutRoster(members){
+  // Synthetic Board node at the top — the operator commands from here.
+  const byId = Object.fromEntries(members.map(m => [m.id, m]));
+  const kids = {BOARD: []};
+  members.forEach(m => {
+    const mgr = m.reports_to && byId[m.reports_to] ? m.reports_to : 'BOARD';
+    (kids[mgr] = kids[mgr] || []).push(m.id);
+  });
+  Object.values(kids).forEach(list => list.sort());
+  const pos = {};
+  let cursor = 0;
+  function place(id, depth){
+    const c = kids[id] || [];
+    if(!c.length){
+      pos[id] = {x: cursor, y: depth * (CARD_H + GAP_Y)};
+      cursor += CARD_W + GAP_X;
+    } else {
+      c.forEach(k => place(k, depth + 1));
+      const xs = c.map(k => pos[k].x);
+      pos[id] = {x: (Math.min(...xs) + Math.max(...xs)) / 2, y: depth * (CARD_H + GAP_Y)};
+    }
+  }
+  place('BOARD', 0);
+  return {pos, kids};
+}
+
+function edgePath(x1, y1, x2, y2){
+  const my = (y1 + y2) / 2;
+  return `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`;
+}
+
+function fitCanvas(){
+  const wrap = document.getElementById('canvasWrap');
+  const stage = document.getElementById('stage');
+  if(!wrap || !stage || !stage.dataset.w) return;
+  const w = +stage.dataset.w, h = +stage.dataset.h;
+  const k = Math.min(1, (wrap.clientWidth - 80) / w, (wrap.clientHeight - 80) / h);
+  view = {k, x: (wrap.clientWidth - w * k) / 2, y: 40};
+  viewInit = true;
+  applyView();
+}
+
+function initials(name){
+  return String(name || '?').split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
+}
+
+function renderRosterCanvas(S){
+  const stage = document.getElementById('stage');
+  if(!stage) return;
   const members = S.roster || [];
-  const managers = members.filter(m => !m.reports_to);
-  const ics = members.filter(m => m.reports_to);
-  const row = m => `
-    <div class="member">
-      <span class="sdot ${m.status !== 'active' ? 'warn' : (m.current_units.length ? 'ok' : '')}"
-        title="${m.status !== 'active' ? esc(m.status) : (m.current_units.length ? 'working' : 'idle')}"></span>
-      <div class="who">
-        <div class="nm">${esc(m.name)}<span class="mid">${esc(m.id)}</span></div>
-        <div class="rl">${esc(m.role || '')}</div>
-        ${m.current_units.length ? `<div class="cu" title="${esc(m.current_units[0].name)}"><span class="uid">${esc(m.current_units[0].id)}</span> ${esc(m.current_units[0].name)}</div>` : ''}
-      </div>
-      <div class="side">load ${m.load}<br><span title="${esc(tAttr(m.last_activated))}">${timeAgo(m.last_activated)}</span></div>
+  if(!members.length){ stage.innerHTML = '<div class="empty" style="padding:20px">No members yet.</div>'; return; }
+  const {pos, kids} = layoutRoster(members);
+  const allX = Object.values(pos).map(p => p.x);
+  const allY = Object.values(pos).map(p => p.y);
+  const w = Math.max(...allX) + CARD_W, h = Math.max(...allY) + CARD_H + 40;
+  stage.dataset.w = w; stage.dataset.h = h;
+
+  let edges = '';
+  const drawKids = (pid) => (kids[pid] || []).forEach(cid => {
+    const a = pos[pid], b = pos[cid];
+    const d = edgePath(a.x + CARD_W/2, a.y + CARD_H, b.x + CARD_W/2, b.y);
+    edges += `<path class="edge-base" d="${d}"/><path class="edge-flow" d="${d}"/>`;
+    drawKids(cid);
+  });
+  drawKids('BOARD');
+
+  const byId = Object.fromEntries(members.map(m => [m.id, m]));
+  const firmName = (S.firm || {}).name || 'the firm';
+  const cards = ['BOARD', ...members.map(m => m.id)].map(id => {
+    const pt = pos[id];
+    if(id === 'BOARD'){
+      return `<div class="mcard board" style="left:${pt.x}px;top:${pt.y}px">
+        <div class="mtop"><div class="avatar">YOU</div>
+        <div><div class="mname">THE BOARD</div><div class="mrole">Operator — ${esc(firmName)}</div></div></div>
+        <div class="mfoot"><span class="sdot ok"></span>commanding from this dashboard</div></div>`;
+    }
+    const m = byId[id];
+    const working = m.current_units.length > 0;
+    const dotCls = m.status !== 'active' ? 'warn' : (working ? 'ok' : '');
+    const stateTxt = m.status !== 'active' ? m.status : (working ? 'working' : 'idle');
+    return `<div class="mcard" style="left:${pt.x}px;top:${pt.y}px" onclick="openProfile('${esc(m.id)}')"
+        role="button" tabindex="0" onkeydown="if(event.key==='Enter')openProfile('${esc(m.id)}')" title="Open ${esc(m.name)}">
+      <div class="mtop"><div class="avatar">${esc(initials(m.name))}</div>
+        <div style="min-width:0"><div class="mname">${esc(m.name)}</div><div class="mrole">${esc(m.role || '')}</div></div></div>
+      <div class="mfoot"><span class="sdot ${dotCls}"></span>${stateTxt} · load ${m.load} · ${timeAgo(m.last_activated)}</div>
+      ${working ? `<div class="mcu">→ ${esc(m.current_units[0].id)} ${esc(m.current_units[0].name)}</div>` : ''}
     </div>`;
-  document.getElementById('roster').innerHTML =
-    (managers.length ? `<div class="lrow"><span class="sub" style="font-family:var(--font-mono);letter-spacing:.1em">MANAGEMENT</span></div>` + managers.map(row).join('') : '') +
-    (ics.length ? `<div class="lrow"><span class="sub" style="font-family:var(--font-mono);letter-spacing:.1em">CONTRIBUTORS</span></div>` + ics.map(row).join('') : '');
+  }).join('');
+
+  stage.innerHTML = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${edges}</svg>` + cards;
+  if(!viewInit) fitCanvas();
+  else applyView();
+}
+
+/* pan + zoom */
+(function(){
+  const wrap = document.getElementById('canvasWrap');
+  if(!wrap) return;
+  let panning = false, sx = 0, sy = 0, moved = 0;
+  wrap.addEventListener('mousedown', e => {
+    panning = true; moved = 0; sx = e.clientX - view.x; sy = e.clientY - view.y;
+    wrap.classList.add('panning');
+  });
+  window.addEventListener('mousemove', e => {
+    if(!panning) return;
+    moved++;
+    view.x = e.clientX - sx; view.y = e.clientY - sy;
+    applyView();
+  });
+  window.addEventListener('mouseup', () => { panning = false; wrap.classList.remove('panning'); });
+  wrap.addEventListener('click', e => { if(moved > 3){ e.stopPropagation(); } }, true);
+  wrap.addEventListener('wheel', e => {
+    e.preventDefault();
+    const r = wrap.getBoundingClientRect();
+    const cx = e.clientX - r.left, cy = e.clientY - r.top;
+    const k2 = Math.min(2.5, Math.max(.25, view.k * (e.deltaY < 0 ? 1.1 : 1/1.1)));
+    view.x = cx - (cx - view.x) * (k2 / view.k);
+    view.y = cy - (cy - view.y) * (k2 / view.k);
+    view.k = k2;
+    applyView();
+  }, {passive: false});
+})();
+
+/* ======================= MEMBER PROFILE ======================= */
+let profileCtx = null;
+document.querySelectorAll('.dwr-tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.dwr-tab').forEach(x => x.classList.toggle('active', x === t));
+  document.querySelectorAll('.dwr-sec').forEach(x => x.classList.toggle('active', x.id === 'tab-' + t.dataset.tab));
+}));
+function closeProfile(){ document.getElementById('drawerWrap').classList.remove('show'); profileCtx = null; }
+document.getElementById('drawerWrap').addEventListener('click', e => { if(e.target.id === 'drawerWrap') closeProfile(); });
+
+async function openProfile(memberId){
+  try{
+    const r = await fetch('/api/member/' + encodeURIComponent(memberId));
+    const P = await r.json();
+    if(P.error){ toast(P.error, true); return; }
+    profileCtx = memberId;
+    renderProfile(P);
+    document.getElementById('drawerWrap').classList.add('show');
+  }catch(e){ toast('Could not load profile: ' + e, true); }
+}
+
+function renderProfile(P){
+  const m = P.member, st = P.stats;
+  document.getElementById('pAvatar').textContent = initials(m.name);
+  document.getElementById('pName').textContent = m.name;
+  document.getElementById('pRole').textContent = m.role || '';
+  document.getElementById('pMeta').textContent =
+    `${m.id} · ${m.status} · contract ${P.contract ? P.contract.name : 'none'} · reports to ${m.reports_to_member_id || 'THE BOARD'}`;
+
+  // Overview
+  document.getElementById('tab-overview').innerHTML = `
+    <div class="pstats">
+      <div class="pstat"><div class="k">RUNS</div><div class="v">${st.runs_total}</div></div>
+      <div class="pstat"><div class="k">SUCCESS</div><div class="v">${st.success_rate != null ? st.success_rate + '%' : '—'}</div></div>
+      <div class="pstat"><div class="k">UNITS DONE</div><div class="v">${st.units_done}</div></div>
+      <div class="pstat"><div class="k">SPEND</div><div class="v">${money(st.total_cost_usd)}</div></div>
+      <div class="pstat"><div class="k">AVG RUN</div><div class="v">${st.avg_duration_sec != null ? dur(st.avg_duration_sec) : '—'}</div></div>
+      <div class="pstat"><div class="k">FAILED</div><div class="v">${st.runs_failed}</div></div>
+      <div class="pstat"><div class="k">ESCALATIONS</div><div class="v">${st.escalations_raised}</div></div>
+      <div class="pstat"><div class="k">LAST ACTIVE</div><div class="v" style="font-size:13px">${timeAgo(m.last_activated)}</div></div>
+    </div>
+    ${m.description ? `<div class="seclabel">About</div><p style="color:var(--brand-text-secondary);font-size:13px;margin-bottom:18px">${esc(m.description)}</p>` : ''}
+    ${P.current_units.length ? `<div class="seclabel">Currently on</div>
+      <div class="listcard" style="margin-bottom:18px">${P.current_units.map(u =>
+        `<div class="lrow"><span class="mono" style="font-size:11px;color:var(--brand-text-dim)">${esc(u.id)}</span><span class="grow">${esc(u.name)}</span>${pill(u.status)}</div>`).join('')}</div>` : ''}
+    <div class="seclabel">Standing notes — injected into every run</div>
+    <div id="pNotes">${P.notes.length ? P.notes.map(n => `
+      <div class="comment"><span class="cwho">${esc(n.author_type === 'board' && !n.author_id ? 'THE BOARD' : (n.author_id || n.author_type))}</span>
+      <span class="muted" style="margin-left:6px">${timeAgo(n.created_at)}</span>
+      <div class="cbody">${esc(n.body)}</div></div>`).join('') : '<div class="empty">No standing notes. Add one to tune how this member operates.</div>'}</div>
+    <div class="commentbox">
+      <input id="pNoteInput" placeholder="Standing direction for ${esc(m.name)}…">
+      <button class="btn primary sm" onclick="postMemberNote()">Add note</button>
+    </div>`;
+
+  // Activity
+  document.getElementById('tab-activity').innerHTML = `
+    <div class="seclabel">Recent runs</div>
+    <div class="listcard" style="margin-bottom:20px">${P.recent_runs.length ? P.recent_runs.map(r => `
+      <div class="lrow"><span class="mono" style="font-size:11px;color:var(--brand-text-dim)">${esc(r.id)}</span>
+        <span class="grow">${esc(r.unit_id || '—')}</span>${pill(r.status)}
+        <span class="mono" style="font-size:11px">${dur(r.duration_sec)}</span>
+        <span class="end">${timeAgo(r.started_at)}</span></div>`).join('') : '<div class="lrow"><span class="empty">No runs yet.</span></div>'}</div>
+    <div class="seclabel">Recent records</div>
+    <div class="listcard">${P.records.length ? P.records.map(r => `
+      <div class="evt"><span class="t">${timeAgo(r.timestamp)}</span>
+        <span class="e"><span class="type neutral">${esc(r.event_type)}</span> → ${esc(r.target_entity_type)} <span class="mono" style="font-size:11px">${esc(r.target_entity_id)}</span></span></div>`).join('') : '<div class="evt"><span class="empty">Nothing yet.</span></div>'}</div>`;
+
+  // Prompt
+  document.getElementById('tab-prompt').innerHTML = `
+    <div class="seclabel">Assembled prompt preview — what this member actually receives</div>
+    <div class="promptpre">${esc(P.prompt_preview)}</div>`;
+
+  // Manage
+  const contractOpts = P.contracts.map(c =>
+    `<option value="${esc(c.id)}" ${c.id === (m.contract_id || '') ? 'selected' : ''}>${esc(c.name)} (${esc(c.id)})</option>`).join('');
+  const mgrOpts = ['<option value="">THE BOARD (direct)</option>'].concat(P.members.map(x =>
+    `<option value="${esc(x.id)}" ${x.id === (m.reports_to_member_id || '') ? 'selected' : ''}>${esc(x.name)} (${esc(x.id)})</option>`)).join('');
+  document.getElementById('tab-manage').innerHTML = `
+    <div class="field"><label>Role</label><input id="fRole" value="${esc(m.role || '')}"></div>
+    <div class="field"><label>Description</label><textarea id="fDesc">${esc(m.description || '')}</textarea></div>
+    <div class="field"><label>Status</label><select id="fStatus">
+      ${['active','paused','offboarded'].map(x => `<option ${x === m.status ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+    <div class="field"><label>Reports to</label><select id="fMgr">${mgrOpts}</select></div>
+    <div class="field"><label>Contract</label><select id="fContract">${contractOpts}</select></div>
+    <div class="btn-row" style="margin-bottom:26px"><button class="btn primary" onclick="saveMember()">Save changes</button></div>
+    <div class="seclabel">Standing instructions file — appended to the identity section of every prompt</div>
+    <div class="field"><textarea id="fInstructions" style="min-height:160px;font-family:var(--font-mono);font-size:12px">${esc(P.instructions)}</textarea></div>
+    <div class="btn-row"><button class="btn primary" onclick="saveInstructions()">Save instructions</button></div>`;
+}
+
+async function postMemberNote(){
+  const input = document.getElementById('pNoteInput');
+  const body = input.value.trim();
+  if(!body || !profileCtx) return;
+  const out = await postAction('comment-create/member', {parent_entity_id: profileCtx, body});
+  if(out.ok){ toast('Standing note added — shapes every future run'); openProfile(profileCtx); }
+  else toast(out.error || 'Failed', true);
+}
+async function saveMember(){
+  if(!profileCtx) return;
+  const out = await postAction('member-update/' + encodeURIComponent(profileCtx), {
+    role: document.getElementById('fRole').value.trim(),
+    description: document.getElementById('fDesc').value.trim(),
+    status: document.getElementById('fStatus').value,
+    reports_to_member_id: document.getElementById('fMgr').value || null,
+    contract_id: document.getElementById('fContract').value || null,
+  });
+  if(out.ok){ toast('Member updated'); lastHash = null; poll(); openProfile(profileCtx); }
+  else toast(out.error || 'Update failed', true);
+}
+async function saveInstructions(){
+  if(!profileCtx) return;
+  const out = await postAction('member-instructions/' + encodeURIComponent(profileCtx), {
+    content: document.getElementById('fInstructions').value,
+  });
+  if(out.ok){ toast('Instructions saved — next run picks them up'); }
+  else toast(out.error || 'Save failed', true);
 }
 
 function renderPipeline(S){
@@ -1136,6 +1480,7 @@ document.addEventListener('keydown', e => {
   if(document.getElementById('docOverlay').classList.contains('show')) closeDoc();
   if(document.getElementById('workOverlay').classList.contains('show')) closeWork();
   if(document.getElementById('goalOverlay').classList.contains('show')) closeGoal();
+  if(document.getElementById('drawerWrap').classList.contains('show')) closeProfile();
 });
 document.getElementById('mConfirm').addEventListener('click', async () => {
   if(!modalCtx) return;

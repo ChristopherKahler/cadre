@@ -123,6 +123,27 @@ def _render_member_identity(
     if instructions:
         lines.append(f"\n{instructions}")
 
+    # Standing notes — Board comments on the MEMBER (not a unit) are
+    # persistent direction that shapes every future run, the Board's way
+    # of tuning a Member without editing framework files.
+    notes = [
+        c for c in repo.find(conn, "comment", parent_entity_id=member_id)
+        if c.get("parent_entity_type") == "member" and not c.get("archived")
+    ]
+    if notes:
+        notes.sort(key=lambda c: c.get("created_at") or "")
+        rendered = []
+        for c in notes[-5:]:
+            author = c.get("author_id") or c.get("author_type") or "?"
+            if c.get("author_type") == "board" and not c.get("author_id"):
+                author = "THE BOARD"
+            rendered.append(f"- [{c.get('created_at')}] {author}: {c.get('body')}")
+        lines.append(
+            "\n### Standing Notes\n"
+            "Persistent direction attached to you as a Member — apply these "
+            "to every run until they are archived.\n" + "\n".join(rendered)
+        )
+
     return "\n".join(lines)
 
 
