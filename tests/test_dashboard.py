@@ -89,6 +89,29 @@ def test_gate_actions(mock_dm):
     assert get(conn, "gate", gate["id"])["approver_comment"] == "ship it"
 
 
+@mock.patch("firm.services.gate.notify.send_board_dm", return_value={"sent": False, "reason": "test"})
+def test_gate_dismiss_clears_notification_not_decision(mock_dm):
+    """Dismiss touches the notification layer only — the decision is untouched
+    and the gate stays fully resolvable. Guards the field failure where a
+    dismiss button wired to gate-reject destroyed a live Board decision."""
+    conn = _fresh_conn()
+    from firm.services.gate import request_gate
+    gate = request_gate(conn, "chrisai", {
+        "requesting_member_id": "MEM-001",
+        "action": "Approve the thing",
+        "target_entity_type": "unit",
+        "target_entity_id": "UNIT-001",
+    })
+
+    dismissed = perform_action(conn, "gate-dismiss", gate["id"], {})
+    assert dismissed["status"] == "pending"          # decision untouched
+    assert dismissed["dismissed_at"] is not None      # notification cleared
+
+    # a dismissed gate is still fully resolvable — that is the whole point
+    approved = perform_action(conn, "gate-approve", gate["id"], {"comment": "ok"})
+    assert approved["status"] == "approved"
+
+
 @mock.patch("firm.services.escalation.notify.send_board_dm", return_value={"sent": True, "reason": "test"})
 def test_escalation_actions(mock_dm):
     conn = _fresh_conn()

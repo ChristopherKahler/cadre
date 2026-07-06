@@ -91,6 +91,31 @@ def test_hub_summary_counts(firms_root: Path):
     assert cards["beta"]["running"] == 0
 
 
+def test_hub_excludes_dismissed_gates(firms_root: Path):
+    """A dismissed gate drops off the attention surface (needs_you /
+    gates_pending) while a live pending gate still counts."""
+    db = firms_root / "beta-co" / ".firm" / "firm.db"
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    create(conn, "gate", {
+        "id": "GATE-100", "firm_id": "beta", "status": "pending",
+        "requesting_member_id": "MEM-001", "action": "decide this",
+        "target_entity_type": "member", "target_entity_id": "MEM-001",
+    })
+    create(conn, "gate", {
+        "id": "GATE-101", "firm_id": "beta", "status": "pending",
+        "requesting_member_id": "MEM-001", "action": "already handled",
+        "target_entity_type": "member", "target_entity_id": "MEM-001",
+        "dismissed_at": "2026-07-06T20:00:00+00:00",
+    })
+    conn.commit()
+    conn.close()
+
+    cards = {c["id"]: c for c in hub_summary(discover_firms(firms_root))["firms"]}
+    assert cards["beta"]["gates_pending"] == 1   # dismissed one excluded
+    assert cards["beta"]["needs_you"] == 1
+
+
 def test_assemble_state_stale_flag(firms_root: Path):
     db = firms_root / "alpha-co" / ".firm" / "firm.db"
     conn = sqlite3.connect(db)
