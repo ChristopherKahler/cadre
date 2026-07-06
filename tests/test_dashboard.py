@@ -495,3 +495,27 @@ def test_render_view_page_wraps_fragment_loader(tmp_path):
     assert "/api/views/table/fragment" in page
     assert "window.CadreShell" in page
     assert "__VIEW_ID__" not in page and "__TITLE__" not in page
+
+
+def test_view_dir_serving_and_safety(tmp_path):
+    from firm.dashboard.server import load_custom_views, read_view_dir_file
+    _write_manifest(tmp_path, [
+        {"id": "table", "fragment": "dashboard/views/table.html",
+         "dirs": {"art": "game/art"}},
+    ])
+    art = tmp_path / ".firm" / "game" / "art"
+    art.mkdir(parents=True)
+    (art / "kael.png").write_bytes(b"\x89PNG-fake")
+    view = load_custom_views(tmp_path)[0]
+
+    content, ctype = read_view_dir_file(tmp_path, view, "art", "kael.png")
+    assert content == b"\x89PNG-fake" and ctype == "image/png"
+
+    with pytest.raises(ValueError, match="not declared"):
+        read_view_dir_file(tmp_path, view, "secrets", "x.png")
+    with pytest.raises(ValueError, match="invalid filename"):
+        read_view_dir_file(tmp_path, view, "art", "../../firm.db")
+    with pytest.raises(ValueError, match="not servable"):
+        read_view_dir_file(tmp_path, view, "art", "kael.exe")
+    with pytest.raises(ValueError, match="cannot read"):
+        read_view_dir_file(tmp_path, view, "art", "missing.png")

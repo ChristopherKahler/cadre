@@ -74,11 +74,15 @@ def load_custom_views(workspace: Path) -> list[dict[str, Any]]:
         files = v.get("files") or {}
         if not isinstance(files, dict):
             files = {}
+        dirs = v.get("dirs") or {}
+        if not isinstance(dirs, dict):
+            dirs = {}
         views.append({
             "id": vid,
             "title": str(v.get("title") or vid),
             "fragment": str(v["fragment"]),
             "files": {str(k): str(p) for k, p in files.items()},
+            "dirs": {str(k): str(p) for k, p in dirs.items()},
         })
     return views
 
@@ -112,6 +116,36 @@ def read_view_file(workspace: Path, view: dict[str, Any], key: str) -> tuple[byt
         raise ValueError(f"cannot read {rel!r}: {exc}") from exc
     ctype = "application/json" if rel.endswith(".json") else "text/plain; charset=utf-8"
     return content, ctype
+
+
+_DIR_CTYPES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".webp": "image/webp", ".gif": "image/gif", ".svg": "image/svg+xml",
+    ".json": "application/json", ".md": "text/plain; charset=utf-8",
+}
+
+
+def read_view_dir_file(
+    workspace: Path, view: dict[str, Any], key: str, filename: str,
+) -> tuple[bytes, str]:
+    """Read one file from a manifest-declared directory (e.g. game art).
+
+    ``filename`` is a bare basename — no separators, declared extensions only.
+    """
+    rel = view.get("dirs", {}).get(key)
+    if rel is None:
+        raise ValueError(f"dir key {key!r} not declared for view {view['id']!r}")
+    if "/" in filename or "\\" in filename or filename.startswith("."):
+        raise ValueError(f"invalid filename {filename!r}")
+    suffix = Path(filename).suffix.lower()
+    ctype = _DIR_CTYPES.get(suffix)
+    if ctype is None:
+        raise ValueError(f"extension {suffix!r} not servable")
+    path = _firm_file(workspace, f"{rel}/{filename}")
+    try:
+        return path.read_bytes(), ctype
+    except OSError as exc:
+        raise ValueError(f"cannot read {key}/{filename}: {exc}") from exc
 
 
 _VIEW_PAGE_TEMPLATE = """<!doctype html>
@@ -666,6 +700,10 @@ def make_handler(workspace: Path, firm_id: str) -> type[BaseHTTPRequestHandler]:
                                    "text/html; charset=utf-8")
                     elif parts[3] == "file" and len(parts) == 5:
                         content, ctype = read_view_file(workspace, view, parts[4])
+                        self._send(200, content, ctype)
+                    elif parts[3] == "dir" and len(parts) == 6:
+                        content, ctype = read_view_dir_file(
+                            workspace, view, parts[4], parts[5])
                         self._send(200, content, ctype)
                     else:
                         raise ValueError("unknown view route")
