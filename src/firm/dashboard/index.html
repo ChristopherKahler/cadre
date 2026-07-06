@@ -313,7 +313,11 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
 .dwr-head .who{flex:1;min-width:0}
 .dwr-head h3{font-size:19px;line-height:1.2}
 .dwr-head .drole{color:var(--brand-text-secondary);font-size:13px}
-.dwr-head .dmeta2{font:500 11px var(--font-mono);color:var(--brand-text-dim);margin-top:3px}
+.chiprow{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--brand-text);
+  background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:9999px;padding:3px 10px;white-space:nowrap}
+.chip .cl{font:500 9px var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--brand-text-dim)}
+.chip .sdot{width:7px;height:7px}
 .dwr-tabs{display:flex;gap:2px;padding:0 16px;border-bottom:1px solid var(--brand-border);flex:none}
 .dwr-tab{border:none;background:none;color:var(--brand-text-secondary);font:500 13px var(--font-body);
   padding:11px 14px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
@@ -648,7 +652,7 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
       <div class="who">
         <h3 id="pName"></h3>
         <div class="drole" id="pRole"></div>
-        <div class="dmeta2" id="pMeta"></div>
+        <div class="chiprow" id="pMeta"></div>
       </div>
       <button class="btn sm" onclick="closeProfile()">Close</button>
     </div>
@@ -1047,8 +1051,15 @@ function renderProfile(P){
   document.getElementById('pAvatar').textContent = initials(m.name);
   document.getElementById('pName').textContent = m.name;
   document.getElementById('pRole').textContent = m.role || '';
-  document.getElementById('pMeta').textContent =
-    `${m.id} · ${m.status} · contract ${P.contract ? P.contract.name : 'none'} · reports to ${m.reports_to_member_id || 'THE BOARD'}`;
+  const mgr = m.reports_to_member_id
+    ? (P.members.find(x => x.id === m.reports_to_member_id)?.name || m.reports_to_member_id)
+    : 'THE BOARD';
+  const statusDot = m.status === 'active' ? 'ok' : 'warn';
+  document.getElementById('pMeta').innerHTML = `
+    <span class="chip"><span class="cl">ID</span> <span class="mono" style="font-size:11px">${esc(m.id)}</span></span>
+    <span class="chip"><span class="sdot ${statusDot}"></span> ${esc(m.status)}</span>
+    <span class="chip"><span class="cl">Contract</span> ${esc(P.contract ? P.contract.name : 'none')}</span>
+    <span class="chip"><span class="cl">Reports to</span> ${esc(mgr)}</span>`;
 
   // Overview
   document.getElementById('tab-overview').innerHTML = `
