@@ -432,6 +432,10 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .mcard.live{border-color:rgba(var(--brand-primary-rgb),.55);animation:cardring 2.2s ease-in-out infinite}
 @keyframes cardring{0%,100%{box-shadow:0 0 0 0 rgba(var(--brand-primary-rgb),.25)}50%{box-shadow:0 0 26px 3px rgba(var(--brand-primary-rgb),.30)}}
 @media(prefers-reduced-motion:reduce){.runstrip,.mcard.live{animation:none}.runstrip .rdot{animation:none}}
+.runstrip.stale{border-color:color-mix(in srgb, var(--brand-warning) 50%, transparent);
+  background:color-mix(in srgb, var(--brand-warning) 8%, transparent);color:var(--brand-warning);animation:none}
+.runstrip.stale .rdot{background:var(--brand-warning);box-shadow:none;animation:none}
+.runpanel .rp-item.stale{border-color:color-mix(in srgb, var(--brand-warning) 45%, transparent)}
 .runpanel .rp-item{background:var(--brand-surface);border:1px solid rgba(var(--brand-primary-rgb),.3);
   border-radius:12px;padding:16px;margin-bottom:12px}
 .runpanel .rp-item .rhead{display:flex;align-items:center;gap:8px;margin-bottom:10px}
@@ -773,6 +777,9 @@ document.getElementById('sbTrigger').addEventListener('click', () => {
 });
 
 /* ---- view router ---- */
+/* Hub tenancy: served under /f/<firm> the server stamps data-base on <html>;
+   standalone it's absent and BASE is ''. Every API URL goes through BASE. */
+const BASE = document.documentElement.dataset.base || '';
 const VIEWS = {dashboard:'Dashboard', roster:'Roster', ops:'Operations', goals:'Goals & spend', docs:'Deliverables', runs:'Runs', records:'Records'};
 let currentView = 'dashboard';
 function show(view){
@@ -795,7 +802,7 @@ const CUSTOM_VIEWS = {};   // id -> {title, files, loaded}
 async function initCustomViews(){
   let views = [];
   try{
-    const r = await fetch('/api/views');
+    const r = await fetch(BASE + '/api/views');
     if(r.ok) views = (await r.json()).views || [];
   }catch(e){ /* no manifest — nothing to mount */ }
   if(!views.length) return;
@@ -824,7 +831,7 @@ async function ensureFragment(id){
   cv.loaded = true;
   const page = document.getElementById('page-' + id);
   try{
-    const r = await fetch('/api/views/' + id + '/fragment');
+    const r = await fetch(BASE + '/api/views/' + id + '/fragment');
     if(!r.ok) throw new Error('fragment ' + r.status);
     page.innerHTML = await r.text();
     // innerHTML never executes scripts — recreate them so fragments can boot
@@ -843,14 +850,14 @@ window.CadreShell = {
   state: () => STATE,
   post: (path, body) => postAction(path, body),
   viewFile: async (viewId, key) => {
-    const r = await fetch('/api/views/' + viewId + '/file/' + key);
+    const r = await fetch(BASE + '/api/views/' + viewId + '/file/' + key);
     if(!r.ok) throw new Error(key + ' ' + r.status);
     const ct = r.headers.get('Content-Type') || '';
     return ct.includes('json') ? r.json() : r.text();
   },
   viewAction: async (viewId, key, body) => {
     try{
-      const r = await fetch('/api/views/' + viewId + '/action/' + key, {
+      const r = await fetch(BASE + '/api/views/' + viewId + '/action/' + key, {
         method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body || {}),
       });
       return await r.json();
@@ -862,7 +869,7 @@ window.CadreShell = {
 const STATUS_PILL = {
   done:'ok', completed:'ok', resolved:'ok', approved:'ok', active:'ok',
   in_progress:'warn', running:'warn', in_review:'warn', open:'warn', acknowledged:'warn', paused:'warn', blocked:'warn',
-  failed:'bad', timed_out:'bad', rejected:'bad',
+  failed:'bad', timed_out:'bad', rejected:'bad', stale:'bad',
   pending:'', cancelled:'dim', orphaned:'dim',
 };
 const STATUS_COLORS = {
@@ -898,7 +905,7 @@ const money = v => '$' + (Math.round((v ?? 0) * 100) / 100).toFixed(2);
 let sseOk = false;
 function connectSSE(){
   if(!window.EventSource) return;
-  const sse = new EventSource('/api/events');
+  const sse = new EventSource(BASE + '/api/events');
   sse.addEventListener('change', () => poll());
   sse.onopen = () => { sseOk = true; setLive(true); };
   sse.onerror = () => { sseOk = false; };  // EventSource retries itself
@@ -907,7 +914,7 @@ function connectSSE(){
 /* ---- polling (fallback heartbeat; SSE does the real-time work) ---- */
 async function poll(){
   try{
-    const r = await fetch('/api/state');
+    const r = await fetch(BASE + '/api/state');
     const s = await r.json();
     setLive(true);
     const h = JSON.stringify({...s, generated_at: null});
@@ -956,11 +963,12 @@ function updateEngagement(){
   app.classList.toggle('engaged', act.length > 0);
   const strip = document.getElementById('runStrip');
   strip.classList.toggle('on', act.length > 0);
+  strip.classList.toggle('stale', act.length > 0 && act.every(r => r.stale));
   if(act.length){
     const first = act[0];
     document.getElementById('runStripText').textContent = act.length === 1
-      ? `RUN ACTIVE — ${memberName(first.member_id)} · ${first.unit_id || '?'} · ${fmtElapsed(first.started_at)}`
-      : `${act.length} RUNS ACTIVE`;
+      ? `${first.stale ? 'RUN STALE' : 'RUN ACTIVE'} — ${memberName(first.member_id)} · ${first.unit_id || '?'} · ${fmtElapsed(first.started_at)}`
+      : (act.every(r => r.stale) ? `${act.length} RUNS STALE` : `${act.length} RUNS ACTIVE`);
   }
   // transition toasts: new runs ignite, finished runs report
   if(prevActiveIds !== null && prevActiveIds !== ids){
@@ -982,7 +990,7 @@ function updateEngagement(){
       if(!a.length) return;
       if(a.length === 1)
         document.getElementById('runStripText').textContent =
-          `RUN ACTIVE — ${memberName(a[0].member_id)} · ${a[0].unit_id || '?'} · ${fmtElapsed(a[0].started_at)}`;
+          `${a[0].stale ? 'RUN STALE' : 'RUN ACTIVE'} — ${memberName(a[0].member_id)} · ${a[0].unit_id || '?'} · ${fmtElapsed(a[0].started_at)}`;
       document.querySelectorAll('[data-run-started]').forEach(el =>
         el.textContent = fmtElapsed(el.dataset.runStarted));
     }, 1000);
@@ -997,19 +1005,21 @@ document.getElementById('runWrap').addEventListener('click', e => { if(e.target.
 function renderRunPanel(){
   const act = activeRuns();
   const recent = ((STATE || {}).runs || []).filter(r => r.status !== 'running').slice(0, 6);
+  const staleCount = act.filter(r => r.stale).length;
   document.getElementById('rpSub').textContent = act.length
-    ? `${act.length} member${act.length === 1 ? ' is' : 's are'} working right now`
+    ? `${act.length} member${act.length === 1 ? ' is' : 's are'} working right now${staleCount ? ` · ${staleCount} presumed dead` : ''}`
     : 'Nothing running — the floor is between pulses';
   document.getElementById('rpBody').innerHTML =
     (act.length ? act.map(r => {
       const unit = ((STATE || {}).units || []).find(u => u.id === r.unit_id);
-      return `<div class="rp-item">
-        <div class="rhead">${pill(r.id, 'ok')}${pill('running')}
+      return `<div class="rp-item${r.stale ? ' stale' : ''}">
+        <div class="rhead">${pill(r.id, 'ok')}${r.stale ? pill('stale') : pill('running')}
           <span class="elapsed" data-run-started="${esc(r.started_at)}">${fmtElapsed(r.started_at)}</span></div>
         <div class="rp-line"><span class="k">Member</span><span class="eref" onclick="closeRunPanel();openProfile('${esc(r.member_id)}')">${esc(memberName(r.member_id))}</span></div>
         <div class="rp-line"><span class="k">Unit</span><span>${r.unit_id ? `<span class="eref" onclick="closeRunPanel();gotoUnit('${esc(r.unit_id)}')">${esc(r.unit_id)}</span> ${esc(unit ? unit.name : '')}` : '—'}</span></div>
         <div class="rp-line"><span class="k">Started</span><span title="${esc(tAttr(r.started_at))}">${timeAgo(r.started_at)}</span></div>
         <div class="rp-line"><span class="k">Source</span><span>${esc(r.invocation_source || 'pulse')}</span></div>
+        ${r.stale ? '<div class="rp-line"><span class="k">Note</span><span>past 2× contract timeout — pulse presumed dead; the next pulse reaps this row</span></div>' : ''}
       </div>`;
     }).join('') : '<div class="empty" style="margin-bottom:16px">No active runs. The next pulse lights this up.</div>') +
     `<div class="seclabel" style="margin-top:8px">Recent completions</div>
@@ -1346,7 +1356,7 @@ document.getElementById('drawerWrap').addEventListener('click', e => { if(e.targ
 
 async function openProfile(memberId){
   try{
-    const r = await fetch('/api/member/' + encodeURIComponent(memberId));
+    const r = await fetch(BASE + '/api/member/' + encodeURIComponent(memberId));
     const P = await r.json();
     if(P.error){ toast(P.error, true); return; }
     profileCtx = memberId;
@@ -1625,7 +1635,7 @@ function renderDocComments(comments){
 }
 async function openDoc(docId){
   try{
-    const r = await fetch('/api/doc/' + encodeURIComponent(docId));
+    const r = await fetch(BASE + '/api/doc/' + encodeURIComponent(docId));
     const out = await r.json();
     if(out.error){ toast(out.error, true); return; }
     docCtx = docId;
@@ -1647,7 +1657,7 @@ async function postDocComment(){
   const out = await postAction('comment-create/document', {parent_entity_id: docCtx, body});
   if(out.ok){
     input.value = '';
-    const r = await fetch('/api/doc/' + encodeURIComponent(docCtx));
+    const r = await fetch(BASE + '/api/doc/' + encodeURIComponent(docCtx));
     const fresh = await r.json();
     if(!fresh.error) renderDocComments(fresh.comments);
     toast('Comment posted — the team sees it in their next briefing');
@@ -1663,7 +1673,7 @@ async function postDocRevision(){
     input.value = '';
     const u = out.result.unit;
     toast(`${u.id} created${u.assignee_member_id ? ' for ' + u.assignee_member_id : ''} — revision lands next pulse`);
-    const r = await fetch('/api/doc/' + encodeURIComponent(docCtx));
+    const r = await fetch(BASE + '/api/doc/' + encodeURIComponent(docCtx));
     const fresh = await r.json();
     if(!fresh.error) renderDocComments(fresh.comments);
     lastHash = null;
@@ -1750,7 +1760,7 @@ function openUnitComment(unitId){
 }
 async function postAction(path, body){
   try{
-    const r = await fetch('/api/action/' + path, {
+    const r = await fetch(BASE + '/api/action/' + path, {
       method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body),
     });
     return await r.json();
@@ -1767,7 +1777,7 @@ function renderRuns(S){
       if(r.error){ try{ const e = typeof r.error === 'string' ? JSON.parse(r.error) : r.error; errTitle = e.type || ''; }catch(_){ errTitle = String(r.error).slice(0,80); } }
       return `<tr>
       <td>${esc(r.id)}</td><td class="mono" style="font-size:12px">${esc(r.member_id)}</td><td class="mono" style="font-size:12px">${esc(r.unit_id || '—')}</td>
-      <td title="${esc(errTitle)}">${pill(r.status)}</td><td class="mono" style="font-size:12px">${dur(r.duration_sec)}</td>
+      <td title="${esc(errTitle)}">${pill(r.stale ? 'stale' : r.status)}</td><td class="mono" style="font-size:12px">${dur(r.duration_sec)}</td>
       <td class="mono" style="font-size:12px">${r.cost_usd != null ? money(r.cost_usd) : '—'}</td>
       <td class="muted">${when(r.started_at)}</td>
     </tr>`;

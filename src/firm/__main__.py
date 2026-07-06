@@ -195,6 +195,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Firm scope. Defaults to $FIRM_ID or 'chrisai'.",
     )
 
+    # ---- hub subparser ----
+    hub_parser = subparsers.add_parser(
+        "hub",
+        help="Serve EVERY firm from one process — portfolio landing at /, "
+             "each boardroom at /f/<firm-id>/.",
+    )
+    hub_parser.add_argument(
+        "--firms-root", dest="firms_root", type=Path,
+        default=Path.home() / "firms",
+        help="Directory scanned for firm workspaces (default ~/firms). "
+             "Any child holding .firm/firm.db is served; new firms appear live.",
+    )
+    hub_parser.add_argument(
+        "--host", default="127.0.0.1",
+        help="Bind address (default 127.0.0.1 — local only).",
+    )
+    hub_parser.add_argument(
+        "--port", type=int, default=8484,
+        help="Port to serve on (default 8484).",
+    )
+
     # ---- roll subparser ----
     roll_parser = subparsers.add_parser(
         "roll",
@@ -357,6 +378,15 @@ def main(argv: list[str] | None = None) -> int:
             host=args.host,
             port=args.port,
             firm_id=firm_id,
+        )
+
+    if args.command == "hub":
+        from firm.dashboard.server import run_hub
+
+        return run_hub(
+            args.firms_root,
+            host=args.host,
+            port=args.port,
         )
 
     if args.command == "roll":

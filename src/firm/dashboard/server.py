@@ -25,7 +25,11 @@ from typing import Any
 from firm.core import repo
 from firm.core.db import connect, get_db_path
 from firm.core.migrate import apply_migrations
-from firm.pulse.orchestrator import compute_load
+from firm.pulse.orchestrator import (
+    _REAP_GRACE_SEC,
+    _contract_timeout_sec,
+    compute_load,
+)
 from firm.services import comment as comment_svc
 from firm.services import document as document_svc
 from firm.services import escalation as escalation_svc
@@ -201,12 +205,13 @@ _VIEW_PAGE_TEMPLATE = """<!doctype html>
 <script>
 /* Minimal CadreShell bridge — same contract the boardroom shell exposes,
    so a fragment renders identically full-page and embedded. */
+const BASE = '__BASE__';
 window.CadreShell = {
   _state: {},
   state: function(){ return this._state; },
   post: async function(path, body){
     try{
-      const r = await fetch('/api/action/' + path, {
+      const r = await fetch(BASE + '/api/action/' + path, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(body || {}),
       });
@@ -214,14 +219,14 @@ window.CadreShell = {
     }catch(e){ return {ok: false, error: String(e)}; }
   },
   viewFile: async function(viewId, key){
-    const r = await fetch('/api/views/' + viewId + '/file/' + key);
+    const r = await fetch(BASE + '/api/views/' + viewId + '/file/' + key);
     if(!r.ok) throw new Error(key + ' ' + r.status);
     const ct = r.headers.get('Content-Type') || '';
     return ct.includes('json') ? r.json() : r.text();
   },
   viewAction: async function(viewId, key, body){
     try{
-      const r = await fetch('/api/views/' + viewId + '/action/' + key, {
+      const r = await fetch(BASE + '/api/views/' + viewId + '/action/' + key, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(body || {}),
       });
@@ -231,18 +236,18 @@ window.CadreShell = {
 };
 async function __poll(){
   try{
-    const r = await fetch('/api/state');
+    const r = await fetch(BASE + '/api/state');
     CadreShell._state = await r.json();
     document.dispatchEvent(new CustomEvent('cadre:state', {detail: CadreShell._state}));
   }catch(e){}
 }
 try{
-  const es = new EventSource('/api/events');
+  const es = new EventSource(BASE + '/api/events');
   es.addEventListener('change', __poll);
 }catch(e){}
 setInterval(__poll, 15000);
 __poll().then(async function(){
-  const r = await fetch('/api/views/__VIEW_ID__/fragment');
+  const r = await fetch(BASE + '/api/views/__VIEW_ID__/fragment');
   const root = document.getElementById('viewRoot');
   root.innerHTML = await r.text();
   root.querySelectorAll('script').forEach(function(old){
@@ -254,16 +259,17 @@ __poll().then(async function(){
 </script></body></html>"""
 
 
-def render_view_page(view: dict[str, Any]) -> bytes:
+def render_view_page(view: dict[str, Any], base: str = "") -> bytes:
     """Full-page wrapper for a custom view — the fragment as its own app.
 
     Same fragment, same CadreShell contract as the boardroom shell; no
-    boardroom chrome. Served at ``/view/<id>``.
+    boardroom chrome. Served at ``/view/<id>`` (hub: ``/f/<firm>/view/<id>``).
     """
     return (
         _VIEW_PAGE_TEMPLATE
         .replace("__TITLE__", view["title"])
         .replace("__VIEW_ID__", view["id"])
+        .replace("__BASE__", base)
     ).encode()
 
 
@@ -369,10 +375,26 @@ def assemble_state(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
         key=lambda r: r.get("started_at") or "",
         reverse=True,
     )[:30]
+    now = datetime.now(tz=timezone.utc)
     for r in runs:
         r["duration_sec"] = _run_duration_sec(r)
         r["cost_usd"] = run_costs.get(r["id"])
         r.pop("prompt_snapshot", None)
+        if r.get("status") == "running":
+            # Mirror reap_stale_runs: past 2x contract timeout + grace the
+            # spawning pulse is presumed dead — surface that instead of an
+            # eternally-green "running" row (Board can't act on a ghost).
+            try:
+                started = datetime.fromisoformat(r.get("started_at") or "")
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                started = None
+            deadline = 2 * _contract_timeout_sec(conn, r["member_id"]) + _REAP_GRACE_SEC
+            r["stale"] = (
+                started is not None
+                and (now - started).total_seconds() > deadline
+            )
 
     records = sorted(
         repo.find(conn, "records", firm_id=firm_id),
@@ -691,6 +713,200 @@ def firm_id_of(conn: sqlite3.Connection, body: dict[str, Any]) -> str:
 # HTTP layer
 # ---------------------------------------------------------------------------
 
+def _http_send(
+    h: BaseHTTPRequestHandler,
+    status: int,
+    payload: dict | bytes,
+    content_type: str = "application/json",
+) -> None:
+    body = payload if isinstance(payload, bytes) else json.dumps(payload, default=str).encode()
+    h.send_response(status)
+    h.send_header("Content-Type", content_type)
+    h.send_header("Content-Length", str(len(body)))
+    h.send_header("Cache-Control", "no-store")
+    h.end_headers()
+    h.wfile.write(body)
+
+
+def _serve_index(h: BaseHTTPRequestHandler, base: str = "") -> None:
+    body = _INDEX_HTML.read_bytes()
+    if base:
+        # The SPA reads document.documentElement.dataset.base to prefix
+        # every fetch/EventSource URL — one injection point, zero rewrites.
+        body = body.replace(b"<html", f'<html data-base="{base}"'.encode(), 1)
+    _http_send(h, 200, body, "text/html; charset=utf-8")
+
+
+def _sse_stream(h: BaseHTTPRequestHandler, db_path: Path) -> None:
+    """SSE push: watch SQLite data_version (bumped by any other
+    connection's commit) and tell the client the moment the firm
+    changes — escalations, gates, runs land sub-second instead of
+    on the poll cadence. Stdlib-only; EventSource auto-reconnects."""
+    h.send_response(200)
+    h.send_header("Content-Type", "text/event-stream")
+    h.send_header("Cache-Control", "no-store")
+    h.end_headers()
+    conn = connect(db_path)
+    try:
+        last = conn.execute("PRAGMA data_version").fetchone()[0]
+        h.wfile.write(b"retry: 2000\n\n")
+        h.wfile.flush()
+        ticks = 0
+        while True:
+            time.sleep(0.5)
+            ticks += 1
+            cur = conn.execute("PRAGMA data_version").fetchone()[0]
+            if cur != last:
+                last = cur
+                h.wfile.write(b"event: change\ndata: {}\n\n")
+                h.wfile.flush()
+            elif ticks % 30 == 0:
+                h.wfile.write(b": ping\n\n")  # keep-alive
+                h.wfile.flush()
+    except (BrokenPipeError, ConnectionResetError, OSError):
+        pass  # client went away — thread ends
+    finally:
+        conn.close()
+
+
+def _firm_get(
+    h: BaseHTTPRequestHandler,
+    workspace: Path,
+    db_path: Path,
+    firm_id: str,
+    path: str,
+    base: str = "",
+) -> None:
+    """GET routing for one firm's boardroom. *path* is firm-relative
+    (hub strips its /f/<firm> prefix); *base* prefixes client-side URLs."""
+    if path in ("/", "/index.html"):
+        _serve_index(h, base)
+        return
+    if path == "/api/events":
+        _sse_stream(h, db_path)
+        return
+    if path == "/api/state":
+        conn = connect(db_path)
+        try:
+            _http_send(h, 200, assemble_state(conn, firm_id))
+        finally:
+            conn.close()
+        return
+    if path.startswith("/view/"):
+        vid = path.strip("/").split("/")[1].split("?")[0]
+        views = {v["id"]: v for v in load_custom_views(workspace)}
+        if vid in views:
+            _http_send(h, 200, render_view_page(views[vid], base), "text/html; charset=utf-8")
+        else:
+            _http_send(h, 404, {"error": f"unknown view {vid!r}"})
+        return
+    if path == "/api/views":
+        views = load_custom_views(workspace)
+        _http_send(h, 200, {"views": [
+            {"id": v["id"], "title": v["title"], "files": sorted(v["files"])}
+            for v in views
+        ]})
+        return
+    if path.startswith("/api/views/"):
+        parts = path.strip("/").split("/")
+        # /api/views/<id>/fragment  |  /api/views/<id>/file/<key>
+        views = {v["id"]: v for v in load_custom_views(workspace)}
+        view = views.get(parts[2]) if len(parts) >= 4 else None
+        try:
+            if view is None:
+                raise ValueError("unknown view")
+            if parts[3] == "fragment" and len(parts) == 4:
+                _http_send(h, 200, read_view_fragment(workspace, view),
+                           "text/html; charset=utf-8")
+            elif parts[3] == "file" and len(parts) == 5:
+                content, ctype = read_view_file(workspace, view, parts[4])
+                _http_send(h, 200, content, ctype)
+            elif parts[3] == "dir" and len(parts) == 6:
+                content, ctype = read_view_dir_file(
+                    workspace, view, parts[4], parts[5])
+                _http_send(h, 200, content, ctype)
+            else:
+                raise ValueError("unknown view route")
+        except ValueError as exc:
+            _http_send(h, 404, {"error": str(exc)})
+        return
+    if path.startswith("/api/member/"):
+        member_id = path.rsplit("/", 1)[1]
+        conn = connect(db_path)
+        try:
+            _http_send(h, 200, member_profile(conn, workspace, member_id))
+        except ValueError as exc:
+            _http_send(h, 400, {"error": str(exc)})
+        finally:
+            conn.close()
+        return
+    if path.startswith("/api/doc/"):
+        doc_id = path.rsplit("/", 1)[1]
+        conn = connect(db_path)
+        try:
+            _http_send(h, 200, read_document(conn, workspace, doc_id))
+        except ValueError as exc:
+            _http_send(h, 400, {"error": str(exc)})
+        finally:
+            conn.close()
+        return
+    _http_send(h, 404, {"error": "not found"})
+
+
+def _firm_post(
+    h: BaseHTTPRequestHandler,
+    workspace: Path,
+    db_path: Path,
+    firm_id: str,
+    path: str,
+) -> None:
+    """POST routing for one firm's boardroom (firm-relative *path*)."""
+    parts = path.strip("/").split("/")
+    # Routes: /api/views/<id>/action/<key> — firm-declared view actions
+    if len(parts) == 5 and parts[:2] == ["api", "views"] and parts[3] == "action":
+        length = int(h.headers.get("Content-Length") or 0)
+        raw = h.rfile.read(length) if length else b"{}"
+        try:
+            body = json.loads(raw or b"{}")
+        except json.JSONDecodeError:
+            _http_send(h, 400, {"ok": False, "error": "invalid JSON body"})
+            return
+        views = {v["id"]: v for v in load_custom_views(workspace)}
+        view = views.get(parts[2])
+        try:
+            if view is None:
+                raise ValueError(f"unknown view {parts[2]!r}")
+            _http_send(h, 200, run_view_action(workspace, view, parts[4], body))
+        except ValueError as exc:
+            _http_send(h, 404, {"ok": False, "error": str(exc)})
+        return
+    # Routes: /api/action/<action>/<entity_id>
+    if len(parts) != 4 or parts[:2] != ["api", "action"]:
+        _http_send(h, 404, {"error": "not found"})
+        return
+    _, _, action, entity_id = parts
+    length = int(h.headers.get("Content-Length") or 0)
+    raw = h.rfile.read(length) if length else b"{}"
+    try:
+        body = json.loads(raw or b"{}")
+    except json.JSONDecodeError:
+        _http_send(h, 400, {"error": "invalid JSON body"})
+        return
+    conn = connect(db_path)
+    try:
+        if action == "member-instructions":
+            result = write_instructions(
+                conn, workspace, entity_id, body.get("content") or "",
+            )
+        else:
+            result = perform_action(conn, action, entity_id, body)
+        _http_send(h, 200, {"ok": True, "result": result})
+    except ValueError as exc:
+        _http_send(h, 400, {"ok": False, "error": str(exc)})
+    finally:
+        conn.close()
+
+
 def make_handler(workspace: Path, firm_id: str) -> type[BaseHTTPRequestHandler]:
     db_path = get_db_path(workspace)
 
@@ -700,165 +916,11 @@ def make_handler(workspace: Path, firm_id: str) -> type[BaseHTTPRequestHandler]:
         def log_message(self, format: str, *args: Any) -> None:
             pass  # keep the terminal quiet; this is a local tool
 
-        def _send(self, status: int, payload: dict | bytes, content_type: str = "application/json") -> None:
-            body = payload if isinstance(payload, bytes) else json.dumps(payload, default=str).encode()
-            self.send_response(status)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
-
         def do_GET(self) -> None:
-            if self.path in ("/", "/index.html"):
-                self._send(200, _INDEX_HTML.read_bytes(), "text/html; charset=utf-8")
-                return
-            if self.path == "/api/events":
-                self._stream_events()
-                return
-            if self.path == "/api/state":
-                conn = connect(db_path)
-                try:
-                    self._send(200, assemble_state(conn, firm_id))
-                finally:
-                    conn.close()
-                return
-            if self.path.startswith("/view/"):
-                vid = self.path.strip("/").split("/")[1].split("?")[0]
-                views = {v["id"]: v for v in load_custom_views(workspace)}
-                if vid in views:
-                    self._send(200, render_view_page(views[vid]), "text/html; charset=utf-8")
-                else:
-                    self._send(404, {"error": f"unknown view {vid!r}"})
-                return
-            if self.path == "/api/views":
-                views = load_custom_views(workspace)
-                self._send(200, {"views": [
-                    {"id": v["id"], "title": v["title"], "files": sorted(v["files"])}
-                    for v in views
-                ]})
-                return
-            if self.path.startswith("/api/views/"):
-                parts = self.path.strip("/").split("/")
-                # /api/views/<id>/fragment  |  /api/views/<id>/file/<key>
-                views = {v["id"]: v for v in load_custom_views(workspace)}
-                view = views.get(parts[2]) if len(parts) >= 4 else None
-                try:
-                    if view is None:
-                        raise ValueError("unknown view")
-                    if parts[3] == "fragment" and len(parts) == 4:
-                        self._send(200, read_view_fragment(workspace, view),
-                                   "text/html; charset=utf-8")
-                    elif parts[3] == "file" and len(parts) == 5:
-                        content, ctype = read_view_file(workspace, view, parts[4])
-                        self._send(200, content, ctype)
-                    elif parts[3] == "dir" and len(parts) == 6:
-                        content, ctype = read_view_dir_file(
-                            workspace, view, parts[4], parts[5])
-                        self._send(200, content, ctype)
-                    else:
-                        raise ValueError("unknown view route")
-                except ValueError as exc:
-                    self._send(404, {"error": str(exc)})
-                return
-            if self.path.startswith("/api/member/"):
-                member_id = self.path.rsplit("/", 1)[1]
-                conn = connect(db_path)
-                try:
-                    self._send(200, member_profile(conn, workspace, member_id))
-                except ValueError as exc:
-                    self._send(400, {"error": str(exc)})
-                finally:
-                    conn.close()
-                return
-            if self.path.startswith("/api/doc/"):
-                doc_id = self.path.rsplit("/", 1)[1]
-                conn = connect(db_path)
-                try:
-                    self._send(200, read_document(conn, workspace, doc_id))
-                except ValueError as exc:
-                    self._send(400, {"error": str(exc)})
-                finally:
-                    conn.close()
-                return
-            self._send(404, {"error": "not found"})
-
-        def _stream_events(self) -> None:
-            """SSE push: watch SQLite data_version (bumped by any other
-            connection's commit) and tell the client the moment the firm
-            changes — escalations, gates, runs land sub-second instead of
-            on the poll cadence. Stdlib-only; EventSource auto-reconnects."""
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            conn = connect(db_path)
-            try:
-                last = conn.execute("PRAGMA data_version").fetchone()[0]
-                self.wfile.write(b"retry: 2000\n\n")
-                self.wfile.flush()
-                ticks = 0
-                while True:
-                    time.sleep(0.5)
-                    ticks += 1
-                    cur = conn.execute("PRAGMA data_version").fetchone()[0]
-                    if cur != last:
-                        last = cur
-                        self.wfile.write(b"event: change\ndata: {}\n\n")
-                        self.wfile.flush()
-                    elif ticks % 30 == 0:
-                        self.wfile.write(b": ping\n\n")  # keep-alive
-                        self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError, OSError):
-                pass  # client went away — thread ends
-            finally:
-                conn.close()
+            _firm_get(self, workspace, db_path, firm_id, self.path)
 
         def do_POST(self) -> None:
-            parts = self.path.strip("/").split("/")
-            # Routes: /api/views/<id>/action/<key> — firm-declared view actions
-            if len(parts) == 5 and parts[:2] == ["api", "views"] and parts[3] == "action":
-                length = int(self.headers.get("Content-Length") or 0)
-                raw = self.rfile.read(length) if length else b"{}"
-                try:
-                    body = json.loads(raw or b"{}")
-                except json.JSONDecodeError:
-                    self._send(400, {"ok": False, "error": "invalid JSON body"})
-                    return
-                views = {v["id"]: v for v in load_custom_views(workspace)}
-                view = views.get(parts[2])
-                try:
-                    if view is None:
-                        raise ValueError(f"unknown view {parts[2]!r}")
-                    self._send(200, run_view_action(workspace, view, parts[4], body))
-                except ValueError as exc:
-                    self._send(404, {"ok": False, "error": str(exc)})
-                return
-            # Routes: /api/action/<action>/<entity_id>
-            if len(parts) != 4 or parts[:2] != ["api", "action"]:
-                self._send(404, {"error": "not found"})
-                return
-            _, _, action, entity_id = parts
-            length = int(self.headers.get("Content-Length") or 0)
-            raw = self.rfile.read(length) if length else b"{}"
-            try:
-                body = json.loads(raw or b"{}")
-            except json.JSONDecodeError:
-                self._send(400, {"error": "invalid JSON body"})
-                return
-            conn = connect(db_path)
-            try:
-                if action == "member-instructions":
-                    result = write_instructions(
-                        conn, workspace, entity_id, body.get("content") or "",
-                    )
-                else:
-                    result = perform_action(conn, action, entity_id, body)
-                self._send(200, {"ok": True, "result": result})
-            except ValueError as exc:
-                self._send(400, {"ok": False, "error": str(exc)})
-            finally:
-                conn.close()
+            _firm_post(self, workspace, db_path, firm_id, self.path)
 
     return DashboardHandler
 
@@ -893,6 +955,258 @@ def run_dashboard(
         "url": f"http://{host}:{port}",
         "workspace": str(workspace),
         "firm_id": firm_id,
+    }))
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Hub — one process, every firm (portfolio landing + /f/<firm>/ tenants)
+# ---------------------------------------------------------------------------
+
+_FIRM_PREFIX_RE = re.compile(r"^/f/([a-z0-9][a-z0-9_-]*)(/.*)?$")
+
+
+def discover_firms(root: Path) -> dict[str, dict[str, Any]]:
+    """Scan *root* for workspaces holding ``.firm/firm.db``.
+
+    The firm id comes from each db's firm row (folder names are the
+    operator's business; ids are the runtime's). New firm = new folder —
+    no registration step.
+    """
+    firms: dict[str, dict[str, Any]] = {}
+    if not root.is_dir():
+        return firms
+    for d in sorted(root.iterdir()):
+        db = d / ".firm" / "firm.db"
+        if not db.exists():
+            continue
+        try:
+            conn = connect(db)
+            try:
+                apply_migrations(conn)
+                row = conn.execute("SELECT id, name FROM firm LIMIT 1").fetchone()
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            continue  # unreadable db — skip, don't take the hub down
+        if row:
+            firms[row["id"]] = {
+                "workspace": d.resolve(),
+                "db_path": db.resolve(),
+                "name": row["name"] or row["id"],
+            }
+    return firms
+
+
+def hub_summary(firms: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Portfolio payload: one health card per firm."""
+    now = datetime.now(tz=timezone.utc)
+    cards = []
+    for fid, info in firms.items():
+        conn = connect(info["db_path"])
+        try:
+            members = repo.find(conn, "member", firm_id=fid)
+            gates = [g for g in repo.find(conn, "gate", firm_id=fid)
+                     if g.get("status") == "pending"]
+            escalations = [e for e in repo.find(conn, "escalation", firm_id=fid)
+                           if e.get("status") in ("open", "acknowledged")]
+            running = repo.find(conn, "member_run", firm_id=fid, status="running")
+            stale = 0
+            for r in running:
+                try:
+                    started = datetime.fromisoformat(r.get("started_at") or "")
+                    if started.tzinfo is None:
+                        started = started.replace(tzinfo=timezone.utc)
+                except (TypeError, ValueError):
+                    continue
+                deadline = 2 * _contract_timeout_sec(conn, r["member_id"]) + _REAP_GRACE_SEC
+                if (now - started).total_seconds() > deadline:
+                    stale += 1
+            last_run = conn.execute(
+                "SELECT MAX(started_at) FROM member_run WHERE firm_id = ?", (fid,),
+            ).fetchone()[0]
+            spend = conn.execute(
+                "SELECT COALESCE(SUM(dollar_equivalent), 0) FROM usage_event "
+                "WHERE firm_id = ?", (fid,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        cards.append({
+            "id": fid,
+            "name": info["name"],
+            "workspace": str(info["workspace"]),
+            "needs_you": len(gates) + len(escalations),
+            "gates_pending": len(gates),
+            "escalations_open": len(escalations),
+            "running": len(running),
+            "stale_runs": stale,
+            "members_active": sum(1 for m in members if m.get("status") == "active"),
+            "members_total": len(members),
+            "spend_usd": round(float(spend or 0), 2),
+            "last_run_at": last_run,
+            "views": [{"id": v["id"], "title": v["title"]}
+                      for v in load_custom_views(info["workspace"])],
+        })
+    return {"generated_at": now.isoformat(), "firms": cards}
+
+
+_HUB_HTML = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cadre — Boardrooms</title>
+<style>
+:root{--canvas:#0f1211;--card:#161a18;--border:#262b28;--border-hi:#33403a;--text:#e8ebe9;
+  --dim:#8a938e;--mono:#6b746f;--ok:#22c55e;--warn:#eab308;--gold:#d4a94a;--danger:#ef4444}
+*{box-sizing:border-box;margin:0}
+body{background:var(--canvas);color:var(--text);font:15px/1.5 system-ui,sans-serif;padding:40px 24px}
+.wrap{max-width:1080px;margin:0 auto}
+h1{font-size:22px;font-weight:650;letter-spacing:-.01em}
+.sub{color:var(--dim);font-size:13px;margin:4px 0 28px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
+a.fcard{display:block;background:var(--card);border:1px solid var(--border);border-radius:14px;
+  padding:20px;text-decoration:none;color:inherit;transition:border-color 160ms}
+a.fcard:hover{border-color:var(--border-hi)}
+a.fcard.attn{border-color:rgba(212,169,74,.5)}
+.fname{font-size:16px;font-weight:650}
+.fid{font:500 10.5px ui-monospace,monospace;letter-spacing:.08em;color:var(--mono);text-transform:uppercase;margin-top:2px}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;margin-top:14px}
+.stat .k{font:500 9.5px ui-monospace,monospace;letter-spacing:.1em;color:var(--mono);text-transform:uppercase}
+.stat .v{font-size:14px;font-weight:600;margin-top:1px}
+.v .warn{color:var(--warn)} .v.gold{color:var(--gold)} .v.ok{color:var(--ok)}
+.views{margin-top:14px;padding-top:12px;border-top:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap}
+.views a{font-size:12px;color:var(--ok);text-decoration:none;border:1px solid var(--border);
+  border-radius:9999px;padding:3px 10px}
+.views a:hover{border-color:var(--ok)}
+.empty{color:var(--dim);padding:40px;text-align:center}
+</style></head><body><div class="wrap">
+<h1>Cadre — Boardrooms</h1>
+<div class="sub" id="sub">Every firm, one door.</div>
+<div class="grid" id="grid"><div class="empty">Loading…</div></div>
+</div>
+<script>
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function ago(iso){
+  if(!iso) return 'never';
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if(s < 90) return Math.round(s) + 's ago';
+  if(s < 5400) return Math.round(s/60) + 'm ago';
+  if(s < 129600) return Math.round(s/3600) + 'h ago';
+  return Math.round(s/86400) + 'd ago';
+}
+async function load(){
+  try{
+    const r = await fetch('/api/hub');
+    const data = await r.json();
+    const firms = data.firms || [];
+    document.getElementById('sub').textContent =
+      firms.length + ' firm' + (firms.length === 1 ? '' : 's') + ' · one door.';
+    document.getElementById('grid').innerHTML = firms.length ? firms.map(f => `
+      <a class="fcard${f.needs_you ? ' attn' : ''}" href="/f/${esc(f.id)}/">
+        <div class="fname">${esc(f.name)}</div>
+        <div class="fid">${esc(f.id)}</div>
+        <div class="stats">
+          <div class="stat"><div class="k">Needs you</div>
+            <div class="v${f.needs_you ? ' gold' : ''}">${f.needs_you}</div></div>
+          <div class="stat"><div class="k">Running</div>
+            <div class="v${f.running && !f.stale_runs ? ' ok' : ''}">${f.running}${f.stale_runs ? ` <span class="warn">(${f.stale_runs} stale)</span>` : ''}</div></div>
+          <div class="stat"><div class="k">Members</div>
+            <div class="v">${f.members_active}/${f.members_total}</div></div>
+          <div class="stat"><div class="k">Spend</div>
+            <div class="v">$${(f.spend_usd || 0).toFixed(2)}</div></div>
+          <div class="stat"><div class="k">Last run</div>
+            <div class="v">${esc(ago(f.last_run_at))}</div></div>
+        </div>
+        ${f.views && f.views.length ? `<div class="views">${f.views.map(v =>
+          `<a href="/f/${esc(f.id)}/view/${esc(v.id)}" onclick="event.stopPropagation()">${esc(v.title)} ↗</a>`).join('')}</div>` : ''}
+      </a>`).join('') : '<div class="empty">No firms found.</div>';
+  }catch(e){}
+}
+load(); setInterval(load, 10000);
+</script></body></html>"""
+
+
+def make_hub_handler(root: Path) -> type[BaseHTTPRequestHandler]:
+    registry: dict[str, dict[str, Any]] = discover_firms(root)
+
+    def _resolve(fid: str) -> dict[str, Any] | None:
+        if fid not in registry:
+            registry.clear()
+            registry.update(discover_firms(root))  # lazy rescan — new firms appear live
+        return registry.get(fid)
+
+    class HubHandler(BaseHTTPRequestHandler):
+        server_version = "CadreHub/1.0"
+
+        def log_message(self, format: str, *args: Any) -> None:
+            pass  # local tool — keep the terminal quiet
+
+        def do_GET(self) -> None:
+            path = self.path
+            if path in ("/", "/index.html"):
+                _http_send(self, 200, _HUB_HTML.encode(), "text/html; charset=utf-8")
+                return
+            if path == "/api/hub":
+                registry.clear()
+                registry.update(discover_firms(root))
+                _http_send(self, 200, hub_summary(registry))
+                return
+            m = _FIRM_PREFIX_RE.match(path)
+            if m:
+                fid, sub = m.group(1), m.group(2) or ""
+                info = _resolve(fid)
+                if info is None:
+                    _http_send(self, 404, {"error": f"unknown firm {fid!r}"})
+                    return
+                if not sub:  # /f/<firm> → /f/<firm>/ so relative URLs resolve
+                    self.send_response(302)
+                    self.send_header("Location", f"/f/{fid}/")
+                    self.end_headers()
+                    return
+                _firm_get(self, info["workspace"], info["db_path"], fid, sub,
+                          base=f"/f/{fid}")
+                return
+            _http_send(self, 404, {"error": "not found"})
+
+        def do_POST(self) -> None:
+            m = _FIRM_PREFIX_RE.match(self.path)
+            if not m:
+                _http_send(self, 404, {"error": "not found"})
+                return
+            fid, sub = m.group(1), m.group(2) or "/"
+            info = _resolve(fid)
+            if info is None:
+                _http_send(self, 404, {"error": f"unknown firm {fid!r}"})
+                return
+            _firm_post(self, info["workspace"], info["db_path"], fid, sub)
+
+    return HubHandler
+
+
+def run_hub(
+    root: Path,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8484,
+) -> int:
+    """Serve every firm under *root* from one process. Blocks until Ctrl-C."""
+    root = root.expanduser().resolve()
+    firms = discover_firms(root)
+    if not firms:
+        print(json.dumps({"ok": False, "reason": "no-firms-found", "root": str(root)}))
+        return 1
+    handler = make_hub_handler(root)
+    server = ThreadingHTTPServer((host, port), handler)
+    print(json.dumps({
+        "ok": True,
+        "url": f"http://{host}:{port}",
+        "root": str(root),
+        "firms": sorted(firms),
     }))
     try:
         server.serve_forever()
