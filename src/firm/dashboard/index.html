@@ -322,12 +322,14 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
 .canvashint{position:absolute;bottom:16px;left:16px;font:500 10.5px var(--font-mono);letter-spacing:.1em;
   text-transform:uppercase;color:var(--brand-text-dim);z-index:5}
 
-/* ---- custom-view toolbar (embedded fragments) ---- */
-.viewbar{display:flex;justify-content:flex-end;margin-bottom:10px}
-.viewbar a{font:500 11px var(--font-mono);letter-spacing:.08em;text-transform:uppercase;
-  color:var(--brand-text-secondary);text-decoration:none;border:1px solid var(--brand-border);
-  border-radius:9999px;padding:5px 12px;transition:color 160ms,border-color 160ms}
-.viewbar a:hover{color:var(--brand-primary);border-color:var(--brand-primary)}
+/* ---- custom-view nav row: embedded view + new-tab full-screen icon ---- */
+.navitem-row{display:flex;align-items:center;gap:2px}
+.navitem-row .navitem{flex:1;min-width:0}
+.nav-pop{flex:none;display:flex;align-items:center;justify-content:center;padding:7px;border-radius:7px;
+  color:var(--brand-text-dim);transition:color 160ms,background 160ms}
+.nav-pop:hover{color:var(--brand-primary);background:var(--brand-surface)}
+.nav-pop svg{width:14px;height:14px}
+.app.rail .nav-pop{display:none}
 
 /* ---- profile drawer ---- */
 .drawerwrap{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;z-index:48}
@@ -852,12 +854,21 @@ async function initCustomViews(){
   for(const v of views){
     VIEWS[v.id] = v.title;
     CUSTOM_VIEWS[v.id] = {title: v.title, files: v.files, loaded: false};
+    const row = document.createElement('div');
+    row.className = 'navitem-row';
     const btn = document.createElement('button');
     btn.className = 'navitem'; btn.dataset.view = v.id; btn.title = v.title;
     btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8L20 10.6l-5 3.9 1.8 6-4.8-3.6-4.8 3.6 1.8-6-5-3.9 6.1-1.8z"/></svg><span></span>';
     btn.querySelector('span').textContent = v.title;
     btn.addEventListener('click', () => show(v.id));
-    group.appendChild(btn);
+    const pop = document.createElement('a');
+    pop.className = 'nav-pop';
+    pop.href = BASE + '/view/' + encodeURIComponent(v.id);
+    pop.target = '_blank'; pop.rel = 'noopener';
+    pop.title = 'Open ' + v.title + ' full screen in a new tab';
+    pop.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
+    row.appendChild(btn); row.appendChild(pop);
+    group.appendChild(row);
     const page = document.createElement('div');
     page.className = 'page'; page.id = 'page-' + v.id;
     document.getElementById('scrollArea').appendChild(page);
@@ -874,8 +885,7 @@ async function ensureFragment(id){
   try{
     const r = await fetch(BASE + '/api/views/' + id + '/fragment');
     if(!r.ok) throw new Error('fragment ' + r.status);
-    page.innerHTML = '<div class="viewbar"><a href="' + BASE + '/view/' + encodeURIComponent(id) +
-      '" target="_blank" rel="noopener">Open full screen ↗</a></div>' + await r.text();
+    page.innerHTML = await r.text();
     // innerHTML never executes scripts — recreate them so fragments can boot
     page.querySelectorAll('script').forEach(old => {
       const s = document.createElement('script');
