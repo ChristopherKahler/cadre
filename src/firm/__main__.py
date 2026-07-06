@@ -157,6 +157,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--firm-id", dest="firm_id", default=None,
         help="Firm scope. Defaults to $FIRM_ID or 'chrisai'.",
     )
+    pulse_parser.add_argument(
+        "--only", default=None, metavar="MEMBER_ID",
+        help="Board-targeted pulse: activate ONLY this Member "
+             "(frequency throttle waived for the target).",
+    )
 
     # ---- notify subparser ----
     notify_parser = subparsers.add_parser(
@@ -359,6 +364,7 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             abort=args.abort,
             firm_id=firm_id,
+            only=args.only,
         )
 
     if args.command == "notify":

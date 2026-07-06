@@ -869,10 +869,13 @@ def _slack_token_from_workspace(workspace: Path) -> str | None:
     return m.group(1) if m else None
 
 
-def _fire_pulse(workspace: Path, firm_id: str) -> dict[str, Any]:
+def _fire_pulse(
+    workspace: Path, firm_id: str, only: str | None = None,
+) -> dict[str, Any]:
     """Board-initiated pulse — detached via systemd-run so member runs
     survive this HTTP request (a pulse blocks until its slowest member
-    finishes; never run it inside a request thread)."""
+    finishes; never run it inside a request thread). With *only*, a
+    Board-targeted pulse activating a single Member."""
     unit = f"pulse-{firm_id}-{int(time.time())}"
     cmd = [
         "systemd-run", "--user", "--collect", "--unit", unit,
@@ -892,12 +895,70 @@ def _fire_pulse(workspace: Path, firm_id: str) -> dict[str, Any]:
         sys.executable, "-m", "firm", "pulse",
         "--workspace", str(workspace), "--firm-id", firm_id,
     ]
+    if only:
+        cmd += ["--only", only]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         raise ValueError(
             f"pulse dispatch failed: {proc.stderr.strip() or proc.stdout.strip()}"
         )
     return {"unit": unit, "monitor": f"journalctl --user -u {unit}"}
+
+
+def create_commission(
+    conn: sqlite3.Connection,
+    workspace: Path,
+    firm_id: str,
+    member_id: str,
+    body: dict[str, Any],
+) -> dict[str, Any]:
+    """Board commission: one-shot instructions to a single Member.
+
+    Creates a real Unit (so briefing assembly, validation, completion
+    persistence, Records, and budget all apply exactly as in a pulse),
+    claims it for the Member, then fires a Member-targeted pulse. Nothing
+    here is a side channel — the commission IS firm work, just Board-authored.
+    """
+    member = repo.get(conn, "member", member_id)
+    if not member or member.get("firm_id") != firm_id:
+        raise ValueError(f"unknown member {member_id!r}")
+    if member.get("status") != "active":
+        raise ValueError(f"{member_id} is {member.get('status')} — activate first")
+    instructions = str(body.get("instructions") or "").strip()
+    if not instructions:
+        raise ValueError("instructions required")
+
+    project_id = body.get("project_id")
+    if not project_id:
+        projects = [
+            p for p in repo.find(conn, "project", firm_id=firm_id)
+            if p.get("status") in ("in_progress", "active")
+        ]
+        if not projects:
+            raise ValueError("no active project to attach the commission to")
+        project_id = projects[0]["id"]
+
+    title = instructions.splitlines()[0][:70]
+    unit = unit_svc.create_unit(conn, firm_id, {
+        "name": f"Board commission: {title}",
+        "project_id": project_id,
+        "description": instructions,
+        "assignee_member_id": member_id,
+        "priority": "high",
+        "tags": ["board-commission"],
+        "acceptance_criteria": ["Fulfill the Board's commission as written in the description"],
+    })
+    repo.update(conn, "unit", unit["id"], {"claimed_by": member_id})
+    log_event(
+        conn,
+        firm_id=firm_id,
+        event_type="board.commission",
+        actor={"type": "board", "id": None},
+        target_ref={"type": "unit", "id": unit["id"]},
+        details={"member_id": member_id, "instructions": instructions[:500]},
+    )
+    dispatch = _fire_pulse(workspace, firm_id, only=member_id)
+    return {"unit": unit, "dispatch": dispatch}
 
 
 def _firm_post(
@@ -946,6 +1007,16 @@ def _firm_post(
             _http_send(h, 200, {"ok": True, "result": _fire_pulse(workspace, firm_id)})
         except ValueError as exc:
             _http_send(h, 400, {"ok": False, "error": str(exc)})
+        return
+    if action == "member-commission":
+        conn = connect(db_path)
+        try:
+            result = create_commission(conn, workspace, firm_id, entity_id, body)
+            _http_send(h, 200, {"ok": True, "result": result})
+        except ValueError as exc:
+            _http_send(h, 400, {"ok": False, "error": str(exc)})
+        finally:
+            conn.close()
         return
     conn = connect(db_path)
     try:

@@ -212,6 +212,92 @@ def test_pulse_action_dispatches_detached(hub_server: str, monkeypatch):
     assert "--firm-id" in cmd and "alpha" in cmd
 
 
+def test_commission_creates_unit_and_dispatches(hub_server: str, firms_root: Path, monkeypatch):
+    from firm.dashboard import server as srv
+
+    # A commission needs an active project to attach to.
+    db = firms_root / "alpha-co" / ".firm" / "firm.db"
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    create(conn, "operation", {
+        "id": "OP-001", "firm_id": "alpha", "name": "Game", "status": "active",
+    })
+    create(conn, "project", {
+        "id": "PRJ-001", "firm_id": "alpha", "operation_id": "OP-001",
+        "name": "Season 1", "status": "in_progress", "due_date": "2026-12-31",
+    })
+    conn.commit()
+    conn.close()
+
+    calls: dict = {}
+
+    class FakeProc:
+        returncode = 0
+        stderr = ""
+        stdout = ""
+
+    monkeypatch.setattr(srv.subprocess, "run",
+                        lambda cmd, **kw: calls.setdefault("cmd", cmd) and FakeProc() or FakeProc())
+
+    req = urllib.request.Request(
+        hub_server + "/f/alpha/api/action/member-commission/MEM-001",
+        data=json.dumps({"instructions": "Render portraits for every registered NPC"}).encode(),
+        method="POST", headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req) as resp:
+        out = json.loads(resp.read())
+    assert out["ok"] is True
+    unit = out["result"]["unit"]
+    assert unit["name"].startswith("Board commission:")
+    assert unit["assignee_member_id"] == "MEM-001"
+
+    # Dispatch was member-targeted.
+    assert "--only" in calls["cmd"] and "MEM-001" in calls["cmd"]
+
+    # The unit is claimed and the commission is on the record.
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT claimed_by FROM unit WHERE id = ?", (unit["id"],)).fetchone()
+    assert row["claimed_by"] == "MEM-001"
+    rec = conn.execute(
+        "SELECT COUNT(*) FROM records WHERE firm_id='alpha' AND event_type='board.commission'",
+    ).fetchone()[0]
+    assert rec == 1
+    conn.close()
+
+
+def test_pulse_only_targets_single_member():
+    from firm.pulse.orchestrator import pulse
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    apply_migrations(conn)
+    create(conn, "firm", {"id": "f1", "name": "F1"})
+    create(conn, "operation", {"id": "OP-001", "firm_id": "f1", "name": "O", "status": "active"})
+    create(conn, "project", {
+        "id": "PRJ-001", "firm_id": "f1", "operation_id": "OP-001",
+        "name": "P", "status": "in_progress", "due_date": "2026-12-31",
+    })
+    for i, name in enumerate(["Ann", "Bob"], start=1):
+        create(conn, "member", {
+            "id": f"MEM-00{i}", "firm_id": "f1", "name": name,
+            "role": "W", "status": "active",
+        })
+        create(conn, "unit", {
+            "id": f"UNT-00{i}", "firm_id": "f1", "project_id": "PRJ-001",
+            "name": f"work {i}", "status": "pending", "claimed_by": f"MEM-00{i}",
+        })
+
+    ran: list = []
+    summary = pulse(conn, "f1",
+                    lambda c, m: ran.append(m["id"]) or {"status": "completed"},
+                    only_member_id="MEM-002")
+    assert ran == ["MEM-002"]
+    assert [r["member"]["id"] for r in summary.ran] == ["MEM-002"]
+    reasons = {(s.get("member") or {}).get("id"): s["reason"] for s in summary.skipped}
+    assert "not targeted" in reasons.get("MEM-001", "")
+
+
 def test_hub_discovers_new_firm_live(hub_server: str, firms_root: Path):
     _make_firm(firms_root, "gamma-co", "gamma", "Gamma Co")
     status, body = _get(hub_server + "/api/hub")

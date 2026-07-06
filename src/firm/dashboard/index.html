@@ -324,6 +324,15 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
 .canvashint{position:absolute;bottom:16px;left:16px;font:500 10.5px var(--font-mono);letter-spacing:.1em;
   text-transform:uppercase;color:var(--brand-text-dim);z-index:5}
 
+/* ---- commission box (profile drawer) ---- */
+.commissionbox{margin-bottom:22px}
+.commissionbox textarea{width:100%;min-height:74px;background:var(--brand-surface);border:1px solid var(--brand-border);
+  border-radius:10px;padding:10px 12px;color:var(--brand-text);font:400 13px var(--font-body);resize:vertical}
+.commissionbox textarea:focus{outline:none;border-color:var(--brand-primary)}
+.commissionrow{display:flex;gap:8px;margin-top:8px;align-items:center}
+.commissionrow select{flex:1;min-width:0;background:var(--brand-surface);border:1px solid var(--brand-border);
+  border-radius:8px;padding:7px 10px;color:var(--brand-text-secondary);font:500 12px var(--font-body)}
+
 /* ---- custom-view nav row: embedded view + new-tab full-screen icon ---- */
 .navitem-row{display:flex;align-items:center;gap:2px}
 .navitem-row .navitem{flex:1;min-width:0}
@@ -1454,6 +1463,15 @@ function renderProfile(P){
     ${P.current_units.length ? `<div class="seclabel">Currently on</div>
       <div class="listcard" style="margin-bottom:18px">${P.current_units.map(u =>
         `<div class="lrow"><span class="mono" style="font-size:11px;color:var(--brand-text-dim)">${esc(u.id)}</span><span class="grow">${esc(u.name)}</span>${pill(u.status)}</div>`).join('')}</div>` : ''}
+    <div class="seclabel">Commission — one-shot task, dispatched now</div>
+    <div class="commissionbox">
+      <textarea id="pCommText" placeholder="Direct instructions for ${esc(m.name)} — becomes a real Unit, runs immediately, logs like any pulse run…"></textarea>
+      <div class="commissionrow">
+        <select id="pCommProject">${((STATE || {}).projects || []).filter(p => ['in_progress','active'].includes(p.status)).map(p =>
+          `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('') || '<option value="">No active project</option>'}</select>
+        <button class="btn primary sm" id="pCommBtn" onclick="postCommission()">Commission &amp; dispatch</button>
+      </div>
+    </div>
     <div class="seclabel">Standing notes — injected into every run</div>
     <div id="pNotes">${P.notes.length ? P.notes.map(n => `
       <div class="comment"><span class="cwho">${esc(n.author_type === 'board' && !n.author_id ? 'THE BOARD' : (n.author_id || n.author_type))}</span>
@@ -1524,6 +1542,23 @@ function renderProfile(P){
     <div class="btn-row"><button class="btn primary" onclick="saveInstructions()">Save instructions</button></div>`;
 }
 
+async function postCommission(){
+  const ta = document.getElementById('pCommText');
+  const text = ta.value.trim();
+  if(!text || !profileCtx) return;
+  const btn = document.getElementById('pCommBtn');
+  btn.disabled = true;
+  const body = {instructions: text};
+  const proj = document.getElementById('pCommProject').value;
+  if(proj) body.project_id = proj;
+  const out = await postAction('member-commission/' + profileCtx, body);
+  if(out.ok){
+    toast(`${out.result.unit.id} commissioned — ${memberName(profileCtx)} is dispatching now`);
+    ta.value = '';
+    lastHash = null; poll();
+  } else toast(out.error || 'Commission failed', true);
+  btn.disabled = false;
+}
 async function postMemberNote(){
   const input = document.getElementById('pNoteInput');
   const body = input.value.trim();

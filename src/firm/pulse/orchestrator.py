@@ -455,6 +455,7 @@ def pulse(
     *,
     dry_run: bool = False,
     now: datetime | None = None,
+    only_member_id: str | None = None,
 ) -> ActivationSummary:
     """Execute a single PULSE cycle for *firm_id*.
 
@@ -469,6 +470,10 @@ def pulse(
         run_member: Callback ``(conn, member) -> result_dict``.
         dry_run: If True, skip callback but list who would run.
         now: Optional datetime override for deterministic tests.
+        only_member_id: Board-targeted pulse — activate ONLY this Member.
+            The frequency throttle is waived for the target (an explicit
+            Board dispatch outranks a cadence heuristic); load, status,
+            business hours, and budget gates still apply.
 
     Returns:
         ActivationSummary with ran/skipped/errors lists.
@@ -489,6 +494,26 @@ def pulse(
 
     # Gate 2: per-member filters
     eligible, skipped = filter_members(conn, firm_id, now=now)
+    if only_member_id:
+        untargeted = [m for m in eligible if m["id"] != only_member_id]
+        eligible = [m for m in eligible if m["id"] == only_member_id]
+        if not eligible:
+            # Board override: a frequency skip yields to an explicit dispatch;
+            # every other skip reason (load=0, inactive) stands.
+            for s in skipped:
+                m = s.get("member") or {}
+                if m.get("id") == only_member_id and "frequency" in s["reason"]:
+                    eligible = [m]
+                    skipped = [x for x in skipped if x is not s]
+                    break
+        skipped = [
+            s for s in skipped
+            if (s.get("member") or {}).get("id") == only_member_id
+        ]
+        skipped.extend(
+            {"member": m, "reason": f"not targeted (only={only_member_id})"}
+            for m in untargeted
+        )
     summary.skipped.extend(skipped)
 
     if not eligible:

@@ -25,6 +25,7 @@ def run_pulse(
     dry_run: bool = False,
     abort: bool = False,
     firm_id: str = "chrisai",
+    only: str | None = None,
 ) -> int:
     """Run a single PULSE cycle for the workspace.
 
@@ -33,6 +34,8 @@ def run_pulse(
         dry_run: If True, show who would activate without spawning.
         abort: If True, send SIGTERM to tracked PIDs and exit.
         firm_id: Firm scope.
+        only: Member id — Board-targeted pulse activating only this Member
+            (frequency throttle waived for the target).
 
     Returns:
         0 on success, 1 on unhandled error.
@@ -89,7 +92,7 @@ def run_pulse(
     conn = connect(db_path)
     try:
         runner = make_runner(firm_id, str(workspace))
-        summary = pulse(conn, firm_id, runner, dry_run=dry_run)
+        summary = pulse(conn, firm_id, runner, dry_run=dry_run, only_member_id=only)
 
         output: dict[str, Any] = {
             "ok": not (summary.errors and not summary.ran),
