@@ -418,6 +418,26 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
 @keyframes rowflash{0%{background:rgba(var(--brand-primary-rgb),.22)}100%{background:transparent}}
 tr.flash td{animation:rowflash 2.2s ease-out}
 
+/* ---- live run activation ---- */
+.runstrip{display:none;align-items:center;gap:9px;margin-left:auto;cursor:pointer;
+  border:1px solid rgba(var(--brand-primary-rgb),.45);background:rgba(var(--brand-primary-rgb),.08);
+  border-radius:9999px;padding:6px 14px;font:600 11.5px var(--font-mono);letter-spacing:.08em;
+  color:var(--brand-primary);animation:stripglow 2.2s ease-in-out infinite;white-space:nowrap;max-width:46vw;overflow:hidden;text-overflow:ellipsis}
+.runstrip.on{display:inline-flex}
+.runstrip .rdot{width:8px;height:8px;border-radius:9999px;background:var(--brand-primary);
+  box-shadow:0 0 10px rgba(var(--brand-primary-rgb),.8);animation:pulse 1.1s infinite;flex:none}
+@keyframes stripglow{0%,100%{box-shadow:0 0 0 0 rgba(var(--brand-primary-rgb),.25)}50%{box-shadow:0 0 22px 2px rgba(var(--brand-primary-rgb),.35)}}
+.app.engaged .inset{box-shadow:var(--shadow-inset), inset 0 0 0 1px rgba(var(--brand-primary-rgb),.28), inset 0 0 42px rgba(var(--brand-primary-rgb),.05)}
+.mcard.live{border-color:rgba(var(--brand-primary-rgb),.55);animation:cardring 2.2s ease-in-out infinite}
+@keyframes cardring{0%,100%{box-shadow:0 0 0 0 rgba(var(--brand-primary-rgb),.25)}50%{box-shadow:0 0 26px 3px rgba(var(--brand-primary-rgb),.30)}}
+@media(prefers-reduced-motion:reduce){.runstrip,.mcard.live{animation:none}.runstrip .rdot{animation:none}}
+.runpanel .rp-item{background:var(--brand-surface);border:1px solid rgba(var(--brand-primary-rgb),.3);
+  border-radius:12px;padding:16px;margin-bottom:12px}
+.runpanel .rp-item .rhead{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.runpanel .rp-item .elapsed{margin-left:auto;font:600 17px var(--font-mono);color:var(--brand-primary);font-variant-numeric:tabular-nums}
+.runpanel .rp-line{display:flex;gap:8px;font-size:13px;color:var(--brand-text-secondary);padding:3px 0}
+.runpanel .rp-line .k{font:500 9.5px var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--brand-text-dim);width:64px;flex:none;padding-top:3px}
+
 /* ---- modal / toast ---- */
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:50}
 .overlay.show{display:flex}
@@ -508,6 +528,9 @@ tr.flash td{animation:rowflash 2.2s ease-out}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
       </button>
       <div class="crumbs"><span>Boardroom</span><span class="sep">/</span><span class="here" id="crumbHere">Dashboard</span></div>
+      <button class="runstrip" id="runStrip" onclick="openRunPanel()" aria-live="polite">
+        <span class="rdot"></span><span id="runStripText">RUN ACTIVE</span>
+      </button>
     </div>
 
     <div class="scroll" id="scrollArea">
@@ -677,6 +700,19 @@ tr.flash td{animation:rowflash 2.2s ease-out}
   </div>
 </div>
 
+<div class="drawerwrap" id="runWrap">
+  <div class="drawer runpanel" role="dialog" aria-modal="true" aria-labelledby="rpTitle" style="width:min(440px,94vw)">
+    <div class="dwr-head" style="align-items:baseline">
+      <div class="who">
+        <h3 id="rpTitle">Live runs</h3>
+        <div class="drole" id="rpSub"></div>
+      </div>
+      <button class="btn sm" onclick="closeRunPanel()">Close</button>
+    </div>
+    <div class="dwr-body" id="rpBody"></div>
+  </div>
+</div>
+
 <div class="drawerwrap" id="drawerWrap">
   <div class="drawer" role="dialog" aria-modal="true" aria-labelledby="pName">
     <div class="dwr-head">
@@ -814,6 +850,94 @@ function withScrollKept(ids, fn){
   ids.forEach(id => { const el = document.getElementById(id); if(el && pos[id]) el.scrollTop = pos[id]; });
 }
 
+/* ======================= LIVE RUN ACTIVATION ======================= */
+let prevActiveIds = null;
+let runTicker = null;
+
+function memberName(id){
+  return ((STATE || {}).roster || []).find(m => m.id === id)?.name || id;
+}
+function fmtElapsed(startedIso){
+  const d = parseTs(startedIso);
+  if(!d) return '—';
+  let s = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+  const m = Math.floor(s / 60); s = s % 60;
+  return (m ? m + 'm ' : '') + String(s).padStart(2, '0') + 's';
+}
+function activeRuns(){
+  return ((STATE || {}).runs || []).filter(r => r.status === 'running');
+}
+function updateEngagement(){
+  const act = activeRuns();
+  const ids = act.map(r => r.id).sort().join(',');
+  app.classList.toggle('engaged', act.length > 0);
+  const strip = document.getElementById('runStrip');
+  strip.classList.toggle('on', act.length > 0);
+  if(act.length){
+    const first = act[0];
+    document.getElementById('runStripText').textContent = act.length === 1
+      ? `RUN ACTIVE — ${memberName(first.member_id)} · ${first.unit_id || '?'} · ${fmtElapsed(first.started_at)}`
+      : `${act.length} RUNS ACTIVE`;
+  }
+  // transition toasts: new runs ignite, finished runs report
+  if(prevActiveIds !== null && prevActiveIds !== ids){
+    const prev = new Set(prevActiveIds.split(',').filter(Boolean));
+    const now = new Set(ids.split(',').filter(Boolean));
+    act.filter(r => !prev.has(r.id)).forEach(r =>
+      toast(`Run active — ${memberName(r.member_id)} on ${r.unit_id || '?'}`));
+    [...prev].filter(id => !now.has(id)).forEach(id => {
+      const done = (STATE.runs || []).find(r => r.id === id);
+      if(done) toast(`${id} ${done.status} — ${memberName(done.member_id)}${done.duration_sec != null ? ' · ' + dur(done.duration_sec) : ''}`);
+    });
+  }
+  prevActiveIds = ids;
+
+  clearInterval(runTicker);
+  if(act.length){
+    runTicker = setInterval(() => {
+      const a = activeRuns();
+      if(!a.length) return;
+      if(a.length === 1)
+        document.getElementById('runStripText').textContent =
+          `RUN ACTIVE — ${memberName(a[0].member_id)} · ${a[0].unit_id || '?'} · ${fmtElapsed(a[0].started_at)}`;
+      document.querySelectorAll('[data-run-started]').forEach(el =>
+        el.textContent = fmtElapsed(el.dataset.runStarted));
+    }, 1000);
+  }
+  if(document.getElementById('runWrap').classList.contains('show')) renderRunPanel();
+}
+
+function openRunPanel(){ renderRunPanel(); document.getElementById('runWrap').classList.add('show'); }
+function closeRunPanel(){ document.getElementById('runWrap').classList.remove('show'); }
+document.getElementById('runWrap').addEventListener('click', e => { if(e.target.id === 'runWrap') closeRunPanel(); });
+
+function renderRunPanel(){
+  const act = activeRuns();
+  const recent = ((STATE || {}).runs || []).filter(r => r.status !== 'running').slice(0, 6);
+  document.getElementById('rpSub').textContent = act.length
+    ? `${act.length} member${act.length === 1 ? ' is' : 's are'} working right now`
+    : 'Nothing running — the floor is between pulses';
+  document.getElementById('rpBody').innerHTML =
+    (act.length ? act.map(r => {
+      const unit = ((STATE || {}).units || []).find(u => u.id === r.unit_id);
+      return `<div class="rp-item">
+        <div class="rhead">${pill(r.id, 'ok')}${pill('running')}
+          <span class="elapsed" data-run-started="${esc(r.started_at)}">${fmtElapsed(r.started_at)}</span></div>
+        <div class="rp-line"><span class="k">Member</span><span class="eref" onclick="closeRunPanel();openProfile('${esc(r.member_id)}')">${esc(memberName(r.member_id))}</span></div>
+        <div class="rp-line"><span class="k">Unit</span><span>${r.unit_id ? `<span class="eref" onclick="closeRunPanel();gotoUnit('${esc(r.unit_id)}')">${esc(r.unit_id)}</span> ${esc(unit ? unit.name : '')}` : '—'}</span></div>
+        <div class="rp-line"><span class="k">Started</span><span title="${esc(tAttr(r.started_at))}">${timeAgo(r.started_at)}</span></div>
+        <div class="rp-line"><span class="k">Source</span><span>${esc(r.invocation_source || 'pulse')}</span></div>
+      </div>`;
+    }).join('') : '<div class="empty" style="margin-bottom:16px">No active runs. The next pulse lights this up.</div>') +
+    `<div class="seclabel" style="margin-top:8px">Recent completions</div>
+    <div class="listcard">${recent.length ? recent.map(r => `
+      <div class="lrow">${sdot(r.status === 'completed' ? 'done' : 'failed')}
+        <span class="mono" style="font-size:11px;color:var(--brand-text-dim)">${esc(r.id)}</span>
+        <span class="grow">${esc(memberName(r.member_id))} · ${esc(r.unit_id || '—')}</span>
+        ${pill(r.status)}<span class="end">${dur(r.duration_sec)}${r.cost_usd != null ? ' · ' + money(r.cost_usd) : ''}</span>
+      </div>`).join('') : '<div class="lrow"><span class="empty">Nothing yet.</span></div>'}</div>`;
+}
+
 function render(){
   const S = STATE;
   const firm = S.firm || {};
@@ -828,6 +952,7 @@ function render(){
     renderStats(S); renderGates(S); renderEscalations(S); renderRecent(S);
     renderRosterCanvas(S); renderPipeline(S); renderGoals(S); renderCosts(S);
     renderDocs(S); renderRuns(S); renderRecords(S);
+    updateEngagement();
   });
 }
 
@@ -1062,6 +1187,7 @@ function renderRosterCanvas(S){
         <div class="mfoot"><span class="sdot ok"></span>commanding from this dashboard</div></div>`;
     }
     const m = byId[id];
+    const running = ((S.runs || []).some(r => r.status === 'running' && r.member_id === m.id));
     const working = m.current_units.length > 0;
     const dotCls = m.status !== 'active' ? 'warn' : (working ? 'ok' : '');
     const stateTxt = m.status !== 'active' ? m.status : (working ? 'working' : 'idle');
@@ -1614,6 +1740,7 @@ document.addEventListener('keydown', e => {
   if(document.getElementById('workOverlay').classList.contains('show')) closeWork();
   if(document.getElementById('goalOverlay').classList.contains('show')) closeGoal();
   if(document.getElementById('drawerWrap').classList.contains('show')) closeProfile();
+  if(document.getElementById('runWrap').classList.contains('show')) closeRunPanel();
 });
 document.getElementById('mConfirm').addEventListener('click', async () => {
   if(!modalCtx) return;
