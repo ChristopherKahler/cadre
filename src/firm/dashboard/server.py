@@ -670,6 +670,9 @@ def perform_action(
     if action == "gate-reject":
         data = {"approver_comment": body["comment"]} if body.get("comment") else None
         return gate_svc.reject_gate(conn, entity_id, data)
+    if action == "gate-dismiss":
+        # Notification layer only — clears the badge, never decides the gate.
+        return gate_svc.dismiss_gate(conn, entity_id)
     if action == "escalation-acknowledge":
         return escalation_svc.resolve_escalation(
             conn, entity_id, status="acknowledged",
@@ -1272,7 +1275,7 @@ def hub_summary(firms: dict[str, dict[str, Any]]) -> dict[str, Any]:
         try:
             members = repo.find(conn, "member", firm_id=fid)
             gates = [g for g in repo.find(conn, "gate", firm_id=fid)
-                     if g.get("status") == "pending"]
+                     if g.get("status") == "pending" and not g.get("dismissed_at")]
             escalations = [e for e in repo.find(conn, "escalation", firm_id=fid)
                            if e.get("status") in ("open", "acknowledged")]
             running = repo.find(conn, "member_run", firm_id=fid, status="running")

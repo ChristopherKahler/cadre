@@ -1244,9 +1244,10 @@ function copyBoardItem(kind, id){
     });
 }
 
-/* One-click dismiss — a REAL status change (escalation→resolved,
-   gate→rejected) with a standard note, never a client-side hide. Inline
-   arm/confirm guards against stray clicks; no browser dialogs. */
+/* One-click dismiss — audited server action, never a client-side hide.
+   GATES: clears the notification only (gate-dismiss sets dismissed_at) while the
+   gate stays pending and fully resolvable — dismiss is NOT a decision. ESCALATIONS:
+   resolved with a standard note. Inline arm/confirm guards; no browser dialogs. */
 let dismissTimer = null;
 async function dismissBoardItem(kind, id, btn){
   if(!btn.dataset.armed){
@@ -1263,10 +1264,10 @@ async function dismissBoardItem(kind, id, btn){
   btn.disabled = true;
   const note = 'Dismissed by the Board from the dashboard.';
   const out = kind === 'gate'
-    ? await postAction('gate-reject/' + id, {comment: note})
+    ? await postAction('gate-dismiss/' + id, {})
     : await postAction('escalation-resolve/' + id, {resolution: note, queue_followup: false});
   if(out.ok){
-    toast(`${id} dismissed — ${kind === 'gate' ? 'rejected with a dismissal note' : 'resolved, no follow-up queued'}`);
+    toast(`${id} dismissed — ${kind === 'gate' ? 'notification cleared, decision stands' : 'resolved, no follow-up queued'}`);
     lastHash = null; poll();
   } else {
     toast(out.error || 'Dismiss failed', true);
@@ -1275,7 +1276,7 @@ async function dismissBoardItem(kind, id, btn){
 }
 
 function renderGates(S){
-  const gates = (S.gates || []).filter(g => g.status === 'pending')
+  const gates = (S.gates || []).filter(g => g.status === 'pending' && !g.dismissed_at)
     .sort((a,b) => (a.created_at || '').localeCompare(b.created_at || ''));
   const el = document.getElementById('gates');
   if(!gates.length){ el.innerHTML = '<div class="empty">No pending gates. Nothing is waiting on your approval.</div>'; return; }
@@ -1291,7 +1292,7 @@ function renderGates(S){
         <button class="btn primary sm" onclick="openModal('gate-approve','${g.id}')">Approve</button>
         <button class="btn danger sm" onclick="openModal('gate-reject','${g.id}')">Reject</button>
         <button class="btn sm" onclick="copyBoardItem('gate','${g.id}')" title="Copy as a /boardroom briefing for a Claude Code session">Copy for /boardroom</button>
-        <button class="btn sm" onclick="dismissBoardItem('gate','${g.id}',this)" title="Reject with a standard dismissal note — one click, audited">Dismiss</button>
+        <button class="btn sm" onclick="dismissBoardItem('gate','${g.id}',this)" title="Clear the notification — the gate stays pending and resolvable, not a decision">Dismiss</button>
       </div>
     </div>`).join('');
 }

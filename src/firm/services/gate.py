@@ -5,7 +5,7 @@ take significant actions; the Board approves or rejects. Not standard CRUD —
 Gates are created via request, then resolved via approve/reject.
 
 ID prefix: GATE-NNN
-Records events: gate.requested, gate.approved, gate.rejected
+Records events: gate.requested, gate.approved, gate.rejected, gate.dismissed
 """
 
 from __future__ import annotations
@@ -132,6 +132,42 @@ def reject_gate(
         ValueError: If gate not found or not in pending status.
     """
     return _resolve_gate(conn, gate_id, "rejected", data)
+
+
+def dismiss_gate(
+    conn: sqlite3.Connection,
+    gate_id: str,
+) -> dict[str, Any]:
+    """Dismiss a Gate's *notification* without touching its decision.
+
+    Clears the gate from the Board's attention surface (hub ``needs_you`` /
+    pending-gate badge) while leaving ``status`` exactly as it was — a pending
+    gate stays pending and fully resolvable. This is the notification layer,
+    NOT a decision: approve/reject remain the only ways to decide a gate. It
+    exists so "make the badge go away" is no longer only expressible as a
+    reject, which silently destroyed live decisions.
+
+    Idempotent: dismissing again just refreshes ``dismissed_at``.
+
+    Raises:
+        ValueError: If gate not found.
+    """
+    existing = require_exists(conn, "gate", gate_id)
+    updated = repo.update(
+        conn, "gate", gate_id,
+        {"dismissed_at": datetime.now(tz=timezone.utc).isoformat()},
+    )
+    assert updated is not None, "gate disappeared after require_exists"
+
+    log_event(
+        conn,
+        firm_id=existing["firm_id"],
+        event_type="gate.dismissed",
+        actor={"type": "board", "id": None},
+        target_ref={"type": "gate", "id": gate_id},
+    )
+
+    return updated
 
 
 def _resolve_gate(
