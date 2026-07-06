@@ -114,6 +114,74 @@ def read_view_file(workspace: Path, view: dict[str, Any], key: str) -> tuple[byt
     return content, ctype
 
 
+_VIEW_PAGE_TEMPLATE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__TITLE__</title>
+<style>html,body{margin:0;padding:0;min-height:100%;background:#141109}
+#viewRoot{padding:24px}</style>
+</head><body>
+<div id="viewRoot"></div>
+<script>
+/* Minimal CadreShell bridge — same contract the boardroom shell exposes,
+   so a fragment renders identically full-page and embedded. */
+window.CadreShell = {
+  _state: {},
+  state: function(){ return this._state; },
+  post: async function(path, body){
+    try{
+      const r = await fetch('/api/action/' + path, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body || {}),
+      });
+      return await r.json();
+    }catch(e){ return {ok: false, error: String(e)}; }
+  },
+  viewFile: async function(viewId, key){
+    const r = await fetch('/api/views/' + viewId + '/file/' + key);
+    if(!r.ok) throw new Error(key + ' ' + r.status);
+    const ct = r.headers.get('Content-Type') || '';
+    return ct.includes('json') ? r.json() : r.text();
+  },
+};
+async function __poll(){
+  try{
+    const r = await fetch('/api/state');
+    CadreShell._state = await r.json();
+    document.dispatchEvent(new CustomEvent('cadre:state', {detail: CadreShell._state}));
+  }catch(e){}
+}
+try{
+  const es = new EventSource('/api/events');
+  es.addEventListener('change', __poll);
+}catch(e){}
+setInterval(__poll, 15000);
+__poll().then(async function(){
+  const r = await fetch('/api/views/__VIEW_ID__/fragment');
+  const root = document.getElementById('viewRoot');
+  root.innerHTML = await r.text();
+  root.querySelectorAll('script').forEach(function(old){
+    const s = document.createElement('script');
+    s.textContent = old.textContent;
+    old.replaceWith(s);
+  });
+});
+</script></body></html>"""
+
+
+def render_view_page(view: dict[str, Any]) -> bytes:
+    """Full-page wrapper for a custom view — the fragment as its own app.
+
+    Same fragment, same CadreShell contract as the boardroom shell; no
+    boardroom chrome. Served at ``/view/<id>``.
+    """
+    return (
+        _VIEW_PAGE_TEMPLATE
+        .replace("__TITLE__", view["title"])
+        .replace("__VIEW_ID__", view["id"])
+    ).encode()
+
+
 # ---------------------------------------------------------------------------
 # State assembly
 # ---------------------------------------------------------------------------
@@ -569,6 +637,14 @@ def make_handler(workspace: Path, firm_id: str) -> type[BaseHTTPRequestHandler]:
                     self._send(200, assemble_state(conn, firm_id))
                 finally:
                     conn.close()
+                return
+            if self.path.startswith("/view/"):
+                vid = self.path.strip("/").split("/")[1].split("?")[0]
+                views = {v["id"]: v for v in load_custom_views(workspace)}
+                if vid in views:
+                    self._send(200, render_view_page(views[vid]), "text/html; charset=utf-8")
+                else:
+                    self._send(404, {"error": f"unknown view {vid!r}"})
                 return
             if self.path == "/api/views":
                 views = load_custom_views(workspace)

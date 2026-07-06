@@ -482,3 +482,16 @@ def test_view_paths_cannot_escape_firm_dir(tmp_path):
         read_view_fragment(tmp_path, view)
     with pytest.raises(ValueError, match="escapes"):
         read_view_file(tmp_path, view, "leak")
+
+
+def test_render_view_page_wraps_fragment_loader(tmp_path):
+    from firm.dashboard.server import load_custom_views, render_view_page
+    _write_manifest(tmp_path, [
+        {"id": "table", "title": "The Table", "fragment": "dashboard/views/table.html"},
+    ])
+    view = load_custom_views(tmp_path)[0]
+    page = render_view_page(view).decode()
+    assert "<title>The Table</title>" in page
+    assert "/api/views/table/fragment" in page
+    assert "window.CadreShell" in page
+    assert "__VIEW_ID__" not in page and "__TITLE__" not in page
