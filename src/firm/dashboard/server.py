@@ -1540,7 +1540,17 @@ def run_hub(
     host: str = "127.0.0.1",
     port: int = 8484,
 ) -> int:
-    """Serve every firm under *root* from one process. Blocks until Ctrl-C."""
+    """Serve every firm under *root* from one process. Blocks until Ctrl-C.
+
+    The hub is multi-firm by definition, so the single-firm CADRE_DB_URL
+    override is actively stripped here — inheriting it (e.g. from a shell
+    that sourced a firm's .env) would silently point EVERY firm's card at
+    one shared database. Remote-backed firms get their own dedicated
+    ``cadre dashboard`` process with the env set."""
+    dropped = [k for k in ("CADRE_DB_URL", "CADRE_DB_TOKEN") if os.environ.pop(k, None)]
+    if dropped:
+        print(json.dumps({"warning": "hub ignores " + "/".join(dropped)
+                          + " — remote-backed firms need their own dashboard process"}))
     root = root.expanduser().resolve()
     firms = discover_firms(root)
     if not firms:

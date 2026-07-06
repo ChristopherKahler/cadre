@@ -663,3 +663,20 @@ def test_run_retry_requeues_failed_unit(mock_dm):
     update(conn, "unit", "UNIT-001", {"status": "done"})
     with pytest.raises(ValueError, match="nothing left to retry"):
         perform_action(conn, "run-retry", "RUN-001", {})
+
+
+def test_hub_strips_single_firm_db_override(tmp_path, monkeypatch, capsys):
+    """A hub inheriting CADRE_DB_URL (e.g. from a sourced firm .env) must not
+    point every firm at one shared database — it strips the override."""
+    import os
+    from firm.dashboard import server as srv
+
+    monkeypatch.setenv("CADRE_DB_URL", "libsql://somewhere.turso.io")
+    monkeypatch.setenv("CADRE_DB_TOKEN", "tok")
+    # empty root -> run_hub exits early with no-firms-found, AFTER the strip
+    rc = srv.run_hub(tmp_path, port=0)
+    assert rc == 1
+    assert "CADRE_DB_URL" not in os.environ
+    assert "CADRE_DB_TOKEN" not in os.environ
+    out = capsys.readouterr().out
+    assert "hub ignores" in out
