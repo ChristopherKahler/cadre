@@ -1931,7 +1931,17 @@ function renderRuns(S){
   const runs = S.runs || [];
   const el = document.getElementById('runsTable');
   if(!runs.length){ el.innerHTML = '<tbody><tr><td class="empty">No runs yet.</td></tr></tbody>'; return; }
-  el.innerHTML = `<thead><tr><th>Run</th><th>Member</th><th>Unit</th><th>Status</th><th>Duration</th><th>Cost</th><th>Started</th></tr></thead><tbody>` +
+  const openUnits = new Set((S.units || [])
+    .filter(u => ['pending','in_progress','blocked'].includes(u.status)).map(u => u.id));
+  const latestForUnit = new Set();
+  const retryable = new Set();
+  runs.forEach(r => {   // newest-first: only a unit's most recent run may retry
+    if(r.unit_id && !latestForUnit.has(r.unit_id)){
+      latestForUnit.add(r.unit_id);
+      if(['failed','timed_out'].includes(r.status) && openUnits.has(r.unit_id)) retryable.add(r.id);
+    }
+  });
+  el.innerHTML = `<thead><tr><th>Run</th><th>Member</th><th>Unit</th><th>Status</th><th>Duration</th><th>Cost</th><th>Started</th><th></th></tr></thead><tbody>` +
     runs.map(r => {
       let errTitle = '';
       if(r.error){ try{ const e = typeof r.error === 'string' ? JSON.parse(r.error) : r.error; errTitle = e.type || ''; }catch(_){ errTitle = String(r.error).slice(0,80); } }
@@ -1940,8 +1950,14 @@ function renderRuns(S){
       <td title="${esc(errTitle)}">${pill(r.stale ? 'stale' : r.status)}</td><td class="mono" style="font-size:12px">${dur(r.duration_sec)}</td>
       <td class="mono" style="font-size:12px">${r.cost_usd != null ? money(r.cost_usd) : '—'}</td>
       <td class="muted">${when(r.started_at)}</td>
+      <td>${retryable.has(r.id) ? `<button class="btn sm" onclick="retryRun('${esc(r.id)}')">⟳ Retry</button>` : ''}</td>
     </tr>`;
     }).join('') + '</tbody>';
+}
+async function retryRun(runId){
+  const out = await postAction('run-retry/' + runId, {});
+  if(out.ok){ toast((out.result && out.result.note) || 'Re-queued for the next pulse'); lastHash = null; poll(); }
+  else toast(out.error || 'Retry failed', true);
 }
 
 const MODEL_OPTS = [

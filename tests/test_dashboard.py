@@ -556,3 +556,31 @@ def test_view_action_failure_surfaces_error(tmp_path):
     view = load_custom_views(tmp_path)[0]
     out = run_view_action(tmp_path, view, "boom", {})
     assert not out["ok"] and "engine says no" in out["error"]
+
+
+@mock.patch("firm.services.gate.notify.send_board_dm", return_value={"sent": False, "reason": "test"})
+def test_run_retry_requeues_failed_unit(mock_dm):
+    conn = _fresh_conn()
+    from firm.core.repo import update
+    update(conn, "unit", "UNIT-001", {"status": "in_progress"})
+    create(conn, "member_run", {
+        "id": "RUN-001", "firm_id": "chrisai", "member_id": "MEM-001",
+        "unit_id": "UNIT-001", "status": "failed",
+        "started_at": "2026-07-06T10:00:00+00:00",
+    })
+    out = perform_action(conn, "run-retry", "RUN-001", {})
+    assert out["unit"] == "UNIT-001"
+    u = get(conn, "unit", "UNIT-001")
+    assert u["status"] == "pending" and not u.get("claimed_by")
+    # completed runs can't be retried
+    create(conn, "member_run", {
+        "id": "RUN-002", "firm_id": "chrisai", "member_id": "MEM-001",
+        "unit_id": "UNIT-001", "status": "completed",
+        "started_at": "2026-07-06T11:00:00+00:00",
+    })
+    with pytest.raises(ValueError, match="only failed/timed_out"):
+        perform_action(conn, "run-retry", "RUN-002", {})
+    # a done unit has nothing to retry
+    update(conn, "unit", "UNIT-001", {"status": "done"})
+    with pytest.raises(ValueError, match="nothing left to retry"):
+        perform_action(conn, "run-retry", "RUN-001", {})
