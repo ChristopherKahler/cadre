@@ -737,3 +737,60 @@ def test_send_media_supports_byte_ranges():
     assert h3.sent[0] == 200
     assert ("Accept-Ranges", "bytes") in h3.sent
     assert h3.wfile.getvalue() == data
+
+
+# ---------------------------------------------------------------------------
+# Live run spy: transcript tail → action items (Watch-live endpoint logic)
+# ---------------------------------------------------------------------------
+
+def test_summarize_tool():
+    from firm.dashboard.server import _summarize_tool
+    assert _summarize_tool("Bash", {"command": "echo hi"}) == "echo hi"
+    assert _summarize_tool("Write", {"file_path": "a/b.md"}) == "a/b.md"
+    assert _summarize_tool("Grep", {"pattern": "foo"}) == "foo"
+    assert _summarize_tool("Bash", "notadict") == ""
+
+
+def test_run_action_log_tails_and_pages(tmp_path, monkeypatch):
+    from firm.dashboard import server
+    from firm.core.db import connect as _connect
+
+    dbp = tmp_path / ".firm" / "firm.db"
+    dbp.parent.mkdir(parents=True)
+    conn = _connect(dbp)
+    apply_migrations(conn)
+    create(conn, "firm", {"id": "chrisai", "name": "C"})
+    create(conn, "member", {"id": "MEM-001", "firm_id": "chrisai",
+                            "name": "Wren", "role": "Novelist", "status": "active"})
+    create(conn, "member_run", {"id": "RUN-001", "firm_id": "chrisai",
+                                "member_id": "MEM-001", "status": "running",
+                                "started_at": "2020-01-01T00:00:00+00:00"})
+    conn.commit()
+    conn.close()
+
+    tdir = tmp_path / "transcripts"
+    tdir.mkdir()
+    monkeypatch.setattr(server, "_claude_project_dir", lambda ws: tdir)
+    (tdir / "sess.jsonl").write_text("\n".join([
+        json.dumps({"message": {"role": "assistant", "content": [
+            {"type": "text", "text": "Let me look."}]}}),
+        json.dumps({"message": {"role": "assistant", "content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "ls -la"}}]}}),
+        json.dumps({"message": {"role": "user", "content": [
+            {"type": "tool_result", "content": [{"type": "text", "text": "file.txt"}]}]}}),
+    ]) + "\n", encoding="utf-8")
+
+    out = server._run_action_log(tmp_path, dbp, "RUN-001", 0)
+    assert out["found"] is True and out["running"] is True
+    assert out["cursor"] == 3
+    kinds = [(i["kind"], i.get("tool"), i.get("text") or i.get("detail")) for i in out["items"]]
+    assert ("text", None, "Let me look.") in kinds
+    assert any(k == "tool" and t == "Bash" and "ls -la" in (d or "") for k, t, d in kinds)
+    assert any(k == "result" for k, _, _ in kinds)
+
+    # cursor paging: only lines after index 2 (the tool_result) come back
+    paged = server._run_action_log(tmp_path, dbp, "RUN-001", 2)
+    assert [i["kind"] for i in paged["items"]] == ["result"]
+
+    # unknown run → found False, never crashes
+    assert server._run_action_log(tmp_path, dbp, "RUN-999", 0)["found"] is False
