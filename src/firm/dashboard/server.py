@@ -1471,12 +1471,21 @@ h1{font-size:22px;font-weight:650;letter-spacing:-.01em}
   padding:20px;color:inherit;cursor:pointer;transition:border-color 160ms}
 .fcard:hover{border-color:var(--border-hi)}
 .fcard.attn{border-color:rgba(212,169,74,.5)}
+.fcard.live{position:relative;overflow:hidden;border-color:rgba(34,197,94,.55);animation:cardglow 2.4s ease-in-out infinite}
+.fcard.live:hover{border-color:rgba(34,197,94,.85)}
+/* subtle green sheen sweeping across an active card — low alpha to avoid banding */
+.fcard.live::before{content:"";position:absolute;inset:0;z-index:0;pointer-events:none;
+  background:linear-gradient(115deg,transparent 0%,rgba(34,197,94,.04) 32%,rgba(52,211,153,.13) 50%,rgba(34,197,94,.04) 68%,transparent 100%);
+  background-size:250% 100%;animation:shimmer 4.2s linear infinite}
+.fcard.live>*{position:relative;z-index:1}
 .fname{font-size:16px;font-weight:650;display:flex;align-items:center;gap:8px}
 .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
 .dot.live{background:var(--ok);animation:pulse 1.8s ease-in-out infinite}
 .dot.stale{background:var(--warn)}
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.55)}70%{box-shadow:0 0 0 7px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
-@media(prefers-reduced-motion:reduce){.dot.live{animation:none}}
+@keyframes cardglow{0%,100%{box-shadow:0 0 10px 0 rgba(34,197,94,.10)}50%{box-shadow:0 0 22px 2px rgba(34,197,94,.22)}}
+@keyframes shimmer{0%{background-position:150% 0}100%{background-position:-150% 0}}
+@media(prefers-reduced-motion:reduce){.dot.live,.fcard.live::before{animation:none}.fcard.live{animation:none;box-shadow:0 0 16px 1px rgba(34,197,94,.16)}}
 .fid{font:500 10.5px ui-monospace,monospace;letter-spacing:.08em;color:var(--mono);text-transform:uppercase;margin-top:2px}
 .stats{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;margin-top:14px}
 .stat .k{font:500 9.5px ui-monospace,monospace;letter-spacing:.1em;color:var(--mono);text-transform:uppercase}
@@ -1512,7 +1521,7 @@ async function load(){
       firms.length + ' firm' + (firms.length === 1 ? '' : 's') + ' · one door'
       + (activeN ? ' · ' + activeN + ' active' : '') + '.';
     document.getElementById('grid').innerHTML = firms.length ? firms.map(f => `
-      <div class="fcard${f.needs_you ? ' attn' : ''}" role="link" tabindex="0"
+      <div class="fcard${f.needs_you ? ' attn' : ''}${f.running > f.stale_runs ? ' live' : ''}" role="link" tabindex="0"
         onclick="location.href='/f/${esc(f.id)}/'"
         onkeydown="if(event.key==='Enter')location.href='/f/${esc(f.id)}/'">
         <div class="fname">${f.running ? `<span class="dot ${f.running > f.stale_runs ? 'live' : 'stale'}" title="${f.running > f.stale_runs ? 'Active — '+f.running+' running' : f.stale_runs+' stale run(s)'}"></span>` : ''}${esc(f.name)}</div>
