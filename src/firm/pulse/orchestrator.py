@@ -19,6 +19,7 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from firm.core import repo
+from firm.services.escalation import raise_escalation, resolve_escalation
 
 # ---------------------------------------------------------------------------
 # Types
@@ -448,6 +449,59 @@ def topo_sort_members(
 # Main entry point
 # ---------------------------------------------------------------------------
 
+_IDLE_NUDGE_KEY = "backlog-exhausted"
+
+
+def _idle_nudge_lead(conn: sqlite3.Connection, firm_id: str) -> str | None:
+    """The active Member to attribute the idle nudge to — the top of the
+    hierarchy (no ``reports_to``), else the first active Member."""
+    members = repo.find(conn, "member", firm_id=firm_id, status="active")
+    if not members:
+        return None
+    lead = next((m for m in members if not m.get("reports_to_member_id")), None)
+    return (lead or members[0])["id"]
+
+
+def _reconcile_idle_nudge(conn: sqlite3.Connection, firm_id: str) -> None:
+    """Keep the 'firm idle' Board nudge in sync with reality.
+
+    A firm with active projects but ZERO queued units has drained its backlog
+    while work remains to be planned — pulses then spawn nobody, silently. Raise
+    ONE deduped escalation so that state is visible and actionable, and clear it
+    the moment any unit is queued again. This does NOT auto-invent work (that
+    would be the paperclip failure mode); it makes an idle firm ask the Board
+    for direction instead of stalling in silence.
+    """
+    open_units = [
+        u for u in repo.find(conn, "unit", firm_id=firm_id)
+        if u.get("status") in ("pending", "in_progress", "in_review")
+    ]
+    active_projects = [
+        p for p in repo.find(conn, "project", firm_id=firm_id)
+        if p.get("status") in ("active", "in_progress")
+    ]
+    key = f"{_IDLE_NUDGE_KEY}:{firm_id}"
+    if not open_units and active_projects:
+        lead = _idle_nudge_lead(conn, firm_id)
+        if lead is not None:
+            raise_escalation(conn, firm_id, {
+                "raised_by_member_id": lead,
+                "title": "Firm idle — no queued units despite active projects",
+                "body": (
+                    "Active projects exist but the unit queue is empty, so pulses "
+                    "spawn nobody. Queue the next work — decompose an approved plan "
+                    "into units, or close the projects if the firm is done. This "
+                    "nudge clears automatically once a unit is queued again."
+                ),
+                "severity": "low",
+                "dedupe_key": key,
+            })
+    else:
+        for e in repo.find(conn, "escalation", firm_id=firm_id, dedupe_key=key):
+            if e.get("status") in ("open", "acknowledged"):
+                resolve_escalation(conn, e["id"], status="resolved")
+
+
 def pulse(
     conn: sqlite3.Connection,
     firm_id: str,
@@ -491,6 +545,11 @@ def pulse(
             "reason": "outside business hours (firm-wide skip)",
         })
         return summary
+
+    # Keep the idle-firm nudge honest before selecting members (real pulses only):
+    # raise it when the backlog is empty, clear it once work is queued again.
+    if not dry_run:
+        _reconcile_idle_nudge(conn, firm_id)
 
     # Gate 2: per-member filters
     eligible, skipped = filter_members(conn, firm_id, now=now)

@@ -561,3 +561,64 @@ class TestReapStaleRuns:
 
         assert [r["run_id"] for r in summary.reaped] == ["RUN-001"]
         assert get(conn, "member_run", "RUN-001")["status"] == "running"
+
+
+# ---------------------------------------------------------------------------
+# Idle-firm nudge: active projects + empty unit queue → deduped Board
+# escalation; cleared once work is queued again (never auto-invents work).
+# ---------------------------------------------------------------------------
+
+class TestIdleNudge:
+    def _open_backlog_escs(self, conn):
+        from firm.core.repo import find
+        return [e for e in find(conn, "escalation", firm_id="chrisai",
+                                dedupe_key="backlog-exhausted:chrisai")
+                if e.get("status") in ("open", "acknowledged")]
+
+    def test_raises_when_active_project_but_no_units(self):
+        from firm.pulse.orchestrator import pulse
+        conn = _fresh_conn()
+        _add_project(conn, "PROJ-001")          # active, no units
+        _add_member(conn, "MEM-001")            # active, load=0
+        summary = pulse(conn, "chrisai", _noop_callback)
+        assert summary.ran == []                # nobody spawned
+        escs = self._open_backlog_escs(conn)
+        assert len(escs) == 1
+        assert "idle" in escs[0]["title"].lower()
+
+    def test_deduped_not_spammed_across_pulses(self):
+        from firm.pulse.orchestrator import pulse
+        conn = _fresh_conn()
+        _add_project(conn, "PROJ-001")
+        _add_member(conn, "MEM-001")
+        pulse(conn, "chrisai", _noop_callback)
+        pulse(conn, "chrisai", _noop_callback)
+        pulse(conn, "chrisai", _noop_callback)
+        assert len(self._open_backlog_escs(conn)) == 1   # one row, not three
+
+    def test_cleared_once_a_unit_is_queued(self):
+        from firm.pulse.orchestrator import pulse
+        conn = _fresh_conn()
+        _add_project(conn, "PROJ-001")
+        _add_member(conn, "MEM-001")
+        pulse(conn, "chrisai", _noop_callback)
+        assert len(self._open_backlog_escs(conn)) == 1
+        # queue work → next pulse reconciles the nudge away
+        _add_unit(conn, "UNIT-001", "PROJ-001", claimed_by="MEM-001")
+        pulse(conn, "chrisai", _noop_callback)
+        assert self._open_backlog_escs(conn) == []
+
+    def test_no_nudge_without_active_projects(self):
+        from firm.pulse.orchestrator import pulse
+        conn = _fresh_conn()
+        _add_member(conn, "MEM-001")            # active member, but no projects
+        pulse(conn, "chrisai", _noop_callback)
+        assert self._open_backlog_escs(conn) == []
+
+    def test_dry_run_never_writes_a_nudge(self):
+        from firm.pulse.orchestrator import pulse
+        conn = _fresh_conn()
+        _add_project(conn, "PROJ-001")
+        _add_member(conn, "MEM-001")
+        pulse(conn, "chrisai", _noop_callback, dry_run=True)
+        assert self._open_backlog_escs(conn) == []
