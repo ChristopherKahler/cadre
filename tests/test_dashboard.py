@@ -680,3 +680,28 @@ def test_hub_strips_single_firm_db_override(tmp_path, monkeypatch, capsys):
     assert "CADRE_DB_TOKEN" not in os.environ
     out = capsys.readouterr().out
     assert "hub ignores" in out
+
+
+def test_discover_firms_duplicate_id_prefers_canonical_folder(tmp_path, capsys):
+    """A backup copy inside the firms root must never shadow the real firm —
+    the folder whose name matches the firm id wins, the duplicate is reported.
+    (Field failure: dnd-table.pre-mp-<date> sorted after dnd-table and served
+    the operator a stale world.)"""
+    from firm.core.db import connect
+    from firm.core.migrate import apply_migrations
+    from firm.dashboard.server import discover_firms
+
+    for folder in ("f1", "f1.backup-copy"):
+        ws = tmp_path / folder
+        (ws / ".firm").mkdir(parents=True)
+        conn = connect(ws / ".firm" / "firm.db")
+        apply_migrations(conn)
+        conn.execute("INSERT INTO firm (id, name) VALUES ('f1', 'Firm One')")
+        conn.commit()
+        conn.close()
+
+    firms = discover_firms(tmp_path)
+    assert list(firms) == ["f1"]
+    assert firms["f1"]["workspace"].name == "f1"          # canonical folder serves
+    assert firms["f1"]["shadowed"] == [str(tmp_path / "f1.backup-copy")]
+    assert "duplicate firm id" in capsys.readouterr().out

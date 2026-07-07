@@ -1339,12 +1339,33 @@ def discover_firms(root: Path) -> dict[str, dict[str, Any]]:
                 conn.close()
         except sqlite3.Error:
             continue  # unreadable db — skip, don't take the hub down
-        if row:
-            firms[row["id"]] = {
-                "workspace": d.resolve(),
-                "db_path": db.resolve(),
-                "name": row["name"] or row["id"],
-            }
+        if not row:
+            continue
+        if row["id"] in firms:
+            # Duplicate firm id (usually a backup copy left inside the scan
+            # root). NEVER let it silently shadow the canonical workspace —
+            # prefer the folder whose name matches the firm id, else first
+            # wins; the loser is reported, not served.
+            keep = firms[row["id"]]
+            challenger = {"workspace": d.resolve(), "db_path": db.resolve(),
+                          "name": row["name"] or row["id"]}
+            if d.name == row["id"] and keep["workspace"].name != row["id"]:
+                keep, challenger = challenger, keep
+            firms[row["id"]] = keep
+            firms[row["id"]].setdefault("shadowed", []).append(
+                str(challenger["workspace"]))
+            print(json.dumps({
+                "warning": f"duplicate firm id {row['id']!r}",
+                "serving": str(keep["workspace"]),
+                "ignored": str(challenger["workspace"]),
+                "hint": "move backup copies out of the hub's firms root",
+            }))
+            continue
+        firms[row["id"]] = {
+            "workspace": d.resolve(),
+            "db_path": db.resolve(),
+            "name": row["name"] or row["id"],
+        }
     return firms
 
 
