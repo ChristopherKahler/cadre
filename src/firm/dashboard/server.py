@@ -877,6 +877,38 @@ def _http_send(
     h.wfile.write(body)
 
 
+def _send_media(h: BaseHTTPRequestHandler, content: bytes, ctype: str) -> None:
+    """Dir-file responses with HTTP Range support — browsers refuse to seek
+    audio/video without byte ranges, so scrubbing depends on this."""
+    total = len(content)
+    rng = h.headers.get("Range") or ""
+    if rng.startswith("bytes="):
+        start_s, _, end_s = rng[6:].partition("-")
+        try:
+            start = int(start_s) if start_s else 0
+            end = min(int(end_s) if end_s else total - 1, total - 1)
+        except ValueError:
+            start, end = 0, total - 1
+        if 0 <= start <= end:
+            chunk = content[start:end + 1]
+            h.send_response(206)
+            h.send_header("Content-Type", ctype)
+            h.send_header("Content-Length", str(len(chunk)))
+            h.send_header("Content-Range", f"bytes {start}-{end}/{total}")
+            h.send_header("Accept-Ranges", "bytes")
+            h.send_header("Cache-Control", "no-store")
+            h.end_headers()
+            h.wfile.write(chunk)
+            return
+    h.send_response(200)
+    h.send_header("Content-Type", ctype)
+    h.send_header("Content-Length", str(total))
+    h.send_header("Accept-Ranges", "bytes")
+    h.send_header("Cache-Control", "no-store")
+    h.end_headers()
+    h.wfile.write(content)
+
+
 def _serve_index(h: BaseHTTPRequestHandler, base: str = "") -> None:
     body = _INDEX_HTML.read_bytes()
     if base:
@@ -1009,7 +1041,7 @@ def _firm_get(
             elif parts[3] == "dir" and len(parts) == 6:
                 content, ctype = read_view_dir_file(
                     workspace, view, parts[4], parts[5])
-                _http_send(h, 200, content, ctype)
+                _send_media(h, content, ctype)
             else:
                 raise ValueError("unknown view route")
         except ValueError as exc:

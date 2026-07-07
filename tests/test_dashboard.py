@@ -705,3 +705,35 @@ def test_discover_firms_duplicate_id_prefers_canonical_folder(tmp_path, capsys):
     assert firms["f1"]["workspace"].name == "f1"          # canonical folder serves
     assert firms["f1"]["shadowed"] == [str(tmp_path / "f1.backup-copy")]
     assert "duplicate firm id" in capsys.readouterr().out
+
+
+def test_send_media_supports_byte_ranges():
+    """Audio scrubbing depends on 206 partial responses."""
+    import io
+    from firm.dashboard.server import _send_media
+
+    class H:
+        def __init__(self, rng=None):
+            self.headers = {"Range": rng} if rng else {}
+            self.wfile = io.BytesIO()
+            self.sent = []
+        def send_response(self, code): self.sent.append(code)
+        def send_header(self, k, v): self.sent.append((k, v))
+        def end_headers(self): pass
+
+    data = bytes(range(256)) * 4  # 1024 bytes
+    h = H("bytes=100-199")
+    _send_media(h, data, "audio/mpeg")
+    assert h.sent[0] == 206
+    assert ("Content-Range", "bytes 100-199/1024") in h.sent
+    assert h.wfile.getvalue() == data[100:200]
+
+    h2 = H("bytes=1000-")            # open-ended tail
+    _send_media(h2, data, "audio/mpeg")
+    assert h2.sent[0] == 206 and h2.wfile.getvalue() == data[1000:]
+
+    h3 = H()                         # no range -> whole file + Accept-Ranges
+    _send_media(h3, data, "audio/mpeg")
+    assert h3.sent[0] == 200
+    assert ("Accept-Ranges", "bytes") in h3.sent
+    assert h3.wfile.getvalue() == data
