@@ -27,6 +27,29 @@ DOCUMENT_STATUSES = ["active", "archived", "deprecated"]
 DOCUMENT_AUTHOR_TYPES = ["member", "board"]
 
 
+def _next_version_path(content_path: str, current_version: int) -> str:
+    """Compute the next never-overwrite version path for a deliverable.
+
+    Rule (Board policy, 2026-07): a rewrite never touches the prior file.
+    ``foo-v1.md`` → ``foo-v2.md``; a path with no ``-vN`` marker is treated
+    as v1 and becomes ``foo-v2.md``. This keeps every version on disk so the
+    Board can diff v1↔v2. Directory and extension are preserved.
+    """
+    import os
+    import re
+
+    directory, base = os.path.split(content_path)
+    stem, ext = os.path.splitext(base)
+    m = re.search(r"^(?P<head>.*?)-v(?P<n>\d+)$", stem)
+    if m:
+        nxt = int(m.group("n")) + 1
+        new_stem = f"{m.group('head')}-v{nxt}"
+    else:
+        nxt = max(current_version, 1) + 1
+        new_stem = f"{stem}-v{nxt}"
+    return os.path.join(directory, f"{new_stem}{ext}") if directory else f"{new_stem}{ext}"
+
+
 def create_document(
     conn: sqlite3.Connection,
     firm_id: str,
@@ -236,19 +259,27 @@ def request_revision(
         )
     assignee = src_unit.get("assignee_member_id") or src_unit.get("claimed_by")
 
+    old_path = doc.get("content_path") or ""
+    new_path = _next_version_path(old_path, doc.get("version") or 1)
+
     unit_data: dict[str, Any] = {
         "name": f"Revise {document_id}: {doc.get('name', '')}"[:120],
         "project_id": src_unit["project_id"],
         "priority": "high",
         "description": (
-            f"THE BOARD requested a revision of {document_id} "
-            f"({doc.get('content_path')}).\n\nBoard comment:\n{comment_body}\n\n"
-            f"Original unit: {src_unit['id']}. Revise the deliverable in place "
-            "(same content_path), then complete this unit."
+            f"THE BOARD requested a revision of {document_id} ({old_path}).\n\n"
+            f"Board comment:\n{comment_body}\n\n"
+            f"Original unit: {src_unit['id']}. NEVER-OVERWRITE RULE: do not touch "
+            f"{old_path} — copy it to {new_path}, edit ONLY the copy, and leave the "
+            "original byte-for-byte so the Board can diff versions. Register the "
+            f"revised file as a new version of {document_id} (update its "
+            f"content_path to {new_path}; the version field auto-increments). "
+            "Then complete this unit."
         ),
         "acceptance_criteria": [
             f"The Board's comment on {document_id} is addressed in the deliverable",
-            "Revision saved to the same content_path",
+            f"Revision saved to a NEW file {new_path} (never editing {old_path})",
+            f"The original {old_path} is left untouched for diffing",
         ],
         "tags": ["revision", document_id],
     }

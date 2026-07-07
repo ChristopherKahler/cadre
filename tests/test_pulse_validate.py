@@ -210,6 +210,69 @@ class TestValidateMultiple:
         assert "Unknown" in result.details[0]["message"]
 
 
+class TestNonemptyFloor:
+    """Always-on completion floor: a no-op run never completes a unit, even
+    with no validation_config (the wastelander mis-seed guard)."""
+
+    def test_empty_run_fails_even_with_none_config(self):
+        result = _mock_result(text="", tool_calls=[])
+        out = validate_output(result, None, "/tmp")
+        assert out.passed is False
+        assert out.details[0]["name"] == "nonempty_floor"
+
+    def test_empty_run_fails_even_when_disabled(self):
+        result = _mock_result(text="   ", tool_calls=[])
+        out = validate_output(result, {"enabled": False}, "/tmp")
+        assert out.passed is False
+
+    def test_tool_action_satisfies_floor(self):
+        # A file-writer with terse chatter still passes the floor.
+        result = _mock_result(text="", tool_calls=[
+            {"name": "Write", "input": {"file_path": "/tmp/x.md"}},
+        ])
+        out = validate_output(result, None, "/tmp")
+        assert out.passed is True
+
+    def test_text_satisfies_floor(self):
+        out = validate_output(_mock_result(text="real work"), None, "/tmp")
+        assert out.passed is True
+
+
+class TestFileExistsRequireWritten:
+    """require_written stops a blocked/no-op drafter from completing a unit
+    it never wrote a file for (Wren, RUN-017, 2026-07-07)."""
+
+    def test_no_file_written_fails_when_required(self):
+        result = _mock_result(text="I am blocked and will not draft.", tool_calls=[])
+        config = {"validators": [{"name": "file_exists", "require_written": True}]}
+        out = validate_output(result, config, "/tmp")
+        assert out.passed is False
+        assert out.details[0]["name"] == "file_exists"
+
+    def test_no_file_passes_by_default(self):
+        result = _mock_result(text="did analysis, wrote nothing", tool_calls=[])
+        config = {"validators": ["file_exists"]}
+        out = validate_output(result, config, "/tmp")
+        assert out.passed is True
+
+    def test_written_file_that_exists_passes(self, tmp_path):
+        fp = tmp_path / "chapter.md"
+        fp.write_text("prose")
+        result = _mock_result(text="drafted", tool_calls=[
+            {"name": "Write", "input": {"file_path": str(fp)}},
+        ])
+        config = {"validators": [{"name": "file_exists", "require_written": True}]}
+        out = validate_output(result, config, str(tmp_path))
+        assert out.passed is True
+
+    def test_dict_params_pass_through_threshold(self):
+        text = " ".join(["word"] * 40)
+        config = {"validators": [{"name": "min_word_count", "threshold": 30}]}
+        assert validate_output(_mock_result(text=text), config, "/tmp").passed is True
+        config = {"validators": [{"name": "min_word_count", "threshold": 60}]}
+        assert validate_output(_mock_result(text=text), config, "/tmp").passed is False
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Validation: retry_on_failure
 # ═══════════════════════════════════════════════════════════════════════════

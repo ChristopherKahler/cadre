@@ -9,11 +9,17 @@ import pytest
 from firm.core.migrate import apply_migrations
 from firm.core.repo import create, find
 from firm.services.document import (
+    _next_version_path,
     create_document,
     list_documents,
+    request_revision,
     update_document,
     view_document,
 )
+from firm.services.member import create_member
+from firm.services.operation import create_operation
+from firm.services.project import create_project
+from firm.services.unit import create_unit
 
 
 def _fresh_conn() -> sqlite3.Connection:
@@ -219,3 +225,56 @@ def test_update_document_invalid_status() -> None:
     )
     with pytest.raises(ValueError, match="Invalid status"):
         update_document(conn, doc["id"], {"status": "deleted"})
+
+
+# ---------------------------------------------------------------------------
+# Never-overwrite versioning (Board policy 2026-07): a rewrite copies the
+# original to the next -vN and edits the copy; v1 stays for diffing.
+# ---------------------------------------------------------------------------
+
+
+def test_next_version_path_inserts_v2_when_unmarked() -> None:
+    assert _next_version_path("docs/story/ch07.md", 1) == "docs/story/ch07-v2.md"
+
+
+def test_next_version_path_bumps_existing_marker() -> None:
+    assert _next_version_path("docs/story/ch07-v2.md", 2) == "docs/story/ch07-v3.md"
+    assert _next_version_path("a/b-v9.txt", 9) == "a/b-v10.txt"
+
+
+def test_next_version_path_no_directory() -> None:
+    assert _next_version_path("draft.md", 1) == "draft-v2.md"
+
+
+def _conn_with_unit_doc() -> tuple[sqlite3.Connection, str]:
+    """Firm + operation + project + unit + a document parented to that unit."""
+    conn = _fresh_conn()
+    create_member(conn, "chrisai", {"name": "Wren", "role": "Novelist"})
+    create_operation(conn, "chrisai", {"name": "Novel", "owner_member_id": "MEM-001"})
+    create_project(conn, "chrisai", {
+        "name": "Drafting", "operation_id": "OPS-001", "due_date": "2026-12-31",
+    })
+    unit = create_unit(conn, "chrisai", {
+        "name": "Draft ch07", "project_id": "PROJ-001",
+        "assignee_member_id": "MEM-001",
+    })
+    doc = create_document(conn, "chrisai", {
+        "name": "Chapter 7 v1", "type": "draft",
+        "content_path": "docs/story/drafts/ch07-v1.md",
+        "parent_entity_type": "unit", "parent_entity_id": unit["id"],
+    })
+    return conn, doc["id"]
+
+
+def test_request_revision_targets_new_version_never_overwrites() -> None:
+    conn, doc_id = _conn_with_unit_doc()
+    out = request_revision(conn, "chrisai", doc_id, "Tighten the opening beat.")
+    desc = out["unit"]["description"]
+    acs = " ".join(out["unit"]["acceptance_criteria"])
+    # New version path is named; the original is explicitly protected.
+    assert "ch07-v2.md" in desc
+    assert "ch07-v2.md" in acs
+    assert "ch07-v1.md" in acs           # the original, named as untouchable
+    # The old overwrite-in-place instruction must be gone.
+    assert "same content_path" not in desc.lower()
+    assert "in place" not in desc.lower()
