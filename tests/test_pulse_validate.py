@@ -461,3 +461,52 @@ class TestCheckRateLimit:
     def test_multiple_events_one_above(self):
         events = [{"utilization": 0.3}, {"utilization": 0.95}]
         assert check_rate_limit(events, alert_threshold_pct=80) is True
+
+
+# ---------------------------------------------------------------------------
+# sql_guard — generic DB-state validator (turn-close guard; ESC-010 lineage)
+# ---------------------------------------------------------------------------
+
+def _workspace_db(tmp_path):
+    """A real file-backed firm workspace so db_connection(cwd) resolves."""
+    from firm.core.db import connect, get_db_path
+
+    (tmp_path / ".firm").mkdir()
+    conn = connect(get_db_path(tmp_path))
+    apply_migrations(conn)
+    create(conn, "firm", {"id": "chrisai", "name": "ChrisAI"})
+    conn.commit()
+    conn.close()
+    return tmp_path
+
+
+class TestSqlGuard:
+    def test_passes_when_query_returns_row(self, tmp_path):
+        ws = _workspace_db(tmp_path)
+        cfg = {"validators": [
+            {"name": "sql_guard", "query": "SELECT 1", "expect": "nonempty"}]}
+        assert validate_output(_mock_result(), cfg, str(ws)).passed is True
+
+    def test_fails_with_message_when_no_row(self, tmp_path):
+        ws = _workspace_db(tmp_path)
+        cfg = {"validators": [{
+            "name": "sql_guard", "query": "SELECT 1 WHERE 1=0",
+            "expect": "nonempty", "message": "turn not closed"}]}
+        r = validate_output(_mock_result(), cfg, str(ws))
+        assert r.passed is False
+        assert r.details[0]["message"] == "turn not closed"
+
+    def test_expect_empty_inverts(self, tmp_path):
+        ws = _workspace_db(tmp_path)
+        cfg = {"validators": [{
+            "name": "sql_guard", "query": "SELECT 1 WHERE 1=0", "expect": "empty"}]}
+        assert validate_output(_mock_result(), cfg, str(ws)).passed is True
+
+    def test_broken_query_fails_loud(self, tmp_path):
+        ws = _workspace_db(tmp_path)
+        cfg = {"validators": [{
+            "name": "sql_guard", "query": "SELECT * FROM does_not_exist",
+            "expect": "nonempty"}]}
+        r = validate_output(_mock_result(), cfg, str(ws))
+        assert r.passed is False
+        assert "error" in r.details[0]["message"].lower()

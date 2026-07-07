@@ -95,6 +95,44 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the planned changes without writing to the DB.",
     )
 
+    # ---- escalation subparser (MCP->CLI write-surface migration) ----
+    esc_parser = subparsers.add_parser(
+        "escalation",
+        help="Escalation operations (raise, ...). Replaces the firm MCP firm_escalate tool.",
+    )
+    esc_sub = esc_parser.add_subparsers(dest="escalation_command", metavar="<escalation-command>")
+
+    esc_raise_parser = esc_sub.add_parser(
+        "raise",
+        help="Raise an escalation to the Board (dedup-aware, notifies immediately).",
+    )
+    esc_raise_parser.add_argument(
+        "--member", dest="raised_by_member_id", required=True,
+        help="Member ID raising the escalation (actor on the records row).",
+    )
+    esc_raise_parser.add_argument("--title", required=True, help="Short escalation title.")
+    esc_raise_parser.add_argument("--body", default="", help="Escalation detail body.")
+    esc_raise_parser.add_argument(
+        "--severity", default="normal", choices=["low", "normal", "high", "critical"],
+        help="Severity (default: normal).",
+    )
+    esc_raise_parser.add_argument(
+        "--target-type", dest="target_entity_type", default="",
+        help="Optional target entity type (e.g., unit).",
+    )
+    esc_raise_parser.add_argument(
+        "--target-id", dest="target_entity_id", default="",
+        help="Optional target entity id (e.g., UNIT-018).",
+    )
+    esc_raise_parser.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
+    esc_raise_parser.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. Defaults to $FIRM_ID or 'chrisai'.",
+    )
+
     # ---- goal subparser ----
     goal_parser = subparsers.add_parser(
         "goal",
@@ -339,6 +377,25 @@ def main(argv: list[str] | None = None) -> int:
                 firm_id=firm_id,
             )
         parser.parse_args(["unit", "--help"])
+        return 0
+
+    if args.command == "escalation":
+        if args.escalation_command == "raise":
+            from firm.cli.escalation import run_escalation_raise
+
+            workspace = args.workspace if args.workspace is not None else Path.cwd()
+            firm_id = args.firm_id or os.environ.get("FIRM_ID", "chrisai")
+            return run_escalation_raise(
+                workspace=workspace,
+                raised_by_member_id=args.raised_by_member_id,
+                title=args.title,
+                body=args.body,
+                severity=args.severity,
+                target_entity_type=args.target_entity_type,
+                target_entity_id=args.target_entity_id,
+                firm_id=firm_id,
+            )
+        parser.parse_args(["escalation", "--help"])
         return 0
 
     if args.command == "goal":
