@@ -393,3 +393,71 @@ class TestRetryAccounting:
         assert len(events) == 1
         assert events[0]["run_id"] == result["run_id"]
         assert events[0]["unit_id"] == "UNT-001"
+
+
+# ---------------------------------------------------------------------------
+# Deliverable registration: a completed unit's written file becomes a Document
+# so it lands in the Board's review surface (wastelander ch18 pilot fix).
+# ---------------------------------------------------------------------------
+
+from firm.pulse.runner import (  # noqa: E402
+    _register_deliverables,
+    _wants_deliverable_registration,
+)
+from firm.services.member import create_member  # noqa: E402
+from firm.services.operation import create_operation  # noqa: E402
+from firm.services.project import create_project  # noqa: E402
+from firm.services.unit import create_unit  # noqa: E402
+
+
+def _conn_with_unit():
+    conn = _fresh_conn()
+    create_member(conn, "chrisai", {"name": "Wren", "role": "Novelist"})
+    create_operation(conn, "chrisai", {"name": "Novel", "owner_member_id": "MEM-001"})
+    create_project(conn, "chrisai", {
+        "name": "Drafting", "operation_id": "OPS-001", "due_date": "2026-12-31",
+    })
+    create_unit(conn, "chrisai", {"name": "Draft ch18", "project_id": "PROJ-001"})
+    return conn
+
+
+def test_wants_deliverable_registration():
+    assert _wants_deliverable_registration(
+        {"validators": [{"name": "file_exists", "require_written": True}]}) is True
+    assert _wants_deliverable_registration({"validators": ["file_exists"]}) is False
+    assert _wants_deliverable_registration(None) is False
+    # tolerates JSON string form
+    assert _wants_deliverable_registration(
+        '{"validators":[{"name":"file_exists","require_written":true}]}') is True
+
+
+def test_register_deliverables_creates_document(tmp_path):
+    conn = _conn_with_unit()
+    f = tmp_path / "ch18-the-frame-v1.md"
+    f.write_text("prose")
+    parsed = {"tool_calls": [{"name": "Write", "input": {"file_path": str(f)}}]}
+    cfg = {"validators": [{"name": "file_exists", "require_written": True}]}
+    unit = get(conn, "unit", "UNIT-001")
+
+    _register_deliverables(conn, "chrisai", unit, "MEM-001", parsed, cfg, str(tmp_path))
+    docs = find(conn, "document", firm_id="chrisai")
+    assert len(docs) == 1
+    assert docs[0]["content_path"] == "ch18-the-frame-v1.md"
+    assert docs[0]["parent_entity_id"] == "UNIT-001"
+    assert docs[0]["author_id"] == "MEM-001"
+
+    # idempotent — a retry writing the same path does not duplicate
+    _register_deliverables(conn, "chrisai", unit, "MEM-001", parsed, cfg, str(tmp_path))
+    assert len(find(conn, "document", firm_id="chrisai")) == 1
+
+
+def test_register_deliverables_skips_without_optin(tmp_path):
+    conn = _conn_with_unit()
+    f = tmp_path / "scratch.md"
+    f.write_text("x")
+    parsed = {"tool_calls": [{"name": "Write", "input": {"file_path": str(f)}}]}
+    unit = get(conn, "unit", "UNIT-001")
+    # no require_written → no registration
+    _register_deliverables(conn, "chrisai", unit, "MEM-001", parsed,
+                           {"validators": ["file_exists"]}, str(tmp_path))
+    assert find(conn, "document", firm_id="chrisai") == []

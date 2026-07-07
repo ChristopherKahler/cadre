@@ -24,6 +24,7 @@ from firm.pulse.parser import parse_stream
 from firm.pulse.spawn import spawn_member_run
 from firm.pulse.validate import retry_on_failure, validate_output
 from firm.services._id import next_id
+from firm.services.document import create_document
 from firm.services.unit import complete_unit
 
 
@@ -39,6 +40,74 @@ def _get_contract(
     if not contract_id:
         return None
     return repo.get(conn, "contract", contract_id)
+
+
+def _wants_deliverable_registration(
+    validation_config: dict[str, Any] | None,
+) -> bool:
+    """True when the contract declares its units produce a file deliverable
+    (a ``file_exists`` validator with ``require_written``). That same opt-in
+    that makes a fileless run FAIL also means: when the run DOES write a file,
+    the harness should register it as a Document so the Board can review it.
+    """
+    if isinstance(validation_config, str):
+        try:
+            validation_config = json.loads(validation_config)
+        except (json.JSONDecodeError, TypeError):
+            return False
+    if not isinstance(validation_config, dict):
+        return False
+    for entry in validation_config.get("validators", []):
+        if isinstance(entry, dict) and entry.get("name") == "file_exists" \
+                and entry.get("require_written"):
+            return True
+    return False
+
+
+def _register_deliverables(
+    conn: sqlite3.Connection,
+    firm_id: str,
+    unit: dict[str, Any],
+    member_id: str,
+    parsed: dict[str, Any],
+    validation_config: dict[str, Any] | None,
+    cwd: str,
+) -> None:
+    """Register files a run wrote as Documents parented to the unit, so a
+    completed unit's deliverable actually lands in the Board's review surface.
+
+    Seam-4 owns completion; a completed unit with a verified file but no
+    Document row is invisible to the Board (wastelander UNIT-023 / ch18 pilot,
+    2026-07-07). Gated on the deliverable opt-in so scratch-writing members
+    don't spam Documents; idempotent by content_path so retries don't dupe.
+    """
+    import os
+
+    if not _wants_deliverable_registration(validation_config):
+        return
+    seen: set[str] = set()
+    for tc in parsed.get("tool_calls") or []:
+        if not isinstance(tc, dict) or tc.get("name") not in ("Write", "Edit"):
+            continue
+        inp = tc.get("input")
+        fp = inp.get("file_path") if isinstance(inp, dict) else None
+        if not fp or fp in seen:
+            continue
+        seen.add(fp)
+        if not os.path.exists(fp):
+            continue
+        rel = os.path.relpath(fp, cwd) if cwd else fp
+        if repo.find(conn, "document", firm_id=firm_id, content_path=rel):
+            continue  # already registered
+        create_document(conn, firm_id, {
+            "name": os.path.basename(fp),
+            "type": "draft",
+            "content_path": rel,
+            "parent_entity_type": "unit",
+            "parent_entity_id": unit["id"],
+            "author_type": "member",
+            "author_id": member_id,
+        })
 
 
 def _get_validation_config(
@@ -345,6 +414,9 @@ def _execute_run(
     # unblock. Runner-owned per the relay seam-4 convention: the harness,
     # not the model, is the completion authority.
     if validation_result.passed:
+        _register_deliverables(
+            conn, firm_id, unit, member_id, parsed, validation_config, cwd,
+        )
         complete_unit(conn, firm_id, unit["id"], member_id, run_id=run_id)
 
     return {
