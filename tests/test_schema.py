@@ -38,6 +38,7 @@ EXPECTED_ENTITY_TABLES = {
     "pulse_lock",
     "pulse_request",
     "firm_rev",
+    "gen_spend",
 }
 
 

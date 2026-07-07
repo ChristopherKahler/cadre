@@ -381,6 +381,34 @@ def _parse_pulse_config(contract: dict[str, Any]) -> dict[str, Any]:
     return pc if isinstance(pc, dict) else {}
 
 
+def _gen_spend_summary(conn: sqlite3.Connection, firm_id: str) -> list[dict[str, Any]]:
+    """Boardroom gen-spend line items — no live balance in the poll path (that
+    is a network call; the /api/gen-spend endpoint carries it). Tolerant of a
+    firm whose DB predates the gen_spend migration."""
+    from firm.services import gen_spend
+    try:
+        return gen_spend.summary(conn, firm_id)
+    except Exception:
+        return []
+
+
+def _load_firm_env(workspace: Path) -> None:
+    """Best-effort load of the firm's .env so adapter balance probes (e.g.
+    ELEVENLABS_API_KEY) have credentials. setdefault — never clobbers the
+    process env."""
+    env = workspace / ".env"
+    if not env.exists():
+        return
+    try:
+        for line in env.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+    except OSError:
+        pass
+
+
 def assemble_state(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
     """Build the full dashboard payload from the firm DB."""
     firm = repo.get(conn, "firm", firm_id) or {"id": firm_id, "name": firm_id}
@@ -522,6 +550,7 @@ def assemble_state(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
         "gates": gates,
         "escalations": escalations,
         "goals": goals,
+        "gen_spend": _gen_spend_summary(conn, firm_id),
         "documents": documents,
         "runs": runs,
         "records": records,
@@ -1083,6 +1112,16 @@ def _firm_get(
         conn = connect(db_path)
         try:
             _http_send(h, 200, assemble_state(conn, firm_id))
+        finally:
+            conn.close()
+        return
+    if path == "/api/gen-spend":
+        _load_firm_env(workspace)   # adapter balance probes need the firm's API keys
+        conn = connect(db_path)
+        try:
+            from firm.services import gen_spend
+            _http_send(h, 200, {"gen_spend": gen_spend.summary(
+                conn, firm_id, with_balance=True)})
         finally:
             conn.close()
         return
