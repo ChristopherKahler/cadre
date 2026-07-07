@@ -1113,7 +1113,7 @@ function render(){
 function renderStats(S){
   const units = S.units || [];
   const count = st => units.filter(u => st.includes(u.status)).length;
-  const pendingGates = (S.gates || []).filter(g => g.status === 'pending').length;
+  const pendingGates = (S.gates || []).filter(g => g.status === 'pending' && !g.dismissed_at).length;
   const openEsc = (S.escalations || []).filter(e => e.status !== 'resolved').length;
   const attn = pendingGates + openEsc;
   const navAttn = document.getElementById('navAttn');
