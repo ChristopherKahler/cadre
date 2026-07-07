@@ -579,6 +579,10 @@ tr.flash td{animation:rowflash 2.2s ease-out}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v3h4"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M15 8h-5"/><path d="M15 12h-5"/></svg>
           <span>Records</span>
         </button>
+        <button class="navitem" data-view="genspend" title="Gen Spend">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M14.5 9.2a2.6 2.6 0 0 0-2.5-1.4c-1.5 0-2.6.9-2.6 2s1.1 1.8 2.6 2 2.6.9 2.6 2-1.1 2-2.6 2a2.6 2.6 0 0 1-2.5-1.4"/><path d="M12 6.5v11"/></svg>
+          <span>Gen Spend</span>
+        </button>
       </div>
       <div class="navgroup">
         <div class="navlabel">Engine</div>
@@ -711,6 +715,12 @@ tr.flash td{animation:rowflash 2.2s ease-out}
       <div class="page" id="page-records">
         <div class="pagehead"><h1>Records</h1><p>The immutable audit feed — everything that happened, in order.</p></div>
         <div class="listcard" id="recordsFeed"></div>
+      </div>
+
+      <!-- ============ GEN SPEND ============ -->
+      <div class="page" id="page-genspend">
+        <div class="pagehead"><h1>Gen Spend</h1><p>Every generative API this firm spends on — voice, images, and whatever tools it inherits. Each platform is normalized by an adapter into cost, usage, and live balance.</p></div>
+        <div class="listcard" id="genSpendBody"></div>
       </div>
 
       <!-- ============ SETTINGS ============ -->
@@ -862,7 +872,7 @@ document.getElementById('sbTrigger').addEventListener('click', () => {
 /* Hub tenancy: served under /f/<firm> the server stamps data-base on <html>;
    standalone it's absent and BASE is ''. Every API URL goes through BASE. */
 const BASE = document.documentElement.dataset.base || '';
-const VIEWS = {dashboard:'Dashboard', roster:'Roster', ops:'Operations', goals:'Goals & spend', docs:'Deliverables', runs:'Runs', records:'Records', settings:'Settings'};
+const VIEWS = {dashboard:'Dashboard', roster:'Roster', ops:'Operations', goals:'Goals & spend', docs:'Deliverables', runs:'Runs', records:'Records', genspend:'Gen Spend', settings:'Settings'};
 let currentView = 'dashboard';
 function show(view){
   if(!VIEWS[view]) view = 'dashboard';
@@ -874,6 +884,7 @@ function show(view){
   app.classList.remove('mobile-open');
   if(location.hash !== '#/' + view) history.replaceState(null, '', '#/' + view);
   if(view === 'roster' && !viewInit) requestAnimationFrame(fitCanvas);
+  if(view === 'genspend') fetchGenBalance();
 }
 document.querySelectorAll('.navitem[data-view]').forEach(b =>
   b.addEventListener('click', () => show(b.dataset.view)));
@@ -1164,7 +1175,7 @@ function render(){
   withScrollKept([], () => {
     renderStats(S); renderGates(S); renderEscalations(S); renderRecent(S);
     renderRosterCanvas(S); renderPipeline(S); renderGoals(S); renderCosts(S);
-    renderDocs(S); renderRuns(S); renderRecords(S); renderSettings(S);
+    renderDocs(S); renderRuns(S); renderRecords(S); renderGenSpend(S); renderSettings(S);
     updateEngagement();
   });
 }
@@ -2113,6 +2124,55 @@ function renderRecords(S){
         · <b>${esc(r.actor_id || r.actor_type)}</b> → ${esc(r.target_entity_type)} <span class="mono" style="font-size:11px">${esc(r.target_entity_id)}</span></span>
     </div>`;
   }).join('');
+}
+
+/* ---- generative spend ---- */
+let __lastGenRows = [], __genBalance = {};
+function renderGenSpend(S){ __lastGenRows = S.gen_spend || []; paintGenSpend(); }
+function paintGenSpend(){
+  const el = document.getElementById('genSpendBody');
+  if(!el) return;
+  const rows = __lastGenRows;
+  const money = c => { c = Number(c) || 0; return '$' + c.toFixed(c < 1 ? 4 : 2); };
+  if(!rows.length){
+    el.innerHTML = '<div class="evt"><span class="empty">No generative spend logged yet — it appears the moment a tool generates.</span></div>';
+    return;
+  }
+  const total = rows.reduce((a, r) => a + (Number(r.cost_usd) || 0), 0);
+  el.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:2px 2px 14px;border-bottom:1px solid rgba(var(--brand-primary-rgb),.15);margin-bottom:6px">' +
+      '<span style="font:600 10.5px var(--font-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--brand-text-dim)">Spend this period</span>' +
+      '<span style="font:700 18px var(--font-mono);color:var(--brand-primary)">' + money(total) + '</span>' +
+    '</div>' +
+    rows.map(r => {
+      const bal = __genBalance[r.platform];
+      let meter = '';
+      if(bal && bal.limit){
+        const pct = Math.min(100, Math.round(bal.used / bal.limit * 100));
+        const resets = bal.resets_at ? ' · resets ' + new Date(bal.resets_at * 1000).toLocaleDateString() : '';
+        meter =
+          '<div style="margin-top:9px"><div style="height:5px;border-radius:3px;background:rgba(var(--brand-primary-rgb),.14);overflow:hidden">' +
+            '<div style="height:100%;width:' + pct + '%;background:var(--brand-primary)"></div></div>' +
+          '<span style="font:500 10.5px var(--font-mono);color:var(--brand-text-dim)">' +
+            Number(bal.used).toLocaleString() + ' / ' + Number(bal.limit).toLocaleString() + ' ' + esc(r.unit_label || '') + ' (' + pct + '%)' + resets + '</span></div>';
+      }
+      return '<div style="padding:13px 2px;border-bottom:1px solid rgba(var(--brand-primary-rgb),.08)">' +
+        '<div style="display:flex;align-items:baseline;gap:11px;flex-wrap:wrap">' +
+          '<span style="font:600 14px var(--font-display);color:var(--brand-text)">' + esc(r.label || r.platform) + '</span>' +
+          '<span style="font:500 12px var(--font-mono);color:var(--brand-text-secondary)">' + r.events + ' gen · ' + Math.round(r.units).toLocaleString() + ' ' + esc(r.unit_label || '') + '</span>' +
+          '<span style="margin-left:auto;font:700 15px var(--font-mono);color:var(--brand-primary)">' + money(r.cost_usd) + '</span>' +
+        '</div>' + meter +
+      '</div>';
+    }).join('');
+}
+async function fetchGenBalance(){
+  try{
+    const r = await fetch(BASE + '/api/gen-spend');
+    const d = await r.json();
+    __genBalance = {};
+    (d.gen_spend || []).forEach(x => { if(x.balance) __genBalance[x.platform] = x.balance; });
+    paintGenSpend();
+  }catch(e){}
 }
 
 /* ---- modal + actions ---- */
