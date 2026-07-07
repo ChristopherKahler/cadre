@@ -140,6 +140,7 @@ _DIR_CTYPES = {
     ".webp": "image/webp", ".gif": "image/gif", ".svg": "image/svg+xml",
     ".json": "application/json", ".md": "text/plain; charset=utf-8",
     ".jsonl": "text/plain; charset=utf-8",
+    ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".wav": "audio/wav",
 }
 
 
