@@ -1471,7 +1471,12 @@ h1{font-size:22px;font-weight:650;letter-spacing:-.01em}
   padding:20px;color:inherit;cursor:pointer;transition:border-color 160ms}
 .fcard:hover{border-color:var(--border-hi)}
 .fcard.attn{border-color:rgba(212,169,74,.5)}
-.fname{font-size:16px;font-weight:650}
+.fname{font-size:16px;font-weight:650;display:flex;align-items:center;gap:8px}
+.dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+.dot.live{background:var(--ok);animation:pulse 1.8s ease-in-out infinite}
+.dot.stale{background:var(--warn)}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.55)}70%{box-shadow:0 0 0 7px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
+@media(prefers-reduced-motion:reduce){.dot.live{animation:none}}
 .fid{font:500 10.5px ui-monospace,monospace;letter-spacing:.08em;color:var(--mono);text-transform:uppercase;margin-top:2px}
 .stats{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;margin-top:14px}
 .stat .k{font:500 9.5px ui-monospace,monospace;letter-spacing:.1em;color:var(--mono);text-transform:uppercase}
@@ -1502,13 +1507,15 @@ async function load(){
     const r = await fetch('/api/hub');
     const data = await r.json();
     const firms = data.firms || [];
+    const activeN = firms.filter(f => f.running > f.stale_runs).length;
     document.getElementById('sub').textContent =
-      firms.length + ' firm' + (firms.length === 1 ? '' : 's') + ' · one door.';
+      firms.length + ' firm' + (firms.length === 1 ? '' : 's') + ' · one door'
+      + (activeN ? ' · ' + activeN + ' active' : '') + '.';
     document.getElementById('grid').innerHTML = firms.length ? firms.map(f => `
       <div class="fcard${f.needs_you ? ' attn' : ''}" role="link" tabindex="0"
         onclick="location.href='/f/${esc(f.id)}/'"
         onkeydown="if(event.key==='Enter')location.href='/f/${esc(f.id)}/'">
-        <div class="fname">${esc(f.name)}</div>
+        <div class="fname">${f.running ? `<span class="dot ${f.running > f.stale_runs ? 'live' : 'stale'}" title="${f.running > f.stale_runs ? 'Active — '+f.running+' running' : f.stale_runs+' stale run(s)'}"></span>` : ''}${esc(f.name)}</div>
         <div class="fid">${esc(f.id)}</div>
         <div class="stats">
           <div class="stat"><div class="k">Needs you</div>
