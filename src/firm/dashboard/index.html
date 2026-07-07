@@ -494,6 +494,15 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .runpanel .rp-item .elapsed{margin-left:auto;font:600 17px var(--font-mono);color:var(--brand-primary);font-variant-numeric:tabular-nums}
 .runpanel .rp-line{display:flex;gap:8px;font-size:13px;color:var(--brand-text-secondary);padding:3px 0}
 .runpanel .rp-line .k{font:500 9.5px var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--brand-text-dim);width:64px;flex:none;padding-top:3px}
+.spybtn{margin-top:4px;font:600 11px var(--font-mono);letter-spacing:.05em;background:transparent;color:var(--brand-primary);border:1px solid rgba(var(--brand-primary-rgb),.35);border-radius:7px;padding:4px 11px;cursor:pointer;transition:border-color 140ms,background 140ms}
+.spybtn:hover{border-color:var(--brand-primary);background:rgba(var(--brand-primary-rgb),.09)}
+.spylog{margin-top:10px;max-height:360px;overflow-y:auto;background:#0a0d0c;border:1px solid rgba(var(--brand-primary-rgb),.18);border-radius:8px;padding:10px 12px;font:12px/1.55 var(--font-mono);white-space:pre-wrap;word-break:break-word}
+.spylog .sl{padding:1px 0}
+.spylog .sl.tool{color:var(--brand-primary)}
+.spylog .sl.tool .sld{color:var(--brand-text-secondary)}
+.spylog .sl.res{color:var(--brand-text-dim)}
+.spylog .sl.txt{color:var(--brand-text);opacity:.9}
+.spylog .sl.sys{color:var(--brand-warning);opacity:.85;padding:5px 0;font-style:italic}
 
 /* ---- modal / toast ---- */
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:50}
@@ -1060,10 +1069,11 @@ function updateEngagement(){
 }
 
 function openRunPanel(){ renderRunPanel(); document.getElementById('runWrap').classList.add('show'); }
-function closeRunPanel(){ document.getElementById('runWrap').classList.remove('show'); }
+function closeRunPanel(){ stopAllSpies(); document.getElementById('runWrap').classList.remove('show'); }
 document.getElementById('runWrap').addEventListener('click', e => { if(e.target.id === 'runWrap') closeRunPanel(); });
 
 function renderRunPanel(){
+  if(Object.keys(window._spyTimers || {}).length) return;  // a live log is open — don't clobber it
   const act = activeRuns();
   const recent = ((STATE || {}).runs || []).filter(r => r.status !== 'running').slice(0, 6);
   const staleCount = act.filter(r => r.stale).length;
@@ -1080,6 +1090,8 @@ function renderRunPanel(){
         <div class="rp-line"><span class="k">Unit</span><span>${r.unit_id ? `<span class="eref" onclick="closeRunPanel();gotoUnit('${esc(r.unit_id)}')">${esc(r.unit_id)}</span> ${esc(unit ? unit.name : '')}` : '—'}</span></div>
         <div class="rp-line"><span class="k">Started</span><span title="${esc(tAttr(r.started_at))}">${timeAgo(r.started_at)}</span></div>
         <div class="rp-line"><span class="k">Source</span><span>${esc(r.invocation_source || 'pulse')}</span></div>
+        <button class="spybtn" onclick="toggleSpy('${esc(r.id)}')">&#128065; Watch live</button>
+        <div class="spylog" id="spy-${esc(r.id)}" style="display:none"></div>
         ${r.stale ? '<div class="rp-line"><span class="k">Note</span><span>past 2× contract timeout — pulse presumed dead; the next pulse reaps this row</span></div>' : ''}
       </div>`;
     }).join('') : '<div class="empty" style="margin-bottom:16px">No active runs. The next pulse lights this up.</div>') +
@@ -1090,6 +1102,53 @@ function renderRunPanel(){
         <span class="grow">${esc(memberName(r.member_id))} · ${esc(r.unit_id || '—')}</span>
         ${pill(r.status)}<span class="end">${dur(r.duration_sec)}${r.cost_usd != null ? ' · ' + money(r.cost_usd) : ''}</span>
       </div>`).join('') : '<div class="lrow"><span class="empty">Nothing yet.</span></div>'}</div>`;
+}
+
+/* ---- Live run spy: tail a headless member's transcript into a log box ---- */
+window._spyTimers = window._spyTimers || {};
+window._spyCursor = window._spyCursor || {};
+const _SPY_ICON = {Bash:'\u{1F527}',Write:'\u{270F}\u{FE0F}',Edit:'\u{270F}\u{FE0F}',Read:'\u{1F4D6}',Grep:'\u{1F50E}',Glob:'\u{1F50E}',ToolSearch:'\u{1F50E}',Task:'\u{1F916}',WebFetch:'\u{1F310}',TodoWrite:'\u{1F5D2}\u{FE0F}'};
+function spyLine(it){
+  if(it.kind === 'tool'){
+    const icon = _SPY_ICON[it.tool] || '\u{1F527}';
+    return `<div class="sl tool">${icon} ${esc(it.tool)}${it.detail ? ` <span class="sld">${esc(it.detail)}</span>` : ''}</div>`;
+  }
+  if(it.kind === 'result') return `<div class="sl res">↳ ${esc(it.text)}</div>`;
+  if(it.kind === 'sys') return `<div class="sl sys">${esc(it.text)}</div>`;
+  return `<div class="sl txt">${esc(it.text)}</div>`;
+}
+async function spyPoll(runId){
+  const box = document.getElementById('spy-' + runId);
+  if(!box || box.style.display === 'none'){ stopSpy(runId); return; }
+  try{
+    const cur = window._spyCursor[runId] || 0;
+    const res = await fetch(BASE + '/api/run/' + encodeURIComponent(runId) + '/actions?cursor=' + cur);
+    const d = await res.json();
+    window._spyCursor[runId] = d.cursor != null ? d.cursor : cur;
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+    if(d.found === false){ box.insertAdjacentHTML('beforeend', spyLine({kind:'sys', text:'run not found'})); stopSpy(runId); return; }
+    if(d.waiting && !box.dataset.waited){ box.dataset.waited = '1'; box.insertAdjacentHTML('beforeend', spyLine({kind:'sys', text:'waiting for the run transcript…'})); }
+    if(d.items && d.items.length){ box.dataset.waited = ''; box.insertAdjacentHTML('beforeend', d.items.map(spyLine).join('')); }
+    if(atBottom) box.scrollTop = box.scrollHeight;
+    if(!d.running){ box.insertAdjacentHTML('beforeend', spyLine({kind:'sys', text:'— run finished —'})); box.scrollTop = box.scrollHeight; stopSpy(runId); }
+  }catch(e){ /* transient network — keep polling */ }
+}
+function stopSpy(runId){ if(window._spyTimers[runId]){ clearInterval(window._spyTimers[runId]); delete window._spyTimers[runId]; } }
+function stopAllSpies(){ Object.keys(window._spyTimers).forEach(stopSpy); }
+function toggleSpy(runId){
+  const box = document.getElementById('spy-' + runId);
+  if(!box) return;
+  const btn = box.previousElementSibling;
+  if(box.style.display === 'none'){
+    box.style.display = 'block';
+    box.innerHTML = ''; box.dataset.waited = ''; window._spyCursor[runId] = 0;
+    if(btn) btn.innerHTML = '⏸ Close log';
+    spyPoll(runId);
+    window._spyTimers[runId] = setInterval(() => spyPoll(runId), 1500);
+  } else {
+    box.style.display = 'none'; stopSpy(runId);
+    if(btn) btn.innerHTML = '\u{1F441} Watch live';
+  }
 }
 
 function render(){

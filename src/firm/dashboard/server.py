@@ -965,6 +965,104 @@ def _sse_stream(h: BaseHTTPRequestHandler, db_path: Path) -> None:
         conn.close()
 
 
+def _claude_project_dir(workspace: Path) -> Path:
+    """``~/.claude/projects/<hyphenated-abs-workspace>`` — where the claude CLI
+    streams each headless member run's transcript live (appended as the agent
+    works). The dir name is the absolute workspace path with ``/`` and ``.``
+    replaced by ``-``."""
+    slug = str(workspace).replace("/", "-").replace(".", "-")
+    return Path.home() / ".claude" / "projects" / slug
+
+
+def _summarize_tool(name: str, inp: dict[str, Any]) -> str:
+    """One-line human summary of a tool call for the live spy log."""
+    if not isinstance(inp, dict):
+        return ""
+    if name == "Bash":
+        return str(inp.get("command", ""))[:400]
+    if name in ("Write", "Edit", "Read", "NotebookEdit"):
+        return str(inp.get("file_path", ""))
+    if name in ("Grep", "Glob"):
+        return str(inp.get("pattern", ""))[:200]
+    for k, v in inp.items():
+        if isinstance(v, str) and v.strip():
+            return f"{k}={v[:200]}"
+    return ""
+
+
+def _run_action_log(
+    workspace: Path, db_path: Path, run_id: str, cursor: int,
+) -> dict[str, Any]:
+    """Read-only spy over a headless member run: tail the claude transcript and
+    return the action items (model text + each tool call) AFTER *cursor* (a line
+    index). Firms run one member at a time, so the newest transcript created at
+    or after the run's start is that run's."""
+    conn = connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT started_at, ended_at, status FROM member_run WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return {"items": [], "cursor": cursor, "running": False, "found": False}
+    running = row["status"] == "running"
+
+    proj = _claude_project_dir(workspace)
+    transcripts = (
+        sorted(proj.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
+        if proj.exists() else []
+    )
+    st_epoch = 0.0
+    if row["started_at"]:
+        try:
+            st = datetime.fromisoformat(row["started_at"])
+            if st.tzinfo is None:
+                st = st.replace(tzinfo=timezone.utc)
+            st_epoch = st.timestamp() - 30  # slack for clock skew / startup lag
+        except (TypeError, ValueError):
+            st_epoch = 0.0
+    chosen = None
+    for p in reversed(transcripts):  # newest first
+        if p.stat().st_mtime >= st_epoch:
+            chosen = p
+            break
+    if chosen is None:
+        return {"items": [], "cursor": cursor, "running": running,
+                "found": True, "waiting": True}
+
+    lines = chosen.read_text(encoding="utf-8", errors="replace").splitlines()
+    items: list[dict[str, Any]] = []
+    for ln in lines[cursor:]:
+        try:
+            obj = json.loads(ln)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        msg = obj.get("message") or {}
+        role, content = msg.get("role"), msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            if role == "assistant" and b.get("type") == "text" and (b.get("text") or "").strip():
+                items.append({"kind": "text", "text": b["text"].strip()[:600]})
+            elif role == "assistant" and b.get("type") == "tool_use":
+                items.append({"kind": "tool", "tool": b.get("name", "?"),
+                              "detail": _summarize_tool(b.get("name", ""), b.get("input") or {})})
+            elif role == "user" and b.get("type") == "tool_result":
+                c = b.get("content")
+                if isinstance(c, list):
+                    c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
+                txt = str(c or "").strip().replace("\n", " ")
+                if txt:
+                    items.append({"kind": "result", "text": txt[:200]})
+    if len(items) > 800:
+        items = items[-800:]
+    return {"items": items, "cursor": len(lines), "running": running, "found": True}
+
+
 def _firm_get(
     h: BaseHTTPRequestHandler,
     workspace: Path,
@@ -1002,6 +1100,19 @@ def _firm_get(
             "mtime": status_file.stat().st_mtime,
             "summary": parsed,
         })
+        return
+    if path.startswith("/api/run/") and "/actions" in path:
+        route, _, qs = path.partition("?")
+        parts = route.strip("/").split("/")  # api / run / <id> / actions
+        run_id = parts[2] if len(parts) >= 4 else ""
+        cursor = 0
+        for kv in qs.split("&"):
+            if kv.startswith("cursor="):
+                try:
+                    cursor = max(0, int(kv.split("=", 1)[1]))
+                except ValueError:
+                    cursor = 0
+        _http_send(h, 200, _run_action_log(workspace, db_path, run_id, cursor))
         return
     if path.startswith("/view/"):
         vid = path.strip("/").split("/")[1].split("?")[0]
