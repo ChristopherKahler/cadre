@@ -17,6 +17,9 @@ env/
 
 .firm/
 
+# BASE tooling cache (regenerated on demand)
+.base-ast-cache/
+
 # PAUL orchestration (internal project management)
 .paul/
 
