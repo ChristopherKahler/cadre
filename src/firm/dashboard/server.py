@@ -368,6 +368,15 @@ def _run_duration_sec(run: dict[str, Any]) -> float | None:
         e = datetime.fromisoformat(ended)
     except (TypeError, ValueError):
         return None
+    # Timestamps may mix tz-aware and naive (e.g. an ended_at written by an older
+    # `cadre run end`, or a hand-repaired row). Coerce naive → UTC so the subtraction
+    # never raises "can't subtract offset-naive and offset-aware" and crashes the
+    # whole firm state render (field failure 2026-07-08: one naive ended_at 500'd the
+    # entire wastelander dashboard).
+    if s.tzinfo is None:
+        s = s.replace(tzinfo=timezone.utc)
+    if e.tzinfo is None:
+        e = e.replace(tzinfo=timezone.utc)
     return (e - s).total_seconds()
 
 

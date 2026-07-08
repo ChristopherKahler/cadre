@@ -103,6 +103,38 @@ def _records_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+# ---------------------------------------------------------------------------
+# Regression: timezone-aware timestamps (field failure 2026-07-08)
+# A naive ended_at from on_run_end mixed with the runner's aware started_at
+# crashed the dashboard's duration calc and 500'd the whole firm-state render.
+# ---------------------------------------------------------------------------
+
+def test_on_run_end_writes_tz_aware_ended_at() -> None:
+    from datetime import datetime
+    conn = _fresh_conn()
+    _seed(conn, extra_run=False)
+    result = on_run_end(
+        conn, firm_id="chrisai", run_id="RUN-001", final_status="completed"
+    )
+    assert result["ok"] is True
+    row = _row(conn, "member_run", "RUN-001")
+    assert row is not None and row["ended_at"]
+    parsed = datetime.fromisoformat(row["ended_at"])
+    assert parsed.tzinfo is not None, f"ended_at not tz-aware: {row['ended_at']!r}"
+
+
+def test_run_duration_sec_handles_mixed_naive_and_aware() -> None:
+    from firm.dashboard.server import _run_duration_sec
+    # naive started, aware ended
+    assert _run_duration_sec(
+        {"started_at": "2026-04-15 16:00:00", "ended_at": "2026-04-15T16:00:30+00:00"}
+    ) == pytest.approx(30.0)
+    # aware started, naive ended (the exact 2026-07-08 shape)
+    assert _run_duration_sec(
+        {"started_at": "2026-04-15T16:00:00+00:00", "ended_at": "2026-04-15 16:00:30"}
+    ) == pytest.approx(30.0)
+
+
 def _unit_outputs(conn: sqlite3.Connection, unit_id: str) -> list[Any]:
     row = conn.execute(
         "SELECT outputs FROM unit WHERE id = ?", (unit_id,)

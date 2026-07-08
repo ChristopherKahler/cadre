@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
 from firm.hooks._redact import redact
@@ -92,7 +93,13 @@ def on_run_end(
     # --- prepare ids ---------------------------------------------------------
     records_id = _next_records_id(conn, firm_id)
     usg_id = _next_usage_event_id(conn, firm_id)
-    use_default_ts = now is None
+    # Always stamp an aware UTC ISO timestamp when the caller omits one. SQLite's
+    # datetime('now') is tz-naive; mixing it with the runner's aware timestamps
+    # crashed the dashboard duration calc (field failure 2026-07-08 — a naive
+    # ended_at written by `cadre run end` 500'd the whole firm-state render).
+    if now is None:
+        now = datetime.now(tz=timezone.utc).isoformat()
+    use_default_ts = False
 
     # --- usage_event field extraction ----------------------------------------
     u = usage or {}
