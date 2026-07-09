@@ -180,6 +180,13 @@ def install_extension(
             }
     if clean_actions:
         entry["actions"] = clean_actions
+    # Read-only queries (SELECT/WITH only) — so blocks can read the firm DB.
+    clean_queries = {
+        str(k): q for k, q in (package.get("queries") or {}).items()
+        if isinstance(q, str) and re.match(r"^\s*(SELECT|WITH)\b", q, re.I)
+    }
+    if clean_queries:
+        entry["queries"] = clean_queries
 
     # Extension-contributed blocks (optional): write each fragment + collect entries.
     block_entries: list[dict[str, Any]] = []
