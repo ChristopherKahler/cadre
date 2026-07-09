@@ -110,6 +110,16 @@ button{font-family:var(--font-body)}
   white-space:nowrap;min-height:36px}
 .navitem:hover{background:var(--brand-hover-bg);color:var(--brand-text)}
 .navitem.active{background:var(--brand-hover-bg);color:var(--brand-text)}
+/* Install-extension: a quiet secondary action — recedes vs real nav items. */
+.installext{color:var(--brand-text-dim);font-size:12.5px;min-height:32px}
+.installext svg{width:15px;height:15px;opacity:.6}
+.installext:hover{color:var(--brand-text-secondary)}
+/* Extension-contributed dashboard blocks — appendable bottom section per page. */
+.page-blocks{margin-top:28px;display:flex;flex-direction:column;gap:16px}
+.ext-block{background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:12px;overflow:hidden}
+.ext-block-head{padding:11px 16px;font:600 11px var(--font-mono);letter-spacing:.1em;text-transform:uppercase;
+  color:var(--brand-text-secondary);border-bottom:1px solid var(--brand-border)}
+.ext-block-body{padding:16px}
 .navitem.active svg{color:var(--brand-primary)}
 .navitem svg{width:17px;height:17px;flex:none;color:var(--brand-text-dim)}
 .navitem .badge{margin-left:auto;font:600 10.5px var(--font-mono);background:var(--brand-tint-1);
@@ -878,16 +888,21 @@ const BASE = document.documentElement.dataset.base || '';
 const VIEWS = {dashboard:'Dashboard', roster:'Roster', ops:'Operations', goals:'Goals & spend', docs:'Deliverables', runs:'Runs', records:'Records', genspend:'Gen Spend', settings:'Settings'};
 let currentView = 'dashboard';
 function show(view){
-  if(!VIEWS[view]) view = 'dashboard';
+  const custom = CUSTOM_VIEWS[view];
+  // Fullscreen custom views replace the whole window (a standalone app), never embed.
+  if(custom && custom.mode === 'fullscreen'){ window.location.href = BASE + '/view/' + encodeURIComponent(view); return; }
+  if(!VIEWS[view] && !custom) view = 'dashboard';
   currentView = view;
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + view));
   document.querySelectorAll('.navitem[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === view));
-  document.getElementById('crumbHere').textContent = VIEWS[view];
+  document.getElementById('crumbHere').textContent = VIEWS[view] || (custom && custom.title) || view;
   document.getElementById('scrollArea').scrollTop = 0;
   app.classList.remove('mobile-open');
   if(location.hash !== '#/' + view) history.replaceState(null, '', '#/' + view);
   if(view === 'roster' && !viewInit) requestAnimationFrame(fitCanvas);
   if(view === 'genspend') fetchGenBalance();
+  if(custom && !custom.loaded) loadCustomFragment(view);
+  loadBlocksFor(view);
 }
 document.querySelectorAll('.navitem[data-view]').forEach(b =>
   b.addEventListener('click', () => show(b.dataset.view)));
@@ -896,25 +911,41 @@ window.addEventListener('hashchange', () => show(location.hash.replace('#/',''))
 /* ---- firm-supplied custom views (.firm/dashboard/views.json) ---- */
 const CUSTOM_VIEWS = {};   // id -> {title, files, loaded}
 async function initCustomViews(){
+  const group = document.getElementById('customNav');
+  group.hidden = false;                 // always visible — carries the Install button
+  // Clear prior view rows/pages so this is safe to re-run after an install.
+  group.querySelectorAll('.navitem-row').forEach(n => n.remove());
+  for(const id of Object.keys(CUSTOM_VIEWS)){
+    const pg = document.getElementById('page-' + id);
+    if(pg) pg.remove();
+    delete CUSTOM_VIEWS[id];
+  }
   let views = [];
   try{
     const r = await fetch(BASE + '/api/views');
     if(r.ok) views = (await r.json()).views || [];
   }catch(e){ /* no manifest — nothing to mount */ }
-  if(!views.length) return;
-  const group = document.getElementById('customNav');
-  group.hidden = false;
+  const scroll = document.getElementById('scrollArea');
   for(const v of views){
-    CUSTOM_VIEWS[v.id] = {title: v.title};
+    const mode = (v.mode === 'fullscreen') ? 'fullscreen' : 'embed';
+    CUSTOM_VIEWS[v.id] = {title: v.title, mode: mode, loaded: false};
+    if(mode === 'embed'){
+      // In-shell page: the fragment renders HERE, in the content area, like a built-in tab.
+      const pg = document.createElement('div');
+      pg.className = 'page'; pg.id = 'page-' + v.id;
+      const ph = document.createElement('div'); ph.className = 'pagehead';
+      const h1 = document.createElement('h1'); h1.textContent = v.title;
+      ph.appendChild(h1); pg.appendChild(ph);
+      scroll.appendChild(pg);
+    }
+    // Nav row: the tab (embed → content area, fullscreen → replaces window) + a pop-out icon → new tab.
     const row = document.createElement('div');
     row.className = 'navitem-row';
     const btn = document.createElement('button');
     btn.className = 'navitem'; btn.dataset.view = v.id; btn.title = v.title;
     btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8L20 10.6l-5 3.9 1.8 6-4.8-3.6-4.8 3.6 1.8-6-5-3.9 6.1-1.8z"/></svg><span></span>';
     btn.querySelector('span').textContent = v.title;
-    btn.addEventListener('click', () => {
-      window.location.href = BASE + '/view/' + encodeURIComponent(v.id);
-    });
+    btn.addEventListener('click', () => show(v.id));
     const pop = document.createElement('a');
     pop.className = 'nav-pop';
     pop.href = BASE + '/view/' + encodeURIComponent(v.id);
@@ -924,9 +955,131 @@ async function initCustomViews(){
     row.appendChild(btn); row.appendChild(pop);
     group.appendChild(row);
   }
-  // legacy deep link (#/<view>) → the full page
+  ensureInstallButton(group);   // keep the quiet install action at the bottom
+  // Deep link (#/<view>) → open the custom tab in-shell.
   const want = location.hash.replace('#/','');
-  if(CUSTOM_VIEWS[want]) window.location.replace(BASE + '/view/' + encodeURIComponent(want));
+  if(CUSTOM_VIEWS[want]) show(want);
+}
+
+/* Lazy-load a custom view's fragment into its in-shell page, executing its scripts
+   (innerHTML alone never runs <script>). Same CadreShell contract as the pop-out page. */
+async function loadCustomFragment(id){
+  const page = document.getElementById('page-' + id);
+  if(!page || !CUSTOM_VIEWS[id]) return;
+  CUSTOM_VIEWS[id].loaded = true;
+  try{
+    const r = await fetch(BASE + '/api/views/' + encodeURIComponent(id) + '/fragment');
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    page.innerHTML = await r.text();
+    page.querySelectorAll('script').forEach(old => {
+      const s = document.createElement('script');
+      if(old.src) s.src = old.src; else s.textContent = old.textContent;
+      old.replaceWith(s);
+    });
+  }catch(e){
+    CUSTOM_VIEWS[id].loaded = false;
+    page.innerHTML = '<div class="pagehead"><h1></h1><p></p></div>';
+    page.querySelector('h1').textContent = CUSTOM_VIEWS[id].title || id;
+    page.querySelector('p').textContent = 'Failed to load view: ' + String(e);
+  }
+}
+
+/* ---- extension-contributed dashboard blocks (views.json 'blocks') ----
+   Each block is a reporting card appended to the bottom of a native page (its
+   'mount', default 'dashboard') — how extensions like squad consolidate their
+   reporting into the firm's own dashboard. Lazy-loaded when the page is shown. */
+const CUSTOM_BLOCKS = {};   // id -> {title, mount, loaded}
+async function initCustomBlocks(){
+  let blocks = [];
+  try{ const r = await fetch(BASE + '/api/blocks'); if(r.ok) blocks = (await r.json()).blocks || []; }
+  catch(e){ /* no blocks — nothing to mount */ }
+  document.querySelectorAll('.page-blocks').forEach(n => n.remove());
+  for(const k of Object.keys(CUSTOM_BLOCKS)) delete CUSTOM_BLOCKS[k];
+  for(const b of blocks){
+    const page = document.getElementById('page-' + (b.mount || 'dashboard'));
+    if(!page) continue;
+    let sec = page.querySelector('.page-blocks');
+    if(!sec){ sec = document.createElement('div'); sec.className = 'page-blocks'; page.appendChild(sec); }
+    const card = document.createElement('section');
+    card.className = 'ext-block'; card.id = 'block-' + b.id;
+    const head = document.createElement('div'); head.className = 'ext-block-head'; head.textContent = b.title;
+    const body = document.createElement('div'); body.className = 'ext-block-body';
+    card.appendChild(head); card.appendChild(body); sec.appendChild(card);
+    CUSTOM_BLOCKS[b.id] = {title: b.title, mount: (b.mount || 'dashboard'), loaded: false};
+  }
+  loadBlocksFor(currentView);
+}
+function loadBlocksFor(view){
+  for(const id of Object.keys(CUSTOM_BLOCKS)){
+    const b = CUSTOM_BLOCKS[id];
+    if(b.mount === view && !b.loaded) loadBlockFragment(id);
+  }
+}
+async function loadBlockFragment(id){
+  const card = document.getElementById('block-' + id);
+  if(!card || !CUSTOM_BLOCKS[id]) return;
+  CUSTOM_BLOCKS[id].loaded = true;
+  const body = card.querySelector('.ext-block-body');
+  try{
+    const r = await fetch(BASE + '/api/blocks/' + encodeURIComponent(id) + '/fragment');
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    body.innerHTML = await r.text();
+    body.querySelectorAll('script').forEach(old => {
+      const s = document.createElement('script');
+      if(old.src) s.src = old.src; else s.textContent = old.textContent;
+      old.replaceWith(s);
+    });
+  }catch(e){ CUSTOM_BLOCKS[id].loaded = false; body.textContent = 'Failed to load block: ' + String(e); }
+}
+
+/* Install-extension: an always-present "Install extension" button under Custom
+   Views. Pick a drop-in package (.json) → wires the view + sets the route so the
+   tab auto-appears; if the package declares an install command, run it behind a
+   confirm gate (executes uploaded code — trust the source). */
+function ensureInstallButton(group){
+  let btn = group.querySelector('.installext');
+  if(!btn){
+    const file = document.createElement('input');
+    file.type = 'file'; file.accept = '.json,application/json'; file.style.display = 'none';
+    file.addEventListener('change', onExtFile);
+    btn = document.createElement('button');
+    btn.className = 'navitem installext';
+    btn.title = 'Install a drop-in extension package';
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg><span>Install extension</span>';
+    btn.addEventListener('click', () => file.click());
+    group.appendChild(file);
+  }
+  group.appendChild(btn);   // always sit at the bottom of the group
+}
+async function onExtFile(ev){
+  const f = ev.target.files && ev.target.files[0];
+  ev.target.value = '';
+  if(!f) return;
+  let pkg;
+  try{ pkg = JSON.parse(await f.text()); }
+  catch(err){ alert('Not a valid extension package (expected JSON):\n' + err); return; }
+  if(!pkg || !pkg.id || !pkg.fragment){ alert('Package is missing required fields (id, fragment).'); return; }
+  let confirmed = false;
+  if(pkg.install && Array.isArray(pkg.install.cmd)){
+    confirmed = confirm('Install "' + (pkg.title || pkg.id) + '"?\n\n' +
+      'This runs the package\'s install command:\n  ' + pkg.install.cmd.join(' ') +
+      '\n\nOnly install packages you trust. Cancel = install the panel WITHOUT running it.');
+  }
+  try{
+    const r = await fetch(BASE + '/api/extensions/install', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({package: pkg, confirmed: confirmed}),
+    });
+    const res = await r.json();
+    if(!res.ok){ alert('Install failed: ' + (res.error || 'unknown error')); return; }
+    await initCustomViews();            // route set → the tab auto-appears
+    let msg = 'Installed "' + res.title + '" (' + res.mode + ').';
+    if(res.install && res.install.ran && res.install.output) msg += '\n\n' + res.install.output;
+    const missing = (res.requires || []).filter(x => !x.present).map(x => x.cmd);
+    if(missing.length) msg += '\n\n⚠ Still not on PATH: ' + missing.join(', ');
+    alert(msg);
+    show(res.view_id);
+  }catch(err){ alert('Install error: ' + err); }
 }
 /* Bridge for fragments: read shell state, post Board actions, fetch declared firm files. */
 window.CadreShell = {
@@ -2317,6 +2470,7 @@ document.getElementById('pulseBtn').addEventListener('click', async () => {
 });
 
 initCustomViews();
+initCustomBlocks();
 </script>
 </body>
 </html>

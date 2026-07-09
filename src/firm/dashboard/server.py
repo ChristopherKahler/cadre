@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -92,16 +93,155 @@ def load_custom_views(workspace: Path) -> list[dict[str, Any]]:
         queries = v.get("queries") or {}
         if not isinstance(queries, dict):
             queries = {}
+        mode = "fullscreen" if str(v.get("mode") or "").lower() == "fullscreen" else "embed"
         views.append({
             "id": vid,
             "title": str(v.get("title") or vid),
             "fragment": str(v["fragment"]),
+            "mode": mode,
             "files": {str(k): str(p) for k, p in files.items()},
             "dirs": {str(k): str(p) for k, p in dirs.items()},
             "actions": {str(k): a for k, a in actions.items() if isinstance(a, dict)},
             "queries": {str(k): str(q) for k, q in queries.items()},
         })
     return views
+
+
+def load_custom_blocks(workspace: Path) -> list[dict[str, Any]]:
+    """Extension-contributed dashboard BLOCKS (the `blocks` array in views.json).
+
+    A block renders as a card appended to the bottom of a native page (its
+    ``mount``, default ``dashboard``) — the seam extensions like squad use to
+    consolidate their reporting into the firm's own dashboard. Same fragment
+    trust boundary as custom views (resolved inside ``.firm/``).
+    """
+    manifest = workspace / ".firm" / "dashboard" / "views.json"
+    if not manifest.exists():
+        return []
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    blocks = []
+    for b in data.get("blocks", []):
+        if not isinstance(b, dict):
+            continue
+        bid = str(b.get("id") or "")
+        if not _VIEW_ID_RE.fullmatch(bid) or not b.get("fragment"):
+            continue
+        mount = str(b.get("mount") or "dashboard")
+        if not _VIEW_ID_RE.fullmatch(mount):
+            mount = "dashboard"
+        blocks.append({
+            "id": bid,
+            "title": str(b.get("title") or bid),
+            "fragment": str(b["fragment"]),
+            "mount": mount,
+        })
+    return blocks
+
+
+def install_extension(
+    workspace: Path, package: dict[str, Any], confirmed: bool,
+) -> dict[str, Any]:
+    """Install a drop-in extension package into this firm.
+
+    A package is a self-contained JSON object: {id, title, mode, fragment (inline
+    HTML), actions, requires[], install{cmd,description}}. Installing writes the
+    fragment + merges the view into ``views.json`` (so the tab auto-appears) and,
+    ONLY when *confirmed*, runs the package's declared install cmd (argv, no shell)
+    to make the tool's commands available. Uploaded code is executed only behind
+    that operator confirm — the whole point of the gate.
+    """
+    if not isinstance(package, dict):
+        raise ValueError("package must be a JSON object")
+    vid = str(package.get("id") or "")
+    if not _VIEW_ID_RE.fullmatch(vid):
+        raise ValueError("package 'id' must be a short slug [a-z0-9-]")
+    title = str(package.get("title") or vid)
+    mode = "fullscreen" if str(package.get("mode") or "").lower() == "fullscreen" else "embed"
+    fragment = package.get("fragment")
+    if not isinstance(fragment, str) or not fragment.strip():
+        raise ValueError("package must include a non-empty 'fragment' (HTML)")
+
+    dash = workspace / ".firm" / "dashboard"
+    (dash / "views").mkdir(parents=True, exist_ok=True)
+    frag_rel = f"dashboard/views/{vid}.html"
+    (dash / "views" / f"{vid}.html").write_text(fragment, encoding="utf-8")
+
+    entry: dict[str, Any] = {"id": vid, "title": title, "mode": mode, "fragment": frag_rel}
+    # Only accept action cmds that are argv LISTS — the seam never shells out.
+    clean_actions = {}
+    for k, a in (package.get("actions") or {}).items():
+        if isinstance(a, dict) and isinstance(a.get("cmd"), list):
+            clean_actions[str(k)] = {
+                "cmd": [str(x) for x in a["cmd"]],
+                "timeout": int(a.get("timeout", 60)),
+            }
+    if clean_actions:
+        entry["actions"] = clean_actions
+
+    # Extension-contributed blocks (optional): write each fragment + collect entries.
+    block_entries: list[dict[str, Any]] = []
+    (dash / "blocks").mkdir(parents=True, exist_ok=True)
+    for b in (package.get("blocks") or []):
+        if not isinstance(b, dict):
+            continue
+        b_id = str(b.get("id") or "")
+        b_frag = b.get("fragment")
+        if not _VIEW_ID_RE.fullmatch(b_id) or not isinstance(b_frag, str) or not b_frag.strip():
+            continue
+        b_mount = str(b.get("mount") or "dashboard")
+        if not _VIEW_ID_RE.fullmatch(b_mount):
+            b_mount = "dashboard"
+        (dash / "blocks" / f"{b_id}.html").write_text(b_frag, encoding="utf-8")
+        block_entries.append({"id": b_id, "title": str(b.get("title") or b_id),
+                              "mount": b_mount, "fragment": f"dashboard/blocks/{b_id}.html"})
+
+    manifest = dash / "views.json"
+    data: dict[str, Any] = {"views": [], "blocks": []}
+    if manifest.exists():
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            data = {"views": [], "blocks": []}
+    data["views"] = [v for v in data.get("views", []) if v.get("id") != vid] + [entry]
+    if block_entries:
+        new_ids = {be["id"] for be in block_entries}
+        data["blocks"] = [b for b in data.get("blocks", []) if b.get("id") not in new_ids] + block_entries
+    manifest.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    requires = [str(c) for c in (package.get("requires") or []) if isinstance(c, str)]
+
+    install = package.get("install")
+    install_result: dict[str, Any] | None = None
+    if isinstance(install, dict) and isinstance(install.get("cmd"), list):
+        cmd = [str(x) for x in install["cmd"]]
+        if confirmed:
+            try:
+                proc = subprocess.run(
+                    cmd, cwd=workspace, capture_output=True, text=True,
+                    timeout=int(install.get("timeout", 120)),
+                )
+                install_result = {
+                    "ran": True, "returncode": proc.returncode,
+                    "output": (proc.stdout + proc.stderr).strip()[-2000:],
+                }
+            except subprocess.TimeoutExpired:
+                install_result = {"ran": True, "returncode": None, "output": "install timed out"}
+            except OSError as exc:
+                install_result = {"ran": False, "error": str(exc)}
+        else:
+            install_result = {
+                "ran": False, "skipped": True, "cmd": cmd,
+                "description": str(install.get("description") or ""),
+            }
+
+    req_status = [{"cmd": c, "present": shutil.which(c) is not None} for c in requires]
+    return {
+        "ok": True, "view_id": vid, "title": title, "mode": mode,
+        "requires": req_status, "install": install_result,
+    }
 
 
 def _firm_file(workspace: Path, rel: str) -> Path:
@@ -1170,11 +1310,33 @@ def _firm_get(
         else:
             _http_send(h, 404, {"error": f"unknown view {vid!r}"})
         return
+    if path == "/api/blocks":
+        blocks = load_custom_blocks(workspace)
+        _http_send(h, 200, {"blocks": [
+            {"id": b["id"], "title": b["title"], "mount": b["mount"]} for b in blocks
+        ]})
+        return
+    if path.startswith("/api/blocks/"):
+        route, _, _ = path.partition("?")
+        parts = route.strip("/").split("/")  # api / blocks / <id> / fragment
+        blocks = {b["id"]: b for b in load_custom_blocks(workspace)}
+        block = blocks.get(parts[2]) if len(parts) >= 4 else None
+        try:
+            if block is None:
+                raise ValueError(f"unknown block {parts[2] if len(parts) >= 3 else ''!r}")
+            if parts[3] == "fragment" and len(parts) == 4:
+                _http_send(h, 200, read_view_fragment(workspace, block),
+                           "text/html; charset=utf-8")
+            else:
+                raise ValueError("unknown block route")
+        except ValueError as exc:
+            _http_send(h, 404, {"error": str(exc)})
+        return
     if path == "/api/views":
         views = load_custom_views(workspace)
         _http_send(h, 200, {"views": [
-            {"id": v["id"], "title": v["title"], "files": sorted(v["files"]),
-             "queries": sorted(v["queries"])}
+            {"id": v["id"], "title": v["title"], "mode": v["mode"],
+             "files": sorted(v["files"]), "queries": sorted(v["queries"])}
             for v in views
         ]})
         return
@@ -1351,6 +1513,21 @@ def _firm_post(
 ) -> None:
     """POST routing for one firm's boardroom (firm-relative *path*)."""
     parts = path.strip("/").split("/")
+    # Route: /api/extensions/install — drop-in extension package installer
+    if parts == ["api", "extensions", "install"]:
+        length = int(h.headers.get("Content-Length") or 0)
+        raw = h.rfile.read(length) if length else b"{}"
+        try:
+            body = json.loads(raw or b"{}")
+        except json.JSONDecodeError:
+            _http_send(h, 400, {"ok": False, "error": "invalid JSON body"})
+            return
+        try:
+            _http_send(h, 200, install_extension(
+                workspace, body.get("package") or {}, bool(body.get("confirmed"))))
+        except ValueError as exc:
+            _http_send(h, 400, {"ok": False, "error": str(exc)})
+        return
     # Routes: /api/views/<id>/action/<key> — firm-declared view actions
     if len(parts) == 5 and parts[:2] == ["api", "views"] and parts[3] == "action":
         length = int(h.headers.get("Content-Length") or 0)
