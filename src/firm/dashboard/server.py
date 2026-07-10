@@ -401,15 +401,15 @@ _VIEW_PAGE_TEMPLATE = """<!doctype html>
 <html lang="en" data-base="__BASE__"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>__TITLE__</title>
-<style>html,body{margin:0;padding:0;min-height:100%;background:#141109}
+<style>html,body{margin:0;padding:0;min-height:100%;background:#1a1d21}
 #viewRoot{padding:24px}</style>
 </head><body>
 <div id="viewRoot"></div>
 <a id="cadreHome" href="__BASE__/" title="Back to the boardroom"
    style="position:fixed;bottom:14px;right:14px;z-index:9;display:grid;place-items:center;
-   width:34px;height:34px;border-radius:6px;background:rgba(20,17,9,.72);color:#847a63;
-   border:1px solid rgba(229,190,120,.25);backdrop-filter:blur(3px);text-decoration:none"
-   onmouseover="this.style.color='#f0c46a'" onmouseout="this.style.color='#847a63'">
+   width:34px;height:34px;border-radius:8px;background:rgba(34,38,43,.8);color:#7e8278;
+   border:1px solid rgba(232,233,228,.14);backdrop-filter:blur(3px);text-decoration:none"
+   onmouseover="this.style.color='#ffffff'" onmouseout="this.style.color='#7e8278'">
 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg></a>
 <script>
 /* Minimal CadreShell bridge — same contract the boardroom shell exposes,
