@@ -358,6 +358,41 @@ class TestAssemblePrompt:
         assert "Your Assignment" in result
         assert "Execution Rules" in result
 
+    def test_no_protocols_dir_omits_section(self, tmp_path):
+        conn = _fresh_conn()
+        _add_member(conn, "MEM-001")
+        _add_project(conn, "PRJ-001")
+        _add_unit(conn, "UNT-001", "PRJ-001", claimed_by="MEM-001")
+
+        result = assemble_prompt(
+            conn, "chrisai", "MEM-001", "UNT-001", cwd=str(tmp_path),
+        )
+
+        assert "Firm Protocols" not in result
+
+    def test_protocols_appended_in_filename_order(self, tmp_path):
+        conn = _fresh_conn()
+        _add_member(conn, "MEM-001")
+        _add_project(conn, "PRJ-001")
+        _add_unit(conn, "UNT-001", "PRJ-001", claimed_by="MEM-001")
+        proto = tmp_path / ".firm" / "protocols"
+        proto.mkdir(parents=True)
+        (proto / "20-other.md").write_text("SECOND-FRAGMENT")
+        (proto / "10-squad.md").write_text("FIRST-FRAGMENT")
+        (proto / "ignored.txt").write_text("NOT-MARKDOWN")
+        (proto / "30-empty.md").write_text("   \n")
+
+        result = assemble_prompt(
+            conn, "chrisai", "MEM-001", "UNT-001", cwd=str(tmp_path),
+        )
+
+        assert "Firm Protocols" in result
+        assert result.index("FIRST-FRAGMENT") < result.index("SECOND-FRAGMENT")
+        assert "NOT-MARKDOWN" not in result
+        # protocols ride BELOW the execution directive — appended, never
+        # displacing the unit briefing
+        assert result.index("Execution Rules") < result.index("FIRST-FRAGMENT")
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Utility: acceptance criteria formatting

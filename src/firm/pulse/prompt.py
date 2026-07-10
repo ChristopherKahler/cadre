@@ -87,6 +87,35 @@ def _read_instructions(member_id: str, cwd: str) -> str | None:
         return None
 
 
+def _render_protocols(cwd: str) -> str | None:
+    """Concatenate .firm/protocols/*.md into one standing-directive section.
+
+    Firm-wide protocol fragments installed by extensions (e.g. squad) reach
+    EVERY Member's prompt automatically — a Member cannot be unaware of an
+    installed capability. Sorted by filename so installers can prefix-order
+    (10-squad.md before 20-other.md). No directory or no fragments → None.
+    """
+    proto_dir = os.path.join(cwd, ".firm", "protocols")
+    try:
+        names = sorted(os.listdir(proto_dir))
+    except (FileNotFoundError, OSError):
+        return None
+    parts = []
+    for name in names:
+        if not name.endswith(".md"):
+            continue
+        try:
+            with open(os.path.join(proto_dir, name), encoding="utf-8") as f:
+                text = f.read().strip()
+        except (FileNotFoundError, OSError):
+            continue
+        if text:
+            parts.append(text)
+    if not parts:
+        return None
+    return "## Firm Protocols\n\n" + "\n\n---\n\n".join(parts)
+
+
 def _render_member_identity(
     conn: sqlite3.Connection,
     member_id: str,
@@ -429,6 +458,7 @@ def assemble_prompt(
     workspace = cwd or os.getcwd()
 
     contract_section = _render_contract(conn, member_id)
+    protocols_section = _render_protocols(workspace)
 
     sections = [
         _render_system_context(conn, firm_id),
@@ -437,6 +467,7 @@ def assemble_prompt(
         _render_operational_context(conn, firm_id),
         _render_unit_briefing(conn, unit_id),
         _render_execution_directive(conn, member_id, workspace),
+        *((protocols_section,) if protocols_section else ()),
     ]
 
     return "\n\n".join(sections)
