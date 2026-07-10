@@ -7,16 +7,21 @@ an env var on the harness side and the HTTP call happens in this process.
 
 Per-firm config lives in ``firm.notify_config`` (JSON):
 
-    {"provider": "slack",                       # or "webhook"
+    {"provider": "slack",                       # or "webhook" / "telegram"
      "slack_user_id": "U0XXXXXXX",              # DM target (slack provider)
      "token_env": "CADRE_SLACK_TOKEN",          # env var holding the token
      "webhook_url_env": "CADRE_NOTIFY_WEBHOOK", # env var holding URL (webhook provider)
+     "telegram_chat_id": "123456789",           # DM target (telegram provider)
+     "telegram_token_env": "CADRE_TELEGRAM_TOKEN",  # env var holding the bot token
      "remind_hours": 24}                        # escalation re-notify window
 
 Providers:
 - ``slack``   — chat.postMessage DM via bot/user token. True direct DM.
 - ``webhook`` — POST {"text": ...} to any incoming-webhook URL (Slack,
   Discord ``/slack``-compat, etc.). Zero app setup for framework adopters.
+- ``telegram`` — Bot API sendMessage to a chat id. Pairs with the official
+  Claude Code Telegram plugin: same bot pushes here, operator replies land
+  in the paired boardroom session.
 
 All failures are soft: notification must never break the firm action that
 triggered it. Callers get {"sent": bool, "reason": str} for the audit trail.
@@ -35,6 +40,7 @@ from firm.core import repo
 
 DEFAULT_TOKEN_ENV = "CADRE_SLACK_TOKEN"
 DEFAULT_WEBHOOK_ENV = "CADRE_NOTIFY_WEBHOOK"
+DEFAULT_TELEGRAM_ENV = "CADRE_TELEGRAM_TOKEN"
 DEFAULT_REMIND_HOURS = 24
 _HTTP_TIMEOUT_SEC = 10
 
@@ -122,6 +128,23 @@ def send_board_dm(
             if result.get("ok", True):  # webhooks that return nothing count as sent
                 return {"sent": True, "reason": "webhook post ok"}
             return {"sent": False, "reason": f"webhook error: {result.get('raw', 'unknown')}"}
+
+        if provider == "telegram":
+            chat_id = cfg.get("telegram_chat_id")
+            if not chat_id:
+                return {"sent": False, "reason": "notify_config.telegram_chat_id missing"}
+            token_env = cfg.get("telegram_token_env", DEFAULT_TELEGRAM_ENV)
+            token = os.environ.get(token_env)
+            if not token:
+                return {"sent": False, "reason": f"token env {token_env} unset in this process"}
+            result = _post_json(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                {"chat_id": chat_id, "text": text},
+                {},
+            )
+            if result.get("ok"):
+                return {"sent": True, "reason": "telegram sendMessage ok"}
+            return {"sent": False, "reason": f"telegram error: {result.get('description', 'unknown')}"}
 
         return {"sent": False, "reason": f"unknown notify provider {provider!r}"}
     except (urllib.error.URLError, OSError, TimeoutError) as exc:

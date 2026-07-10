@@ -89,6 +89,50 @@ def test_webhook_provider(mock_open, monkeypatch):
     assert req.full_url == "https://hooks.slack.com/services/T/B/x"
 
 
+def test_telegram_missing_chat_id_soft_fails(monkeypatch):
+    monkeypatch.setenv("CADRE_TELEGRAM_TOKEN", "123:abc")
+    conn = _conn_with_firm({"provider": "telegram"})
+    result = send_board_dm(conn, "chrisai", "hello")
+    assert result["sent"] is False
+    assert "telegram_chat_id" in result["reason"]
+
+
+def test_telegram_missing_token_soft_fails(monkeypatch):
+    monkeypatch.delenv("CADRE_TELEGRAM_TOKEN", raising=False)
+    conn = _conn_with_firm({"provider": "telegram", "telegram_chat_id": "42"})
+    result = send_board_dm(conn, "chrisai", "hello")
+    assert result["sent"] is False
+    assert "CADRE_TELEGRAM_TOKEN" in result["reason"]
+
+
+@mock.patch("firm.notify.urllib.request.urlopen")
+def test_telegram_dm_sent(mock_open, monkeypatch):
+    monkeypatch.setenv("CADRE_TELEGRAM_TOKEN", "123:abc")
+    mock_open.return_value = _FakeResponse(json.dumps({"ok": True}).encode())
+    conn = _conn_with_firm({"provider": "telegram", "telegram_chat_id": "42"})
+
+    result = send_board_dm(conn, "chrisai", "gate pending")
+
+    assert result["sent"] is True
+    req = mock_open.call_args.args[0]
+    assert req.full_url == "https://api.telegram.org/bot123:abc/sendMessage"
+    payload = json.loads(req.data.decode())
+    assert payload == {"chat_id": "42", "text": "gate pending"}
+
+
+@mock.patch("firm.notify.urllib.request.urlopen")
+def test_telegram_api_error_soft_fails(mock_open, monkeypatch):
+    monkeypatch.setenv("CADRE_TELEGRAM_TOKEN", "123:abc")
+    mock_open.return_value = _FakeResponse(
+        json.dumps({"ok": False, "description": "chat not found"}).encode()
+    )
+    conn = _conn_with_firm({"provider": "telegram", "telegram_chat_id": "42"})
+
+    result = send_board_dm(conn, "chrisai", "hello")
+    assert result["sent"] is False
+    assert "chat not found" in result["reason"]
+
+
 def test_remind_interval_defaults_and_overrides():
     assert remind_interval_hours(None) == 24
     assert remind_interval_hours({}) == 24
