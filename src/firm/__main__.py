@@ -209,7 +209,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # ---- notify subparser ----
     notify_parser = subparsers.add_parser(
         "notify",
-        help="Send a Board notification (Slack DM / webhook) via the firm's notify_config.",
+        help="Send a Board notification (Slack DM / webhook / Telegram) via the firm's notify_config.",
     )
     notify_parser.add_argument("message", help="Message text to deliver to the Board.")
     notify_parser.add_argument(
@@ -219,6 +219,43 @@ def _build_parser() -> argparse.ArgumentParser:
     notify_parser.add_argument(
         "--firm-id", dest="firm_id", default=None,
         help="Firm scope. Defaults to $FIRM_ID or 'chrisai'.",
+    )
+
+    # ---- heartbeat subparser ----
+    heartbeat_parser = subparsers.add_parser(
+        "heartbeat",
+        help="Autonomous pulse cadence — manage the per-firm systemd user "
+             "timer that fires `cadre pulse` on an interval.",
+    )
+    heartbeat_sub = heartbeat_parser.add_subparsers(dest="heartbeat_command")
+
+    hb_enable = heartbeat_sub.add_parser(
+        "enable", help="Install and start the heartbeat timer for a firm.",
+    )
+    hb_enable.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
+    hb_enable.add_argument(
+        "--interval", default="30m",
+        help="Tick interval as <number><unit>, unit s/m/min/h/d (default 30m). "
+             "Ticks are near-free no-ops unless a Member is actually due.",
+    )
+    hb_enable.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. Defaults to $FIRM_ID or 'chrisai'.",
+    )
+
+    hb_disable = heartbeat_sub.add_parser(
+        "disable", help="Stop and remove the heartbeat timer for a firm.",
+    )
+    hb_disable.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. Defaults to $FIRM_ID or 'chrisai'.",
+    )
+
+    heartbeat_sub.add_parser(
+        "status", help="List installed heartbeat timers with liveness and last pulse.",
     )
 
     # ---- dashboard subparser ----
@@ -436,6 +473,25 @@ def main(argv: list[str] | None = None) -> int:
         workspace = args.workspace if args.workspace is not None else Path.cwd()
         firm_id = args.firm_id or os.environ.get("FIRM_ID", "chrisai")
         return run_notify(workspace, args.message, firm_id=firm_id)
+
+    if args.command == "heartbeat":
+        if args.heartbeat_command == "enable":
+            from firm.cli.heartbeat import run_enable
+
+            workspace = args.workspace if args.workspace is not None else Path.cwd()
+            firm_id = args.firm_id or os.environ.get("FIRM_ID", "chrisai")
+            return run_enable(workspace, firm_id, args.interval)
+        if args.heartbeat_command == "disable":
+            from firm.cli.heartbeat import run_disable
+
+            firm_id = args.firm_id or os.environ.get("FIRM_ID", "chrisai")
+            return run_disable(firm_id)
+        if args.heartbeat_command == "status":
+            from firm.cli.heartbeat import run_status
+
+            return run_status()
+        parser.parse_args(["heartbeat", "--help"])
+        return 0
 
     if args.command == "dashboard":
         from firm.dashboard.server import run_dashboard
