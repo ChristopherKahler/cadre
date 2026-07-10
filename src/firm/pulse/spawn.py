@@ -7,6 +7,7 @@ subprocess with timeout enforcement and PID tracking for abort support.
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import shutil
 import subprocess
@@ -48,7 +49,48 @@ _CLAUDE_FLAGS: list[str] = [
     "--output-format", "stream-json",
     "--verbose",
     "--dangerously-skip-permissions",
+    # Members' MCP surface is EXACTLY the firm workspace's .mcp.json (passed
+    # via --mcp-config below), never the operator's user-scope/plugin fleet.
+    # Without strict, headless spawns inherited the operator's entire personal
+    # MCP config (Gmail/Slack/Drive/... — 387 tools measured on wastelander,
+    # 2026-07-10) under --dangerously-skip-permissions: a loadout-discipline
+    # violation and a prompt-size tax on every run. Strict is unconditional:
+    # a firm with no .mcp.json means Members get no MCP servers, by design.
+    "--strict-mcp-config",
 ]
+
+
+def mcp_config_path(cwd: str | None) -> str | None:
+    """Absolute path to the firm workspace's ``.mcp.json``, or None.
+
+    Passed explicitly as ``--mcp-config`` so the firm MCP server loads
+    deterministically in headless mode — project-scope ``.mcp.json``
+    auto-loading depends on per-project trust state in ``~/.claude.json``
+    and has shifted across claude versions; Member runs must not.
+    """
+    if not cwd:
+        return None
+    path = os.path.join(cwd, ".mcp.json")
+    return path if os.path.isfile(path) else None
+
+
+def expected_mcp_servers(cwd: str | None) -> list[str]:
+    """Server names the firm's ``.mcp.json`` declares — the toolset every
+    Member run is entitled to. Used by the runner's MCP startup guard.
+    Malformed or absent config yields [] (guard disarms; never false-fails).
+    """
+    path = mcp_config_path(cwd)
+    if not path:
+        return []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            config = json.load(fh)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return []
+    servers = config.get("mcpServers")
+    if not isinstance(servers, dict):
+        return []
+    return list(servers)
 
 
 def resolve_claude_bin() -> tuple[str | None, str]:
@@ -113,6 +155,9 @@ def spawn_member_run(
         )
 
     cmd = [claude_bin, *_CLAUDE_FLAGS]
+    mcp_config = mcp_config_path(cwd)
+    if mcp_config:
+        cmd += ["--mcp-config", mcp_config]
     if model:
         cmd += ["--model", model]
     cmd += ["-p", prompt]

@@ -9,7 +9,13 @@ from unittest import mock
 import pytest
 
 from firm.pulse.parser import parse_stream
-from firm.pulse.spawn import SpawnResult, _active_pids, _CLAUDE_FLAGS, spawn_member_run
+from firm.pulse.spawn import (
+    SpawnResult,
+    _active_pids,
+    _CLAUDE_FLAGS,
+    expected_mcp_servers,
+    spawn_member_run,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -266,7 +272,7 @@ class TestParseStreamSessionId:
 class TestSpawnCommand:
     """Verify correct command construction."""
 
-    def test_builds_correct_args(self):
+    def test_builds_correct_args(self, tmp_path):
         mock_proc = mock.MagicMock()
         mock_proc.pid = 12345
         mock_proc.communicate.return_value = ("stdout", "stderr")
@@ -279,7 +285,7 @@ class TestSpawnCommand:
             ),
             mock.patch("firm.pulse.spawn.subprocess.Popen", return_value=mock_proc) as mock_popen,
         ):
-            result = spawn_member_run("test prompt", timeout_sec=60, cwd="/tmp")
+            result = spawn_member_run("test prompt", timeout_sec=60, cwd=str(tmp_path))
 
         expected_cmd = ["/usr/bin/claude-test", *_CLAUDE_FLAGS, "-p", "test prompt"]
         mock_popen.assert_called_once_with(
@@ -287,7 +293,7 @@ class TestSpawnCommand:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            cwd="/tmp",
+            cwd=str(tmp_path),
             env=mock.ANY,
         )
         assert result.returncode == 0
@@ -467,3 +473,101 @@ def test_contract_model_extraction():
     assert ClaudeCodeRuntime._get_model(
         {"pulse_config": {"model": "sonnet"}}
     ) == "sonnet"
+
+
+class TestParseInitToolset:
+    """Init-event toolset + MCP server statuses (MCP startup guard inputs)."""
+
+    def test_init_tools_and_mcp_servers_captured(self):
+        stream = "\n".join([
+            _make_event(
+                "system", subtype="init", session_id="ses-001",
+                tools=["Bash", "mcp__firm__unit_create"],
+                mcp_servers=[{"name": "firm", "status": "connected"}],
+            ),
+            _make_assistant_event("hello"),
+            _make_result_event(),
+        ])
+        parsed = parse_stream(stream)
+        assert parsed["init_tools"] == ["Bash", "mcp__firm__unit_create"]
+        assert parsed["mcp_servers"] == [{"name": "firm", "status": "connected"}]
+
+    def test_absent_init_info_is_none_not_empty(self):
+        # None = "no init observed"; the guard must distinguish that from an
+        # init that genuinely reported zero MCP servers (which is []).
+        stream = "\n".join([_make_init_event(), _make_result_event()])
+        parsed = parse_stream(stream)
+        assert parsed["init_tools"] is None
+        assert parsed["mcp_servers"] is None
+
+
+class TestSpawnMcpConfig:
+    """The firm's .mcp.json reaches the spawn explicitly (--mcp-config) and
+    exclusively (--strict-mcp-config) — ESC-004 / RUN-051 regression.
+
+    Headless project-.mcp.json auto-loading depends on per-project trust
+    state in ~/.claude.json, and without strict the Member inherited the
+    operator's entire personal MCP fleet under skip-permissions.
+    """
+
+    @staticmethod
+    def _mock_proc():
+        p = mock.MagicMock()
+        p.pid = 7
+        p.communicate.return_value = ("", "")
+        p.returncode = 0
+        return p
+
+    def _spawn(self, cwd):
+        with (
+            mock.patch(
+                "firm.pulse.spawn.resolve_claude_bin",
+                return_value=("/usr/bin/claude-test", "test"),
+            ),
+            mock.patch(
+                "firm.pulse.spawn.subprocess.Popen", return_value=self._mock_proc(),
+            ) as mock_popen,
+        ):
+            spawn_member_run("p", cwd=cwd)
+        return mock_popen.call_args[0][0]
+
+    def test_mcp_config_passed_when_workspace_has_one(self, tmp_path):
+        config = tmp_path / ".mcp.json"
+        config.write_text(json.dumps(
+            {"mcpServers": {"firm": {"command": "bash", "args": ["-lc", "x"]}}}
+        ))
+        cmd = self._spawn(str(tmp_path))
+        i = cmd.index("--mcp-config")
+        assert cmd[i + 1] == str(config)
+        assert "--strict-mcp-config" in cmd
+        assert cmd[-2:] == ["-p", "p"]
+
+    def test_no_mcp_config_flag_without_file(self, tmp_path):
+        cmd = self._spawn(str(tmp_path))
+        assert "--mcp-config" not in cmd
+        # loadout isolation holds even for firms with no .mcp.json
+        assert "--strict-mcp-config" in cmd
+
+    def test_no_mcp_config_flag_without_cwd(self):
+        cmd = self._spawn(None)
+        assert "--mcp-config" not in cmd
+
+
+class TestExpectedMcpServers:
+    """expected_mcp_servers — the startup guard's expectation source."""
+
+    def test_reads_server_names(self, tmp_path):
+        (tmp_path / ".mcp.json").write_text(json.dumps(
+            {"mcpServers": {"firm": {"command": "x"}, "other": {"command": "y"}}}
+        ))
+        assert expected_mcp_servers(str(tmp_path)) == ["firm", "other"]
+
+    def test_absent_file_yields_empty(self, tmp_path):
+        assert expected_mcp_servers(str(tmp_path)) == []
+        assert expected_mcp_servers(None) == []
+
+    def test_malformed_config_yields_empty(self, tmp_path):
+        (tmp_path / ".mcp.json").write_text("{not json")
+        assert expected_mcp_servers(str(tmp_path)) == []
+        (tmp_path / ".mcp.json").write_text(json.dumps({"mcpServers": ["nope"]}))
+        assert expected_mcp_servers(str(tmp_path)) == []

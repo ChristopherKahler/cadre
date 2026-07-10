@@ -36,6 +36,8 @@ def parse_stream(stdout: str) -> dict[str, Any]:
     total_cost_usd: float | None = None
     is_error: bool = False
     stop_reason: str | None = None
+    init_tools: list[str] | None = None
+    mcp_servers: list[dict[str, Any]] | None = None
 
     for raw_line in stdout.split("\n"):
         line = raw_line.strip()
@@ -54,6 +56,13 @@ def parse_stream(stdout: str) -> dict[str, Any]:
         # --- system events ---
         if etype == "system" and event.get("subtype") == "init":
             session_id = session_id or event.get("session_id")
+            # Tool index + MCP server statuses at run start — the runner's
+            # MCP startup guard reads these to detect a Member spawned
+            # without its firm tools. None (vs []) = no init observed.
+            if isinstance(event.get("tools"), list):
+                init_tools = [t for t in event["tools"] if isinstance(t, str)]
+            if isinstance(event.get("mcp_servers"), list):
+                mcp_servers = [s for s in event["mcp_servers"] if isinstance(s, dict)]
 
         # --- assistant events ---
         elif etype == "assistant":
@@ -126,4 +135,6 @@ def parse_stream(stdout: str) -> dict[str, Any]:
         "stop_reason": stop_reason,
         "tool_calls": tool_calls,
         "rate_limit_events": rate_limit_events,
+        "init_tools": init_tools,
+        "mcp_servers": mcp_servers,
     }

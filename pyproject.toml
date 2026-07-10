@@ -21,7 +21,14 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
 ]
-dependencies = []
+# mcp is the firm MCP server's SDK (firm.mcp.tools imports FastMCP). It was
+# never declared, so `pip install -e cadre` produced firm venvs whose MCP
+# server died at import (ModuleNotFoundError: mcp) — silently, because claude
+# swallows MCP-server stderr. Three of four firms shipped broken (wastelander
+# ESC-004/RUN-051, 2026-07-08..10); only chrisai worked, via a manual install.
+dependencies = [
+  "mcp>=1.0",
+]
 
 [project.optional-dependencies]
 dev = [

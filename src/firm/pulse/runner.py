@@ -21,7 +21,7 @@ from firm.pulse.budget import (
     update_budget_postrun,
 )
 from firm.pulse.parser import parse_stream
-from firm.pulse.spawn import spawn_member_run
+from firm.pulse.spawn import expected_mcp_servers, spawn_member_run
 from firm.pulse.validate import retry_on_failure, validate_output
 from firm.services._id import next_id
 from firm.services.document import create_document
@@ -108,6 +108,78 @@ def _register_deliverables(
             "author_type": "member",
             "author_id": member_id,
         })
+
+
+def _persist_final_text(
+    conn: sqlite3.Connection, run_id: str, parsed: dict[str, Any],
+) -> None:
+    """Land the run's final message text on its row (``member_run.outputs``).
+
+    A deliverable must never exist ONLY as un-persisted process stdout:
+    wastelander RUN-051 (2026-07-10) "completed" a $4.09 canon check whose
+    entire product was 1,853 chars of final text — outputs stayed NULL and
+    the text evaporated when the pulse process exited. The harness persists
+    what the model returned at every terminal transition, unconditionally.
+    """
+    text = parsed.get("text") or ""
+    if not text:
+        return
+    repo.update(conn, "member_run", run_id, {
+        "outputs": json.dumps([{"type": "final_text", "text": text}]),
+    })
+
+
+def _mcp_startup_guard(
+    conn: sqlite3.Connection,
+    run_id: str,
+    parsed: dict[str, Any],
+    cwd: str,
+) -> list[str]:
+    """Flag a run whose expected firm MCP toolset never materialized.
+
+    Compares the servers declared in the workspace ``.mcp.json`` against the
+    spawned claude's init event (server statuses + tool index). A Member
+    running without its firm tools is a degraded run and must be visible as
+    one (ESC-004 / RUN-051: runs "completed" while ``mcp__firm__*`` was
+    silently absent). Writes a warning onto the run row and returns the
+    missing server names; [] = healthy, or nothing to assert (no ``.mcp.json``
+    expectation, or no init event observed — never false-fails).
+    """
+    expected = expected_mcp_servers(cwd)
+    if not expected:
+        return []
+    init_tools = parsed.get("init_tools")
+    mcp_servers = parsed.get("mcp_servers")
+    if init_tools is None and mcp_servers is None:
+        return []
+    missing = []
+    for name in expected:
+        connected = any(
+            s.get("name") == name and s.get("status") == "connected"
+            for s in (mcp_servers or [])
+        )
+        has_tools = any(
+            t.startswith(f"mcp__{name}__") for t in (init_tools or [])
+        )
+        if not (connected or has_tools):
+            missing.append(name)
+    if missing:
+        statuses = {
+            s.get("name"): s.get("status")
+            for s in (mcp_servers or []) if s.get("name") in missing
+        }
+        repo.update(conn, "member_run", run_id, {
+            "notes": json.dumps({
+                "warning": "mcp_degraded",
+                "missing_mcp_servers": missing,
+                "server_status": statuses,
+                "detail": (
+                    "expected MCP servers from .mcp.json never connected — "
+                    "the Member ran without its firm tools"
+                ),
+            }),
+        })
+    return missing
 
 
 def _get_validation_config(
@@ -307,6 +379,10 @@ def _execute_run(
     timeout = result.handle.metadata.get("timeout_sec", 300)
 
     if result.timed_out:
+        # Partial stdout still carries whatever text the Member produced —
+        # persist it; a timed-out deliverable is recoverable, a dropped one
+        # is not.
+        _persist_final_text(conn, run_id, parse_stream(result.stdout))
         repo.update(conn, "member_run", run_id, {
             "status": "timed_out",
             "ended_at": datetime.now(tz=timezone.utc).isoformat(),
@@ -315,6 +391,7 @@ def _execute_run(
         return {"run_id": run_id, "status": "timed_out"}
 
     if result.returncode is not None and result.returncode != 0:
+        _persist_final_text(conn, run_id, parse_stream(result.stdout))
         repo.update(conn, "member_run", run_id, {
             "status": "failed",
             "ended_at": datetime.now(tz=timezone.utc).isoformat(),
@@ -328,6 +405,10 @@ def _execute_run(
 
     # 8. Parse
     parsed = parse_stream(result.stdout)
+
+    # 8b. MCP startup guard — a run whose firm toolset never loaded must be
+    # visibly degraded on its row, not silently "completed" without tools.
+    mcp_missing = _mcp_startup_guard(conn, run_id, parsed, cwd)
 
     # 9. Validate
     validation_result = validate_output(parsed, validation_config, cwd)
@@ -344,6 +425,7 @@ def _execute_run(
                 conn, member_id, firm_id, parsed,
                 run_id=run_id, unit_id=unit["id"],
             )
+            _persist_final_text(conn, run_id, parsed)
             repo.update(conn, "member_run", run_id, {
                 "status": "failed",
                 "ended_at": datetime.now(tz=timezone.utc).isoformat(),
@@ -382,6 +464,8 @@ def _execute_run(
                 ),
                 parse_stream,
             )
+            # The retry is a fresh spawn with its own init — guard its row too.
+            mcp_missing = _mcp_startup_guard(conn, run_id, parsed, cwd)
             validation_result = validate_output(parsed, validation_config, cwd)
 
     # 10. Rate limit awareness
@@ -400,6 +484,7 @@ def _execute_run(
 
     # 12. Finalize member_run
     final_status = "completed" if validation_result.passed else "failed"
+    _persist_final_text(conn, run_id, parsed)
     repo.update(conn, "member_run", run_id, {
         "status": final_status,
         "ended_at": datetime.now(tz=timezone.utc).isoformat(),
@@ -420,7 +505,7 @@ def _execute_run(
         )
         complete_unit(conn, firm_id, unit["id"], member_id, run_id=run_id)
 
-    return {
+    out: dict[str, Any] = {
         "run_id": run_id,
         "status": final_status,
         "text_length": len(parsed.get("text", "")),
@@ -429,3 +514,6 @@ def _execute_run(
         "validation_passed": validation_result.passed,
         "rate_limit_warning": rate_warning,
     }
+    if mcp_missing:
+        out["mcp_degraded"] = mcp_missing
+    return out

@@ -93,9 +93,19 @@ def _add_budget_period(conn, bp_id, member_id, *, run_count=0, total_cost_usd=0.
     })
 
 
-def _mock_spawn_result(text="Done. AC-1 satisfied.", cost=0.05):
-    """Build a SpawnResult whose stdout is valid stream-json."""
-    init_line = json.dumps({"type": "system", "subtype": "init", "session_id": "ses-mock"})
+def _mock_spawn_result(text="Done. AC-1 satisfied.", cost=0.05,
+                       init_tools=None, mcp_servers=None):
+    """Build a SpawnResult whose stdout is valid stream-json.
+
+    init_tools / mcp_servers land on the init event when given (None = the
+    key is absent, like a stream from an older claude).
+    """
+    init: dict = {"type": "system", "subtype": "init", "session_id": "ses-mock"}
+    if init_tools is not None:
+        init["tools"] = init_tools
+    if mcp_servers is not None:
+        init["mcp_servers"] = mcp_servers
+    init_line = json.dumps(init)
     assistant_line = json.dumps({
         "type": "assistant",
         "message": {"content": [{"type": "text", "text": text}]},
@@ -461,3 +471,160 @@ def test_register_deliverables_skips_without_optin(tmp_path):
     _register_deliverables(conn, "chrisai", unit, "MEM-001", parsed,
                            {"validators": ["file_exists"]}, str(tmp_path))
     assert find(conn, "document", firm_id="chrisai") == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Final-text persistence — a deliverable never evaporates (RUN-051)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _outputs_of(run):
+    outputs = run["outputs"]
+    if isinstance(outputs, str):
+        outputs = json.loads(outputs)
+    return outputs
+
+
+class TestFinalTextPersistence:
+    """wastelander RUN-051 regression: a completed run's final message text
+    must land in member_run.outputs, not exist only as process stdout."""
+
+    def _seed(self, conn, validation_config=None):
+        _add_contract(conn, "CON-001", validation_config=validation_config)
+        _add_member(conn, "MEM-001", contract_id="CON-001")
+        _add_project(conn, "PRJ-001")
+        _add_unit(conn, "UNT-001", "PRJ-001", claimed_by="MEM-001")
+        return get(conn, "member", "MEM-001")
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_completed_run_persists_final_text(self, mock_spawn):
+        deliverable = "Canon check verdict: chapter 18 is consistent."
+        mock_spawn.return_value = _mock_spawn_result(text=deliverable)
+
+        conn = _fresh_conn()
+        member = self._seed(conn)
+        result = make_runner("chrisai", "/tmp")(conn, member)
+
+        assert result["status"] == "completed"
+        run = get(conn, "member_run", result["run_id"])
+        assert _outputs_of(run) == [{"type": "final_text", "text": deliverable}]
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_failed_validation_run_persists_final_text_too(self, mock_spawn):
+        mock_spawn.return_value = _mock_spawn_result(text="short")
+
+        conn = _fresh_conn()
+        member = self._seed(conn, validation_config={
+            "enabled": True,
+            "max_retries": 0,
+            "validators": ["min_word_count"],
+        })
+        result = make_runner("chrisai", "/tmp")(conn, member)
+
+        assert result["status"] == "failed"
+        run = get(conn, "member_run", result["run_id"])
+        assert _outputs_of(run) == [{"type": "final_text", "text": "short"}]
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_timed_out_run_persists_partial_text(self, mock_spawn):
+        partial = _mock_spawn_result(text="half a deliverable")
+        partial.timed_out = True
+        partial.returncode = None
+        mock_spawn.return_value = partial
+
+        conn = _fresh_conn()
+        member = self._seed(conn)
+        result = make_runner("chrisai", "/tmp")(conn, member)
+
+        assert result["status"] == "timed_out"
+        run = get(conn, "member_run", result["run_id"])
+        assert _outputs_of(run) == [
+            {"type": "final_text", "text": "half a deliverable"},
+        ]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MCP startup guard — a run without its firm tools is visibly degraded
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestMcpStartupGuard:
+    """ESC-004 / RUN-051 regression: when the workspace .mcp.json declares a
+    firm server that never connects in the spawned claude, the run row must
+    carry a visible mcp_degraded warning instead of silently completing."""
+
+    def _firm_workspace(self, tmp_path):
+        (tmp_path / ".mcp.json").write_text(json.dumps(
+            {"mcpServers": {"firm": {"command": "bash", "args": ["-lc", "x"]}}}
+        ))
+        return str(tmp_path)
+
+    def _seed(self, conn):
+        _add_contract(conn, "CON-001")
+        _add_member(conn, "MEM-001", contract_id="CON-001")
+        _add_project(conn, "PRJ-001")
+        _add_unit(conn, "UNT-001", "PRJ-001", claimed_by="MEM-001")
+        return get(conn, "member", "MEM-001")
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_missing_firm_mcp_flags_run_degraded(self, mock_spawn, tmp_path):
+        mock_spawn.return_value = _mock_spawn_result(
+            init_tools=["Bash", "Read", "Write"],
+            mcp_servers=[{"name": "firm", "status": "failed"}],
+        )
+
+        conn = _fresh_conn()
+        member = self._seed(conn)
+        result = make_runner("chrisai", self._firm_workspace(tmp_path))(conn, member)
+
+        assert result["status"] == "completed"  # degraded, not dead
+        assert result["mcp_degraded"] == ["firm"]
+        run = get(conn, "member_run", result["run_id"])
+        notes = json.loads(run["notes"])
+        assert notes["warning"] == "mcp_degraded"
+        assert notes["missing_mcp_servers"] == ["firm"]
+        assert notes["server_status"] == {"firm": "failed"}
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_connected_firm_mcp_not_flagged(self, mock_spawn, tmp_path):
+        mock_spawn.return_value = _mock_spawn_result(
+            init_tools=["Bash", "mcp__firm__unit_create", "mcp__firm__create_document"],
+            mcp_servers=[{"name": "firm", "status": "connected"}],
+        )
+
+        conn = _fresh_conn()
+        member = self._seed(conn)
+        result = make_runner("chrisai", self._firm_workspace(tmp_path))(conn, member)
+
+        assert result["status"] == "completed"
+        assert "mcp_degraded" not in result
+        run = get(conn, "member_run", result["run_id"])
+        assert run["notes"] is None
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_guard_disarms_when_no_init_info(self, mock_spawn, tmp_path):
+        # Stream without tools/mcp_servers on init (older claude) — the
+        # guard must not false-fail on absence of evidence.
+        mock_spawn.return_value = _mock_spawn_result()
+
+        conn = _fresh_conn()
+        member = self._seed(conn)
+        result = make_runner("chrisai", self._firm_workspace(tmp_path))(conn, member)
+
+        assert result["status"] == "completed"
+        assert "mcp_degraded" not in result
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_guard_disarms_without_mcp_json(self, mock_spawn, tmp_path):
+        # Workspace declares no MCP servers → nothing to expect, no warning
+        # even when the init reports zero MCP tools.
+        mock_spawn.return_value = _mock_spawn_result(
+            init_tools=["Bash"], mcp_servers=[],
+        )
+
+        conn = _fresh_conn()
+        member = self._seed(conn)
+        result = make_runner("chrisai", str(tmp_path))(conn, member)
+
+        assert result["status"] == "completed"
+        assert "mcp_degraded" not in result
