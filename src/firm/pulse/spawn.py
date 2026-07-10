@@ -82,6 +82,8 @@ def spawn_member_run(
     timeout_sec: int = 300,
     cwd: str | None = None,
     model: str | None = None,
+    member_id: str | None = None,
+    firm_id: str | None = None,
 ) -> SpawnResult:
     """Spawn a ``claude --print`` process and capture output on completion.
 
@@ -92,6 +94,10 @@ def spawn_member_run(
         model: Optional ``--model`` override from the Member's Contract
             (``pulse_config.model``) — the per-contract cost lever; cheap
             roles don't need the top model. None = runtime default.
+        member_id: Exported as ``CADRE_MEMBER_ID`` into the child env so
+            tools the Member shells out to (e.g. squad) resolve the acting
+            member deterministically instead of trusting a claimed name.
+        firm_id: Exported as ``FIRM_ID`` alongside it.
 
     Returns:
         SpawnResult with captured stdout/stderr and process metadata.
@@ -111,6 +117,12 @@ def spawn_member_run(
         cmd += ["--model", model]
     cmd += ["-p", prompt]
 
+    env = dict(os.environ)
+    if member_id:
+        env["CADRE_MEMBER_ID"] = member_id
+    if firm_id:
+        env["FIRM_ID"] = firm_id
+
     try:
         proc = subprocess.Popen(
             cmd,
@@ -118,6 +130,7 @@ def spawn_member_run(
             stderr=subprocess.PIPE,
             text=True,
             cwd=cwd,
+            env=env,
         )
     except (FileNotFoundError, OSError) as exc:
         return SpawnResult(

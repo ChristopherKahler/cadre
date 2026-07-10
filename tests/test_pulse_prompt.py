@@ -393,6 +393,25 @@ class TestAssemblePrompt:
         # displacing the unit briefing
         assert result.index("Execution Rules") < result.index("FIRST-FRAGMENT")
 
+    def test_member_protocols_reach_only_their_member(self, tmp_path):
+        conn = _fresh_conn()
+        _add_member(conn, "MEM-001")
+        _add_member(conn, "MEM-002")
+        _add_project(conn, "PRJ-001")
+        _add_unit(conn, "UNT-001", "PRJ-001", claimed_by="MEM-001")
+        _add_unit(conn, "UNT-002", "PRJ-001", claimed_by="MEM-002")
+        mdir = tmp_path / ".firm" / "protocols" / "_member" / "MEM-001"
+        mdir.mkdir(parents=True)
+        (mdir / "50-squad-contract.md").write_text("MEM-001-CONTRACT")
+
+        mine = assemble_prompt(conn, "chrisai", "MEM-001", "UNT-001", cwd=str(tmp_path))
+        theirs = assemble_prompt(conn, "chrisai", "MEM-002", "UNT-002", cwd=str(tmp_path))
+
+        assert "Your Protocols" in mine and "MEM-001-CONTRACT" in mine
+        assert "MEM-001-CONTRACT" not in theirs
+        # the _member dir is invisible to the firm-wide seam
+        assert "Firm Protocols" not in mine
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Utility: acceptance criteria formatting

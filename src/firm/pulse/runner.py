@@ -378,6 +378,7 @@ def _execute_run(
                 failure_context,
                 lambda p: spawn_member_run(
                     p, timeout_sec=timeout, cwd=cwd, model=retry_model,
+                    member_id=member_id, firm_id=firm_id,
                 ),
                 parse_stream,
             )

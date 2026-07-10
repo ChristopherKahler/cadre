@@ -288,12 +288,34 @@ class TestSpawnCommand:
             stderr=subprocess.PIPE,
             text=True,
             cwd="/tmp",
+            env=mock.ANY,
         )
         assert result.returncode == 0
         assert result.stdout == "stdout"
         assert result.stderr == "stderr"
         assert result.pid == 12345
         assert result.timed_out is False
+
+    def test_member_identity_exported_into_child_env(self):
+        mock_proc = mock.MagicMock()
+        mock_proc.pid = 7
+        mock_proc.communicate.return_value = ("", "")
+        mock_proc.returncode = 0
+
+        with (
+            mock.patch(
+                "firm.pulse.spawn.resolve_claude_bin",
+                return_value=("/usr/bin/claude-test", "test"),
+            ),
+            mock.patch(
+                "firm.pulse.spawn.subprocess.Popen", return_value=mock_proc,
+            ) as mock_popen,
+        ):
+            spawn_member_run("p", member_id="MEM-007", firm_id="lab")
+
+        env = mock_popen.call_args.kwargs["env"]
+        assert env["CADRE_MEMBER_ID"] == "MEM-007"
+        assert env["FIRM_ID"] == "lab"
 
     def test_default_cwd_is_none(self):
         mock_proc = mock.MagicMock()

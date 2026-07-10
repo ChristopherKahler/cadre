@@ -36,6 +36,7 @@ class ClaudeCodeRuntime:
         prompt = assemble_prompt(conn, firm_id, member_id, unit_id, cwd=cwd)
         spawn_result = spawn_member_run(
             prompt, timeout_sec=timeout, cwd=cwd, model=model,
+            member_id=member_id, firm_id=firm_id,
         )
 
         return InvokeResult(

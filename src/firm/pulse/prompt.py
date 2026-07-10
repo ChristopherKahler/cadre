@@ -116,6 +116,32 @@ def _render_protocols(cwd: str) -> str | None:
     return "## Firm Protocols\n\n" + "\n\n---\n\n".join(parts)
 
 
+def _render_member_protocols(cwd: str, member_id: str) -> str | None:
+    """Concatenate .firm/protocols/_member/<member_id>/*.md — fragments that
+    reach ONLY this Member (e.g. an assigned squad contract). Same rendering
+    rules as the firm-wide seam; the ``_member`` directory is invisible to it
+    (it only reads top-level ``*.md`` files)."""
+    proto_dir = os.path.join(cwd, ".firm", "protocols", "_member", member_id)
+    try:
+        names = sorted(os.listdir(proto_dir))
+    except (FileNotFoundError, OSError):
+        return None
+    parts = []
+    for name in names:
+        if not name.endswith(".md"):
+            continue
+        try:
+            with open(os.path.join(proto_dir, name), encoding="utf-8") as f:
+                text = f.read().strip()
+        except (FileNotFoundError, OSError):
+            continue
+        if text:
+            parts.append(text)
+    if not parts:
+        return None
+    return "## Your Protocols\n\n" + "\n\n---\n\n".join(parts)
+
+
 def _render_member_identity(
     conn: sqlite3.Connection,
     member_id: str,
@@ -459,6 +485,7 @@ def assemble_prompt(
 
     contract_section = _render_contract(conn, member_id)
     protocols_section = _render_protocols(workspace)
+    member_protocols_section = _render_member_protocols(workspace, member_id)
 
     sections = [
         _render_system_context(conn, firm_id),
@@ -468,6 +495,7 @@ def assemble_prompt(
         _render_unit_briefing(conn, unit_id),
         _render_execution_directive(conn, member_id, workspace),
         *((protocols_section,) if protocols_section else ()),
+        *((member_protocols_section,) if member_protocols_section else ()),
     ]
 
     return "\n\n".join(sections)
