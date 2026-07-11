@@ -239,11 +239,12 @@ python3 -m venv .venv
 #   .gitignore/.gitattributes — from any existing firm (LF enforced)
 mkdir -p reports scripts /mnt/c/Users/Chris/Claude/Projects/acme-boardroom
 
-# 2b. Discipline templates (ship inside the package — execution/quality law extracted from PAUL)
-.venv/bin/cadre templates install discipline
-#   → 15-execution-discipline.md lands in .firm/protocols/ (renders into every member run)
-#   → lead/dev loadout packs stage into .firm/templates/discipline/ — the seed merges them
-#     into lead/engineer contracts (see .firm/templates/discipline/SETUP.md)
+# 2b. Discipline templates — `cadre init` already installed the family:
+#   → 15-execution-discipline.md is in .firm/protocols/ (renders into every member run)
+#   → lead/dev loadout packs staged in .firm/templates/discipline/
+#   After seeding contracts (step 3), attach the role packs — the one human call
+#   is which contract is which role; the merge is mechanical and re-runnable:
+.venv/bin/cadre templates apply discipline --map lead=CON-LEAD --map dev=CON-ENG
 
 # 3. Seed script (scripts/seed_acme.py) — idempotent: guard EVERY create with repo.get
 ```

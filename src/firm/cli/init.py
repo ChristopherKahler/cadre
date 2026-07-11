@@ -56,6 +56,13 @@ def run_init(
     finally:
         conn.close()
 
+    # Every firm is born with the universal execution discipline — quality law
+    # that only exists if someone remembers a command is a suggestion, not a
+    # floor. Idempotent: existing (possibly customized) files are skipped.
+    from firm.cli.templates import run_templates_install
+    print("  Discipline templates:")
+    run_templates_install("discipline", workspace)
+
     if install_hooks_flag:
         from firm.cli.install_hooks import install_hooks
         rc, messages = install_hooks(workspace)

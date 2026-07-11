@@ -4,21 +4,32 @@ Five minutes from install to verified. Prerequisites: an initialized firm worksp
 
 ## 1. Install the family
 
+**New firms get this family automatically** — `cadre init` installs it at birth. For firms created before this shipped:
+
 ```bash
 cd <your-firm-workspace>
 cadre templates install discipline
 ```
 
-What this does:
+What lands where:
 
 - `15-execution-discipline.md` → `.firm/protocols/` — active immediately; protocols concatenate into every member's run prompt, no restart needed.
 - `lead-unit-authoring.json`, `dev-discipline.json`, this guide → `.firm/templates/discipline/` — staged for step 2.
 
 Existing files are never overwritten unless you pass `--force`.
 
-## 2. Merge the loadout packs into contracts
+## 2. Attach the role packs to contracts
 
-Loadout packs are merged into `contract.skill_loadout` by your firm's seed script (the append-if-absent idiom keeps re-seeding idempotent):
+One command — you make the only human call (which contract is which role), the merge is mechanical, append-if-absent, safe to re-run:
+
+```bash
+cadre templates apply discipline --map lead=CON-LEAD --map dev=CON-ENG
+# multiple contracts per pack: --map dev=CON-ENG,CON-API
+```
+
+Pack names match by filename prefix (`lead` → `lead-unit-authoring.json`, `dev` → `dev-discipline.json`). Changes take effect on each member's next spawn.
+
+Seed-script authors can do the same merge in code (equivalent semantics):
 
 ```python
 import json

@@ -100,5 +100,110 @@ def run_templates_install(family: str, workspace: Path, *, force: bool = False) 
 
     setup = stage_dir / "SETUP.md"
     if setup.exists():
-        print(f"\nNext: read {setup.relative_to(workspace)} — loadout packs are merged into contracts by your seed script.")
+        print(f"\nNext: read {setup.relative_to(workspace)} — attach loadout packs with `cadre templates apply {family} --map <pack>=<CONTRACT-ID>`.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# apply — merge a family's loadout packs into contracts (the one human call:
+# which contract is which role. Everything else is mechanical.)
+# ---------------------------------------------------------------------------
+
+def _resolve_pack(family: str, pack_name: str, workspace: Path):
+    """Resolve a pack by filename-stem prefix ('dev' → dev-discipline.json).
+
+    Prefers the staged workspace copy (a firm may have customized it); falls
+    back to the packaged file. Returns (resolved_name, dict) or (None, None).
+    """
+    import json
+
+    candidates = []
+    stage_dir = workspace / ".firm" / "templates" / family
+    if stage_dir.is_dir():
+        candidates.extend(p for p in stage_dir.iterdir() if p.name.endswith(".json"))
+    pkg_dir = _templates_root() / family
+    if pkg_dir.is_dir():
+        staged_names = {c.name for c in candidates}
+        candidates.extend(
+            e for e in pkg_dir.iterdir()
+            if e.is_file() and e.name.endswith(".json") and e.name not in staged_names
+        )
+
+    matches = {c.name for c in candidates if c.name.startswith(pack_name)}
+    if len(matches) != 1:
+        return None, sorted(c.name for c in candidates)
+    chosen = next(c for c in candidates if c.name in matches)
+    return chosen.name, json.loads(chosen.read_text() if hasattr(chosen, "read_text") else chosen.read_bytes().decode())
+
+
+def merge_pack_into_loadout(loadout: dict, pack: dict) -> int:
+    """Append-if-absent merge of a pack's rendering keys. Returns lines added."""
+    added = 0
+    for key in ("stages", "tools", "duties", "policies"):
+        lines = pack.get(key)
+        if not lines:
+            continue
+        existing = loadout.setdefault(key, [])
+        for line in lines:
+            if line not in existing:
+                existing.append(line)
+                added += 1
+    return added
+
+
+def run_templates_apply(family: str, workspace: Path, mappings: list[str]) -> int:
+    """``cadre templates apply <family> --map dev=CON-ENG --map lead=CON-LEAD``
+
+    Merges each named pack's duties/policies into the named contracts'
+    ``skill_loadout`` (append-if-absent — re-applying is a no-op). Multiple
+    contracts per pack: ``--map dev=CON-ENG,CON-API``.
+    """
+    import json
+
+    from firm.core import repo
+    from firm.core.db import connect, get_db_path
+
+    firm_dir = workspace / ".firm"
+    if not firm_dir.is_dir():
+        print(f"{workspace} is not a firm workspace (no .firm/ — run `cadre init .` first).")
+        return 1
+
+    plan: list[tuple[str, dict, str]] = []  # (pack_name, pack, contract_id)
+    for mapping in mappings:
+        if "=" not in mapping:
+            print(f"Bad --map {mapping!r} (expected <pack>=<CONTRACT-ID>[,<CONTRACT-ID>...]).")
+            return 1
+        pack_name, _, contract_csv = mapping.partition("=")
+        resolved, pack = _resolve_pack(family, pack_name.strip(), workspace)
+        if resolved is None:
+            print(f"Pack {pack_name!r} is not a unique prefix of a {family} pack. Available: {', '.join(pack) or '(none)'}")
+            return 1
+        for contract_id in filter(None, (c.strip() for c in contract_csv.split(","))):
+            plan.append((resolved, pack, contract_id))
+
+    if not plan:
+        print("Nothing to apply — pass at least one --map <pack>=<CONTRACT-ID>.")
+        return 1
+
+    conn = connect(get_db_path(workspace))
+    try:
+        for pack_name, pack, contract_id in plan:
+            row = repo.get(conn, "contract", contract_id)
+            if not row:
+                print(f"Contract {contract_id!r} not found — nothing written.")
+                return 1
+        for pack_name, pack, contract_id in plan:
+            row = repo.get(conn, "contract", contract_id)
+            raw = row.get("skill_loadout")
+            loadout = json.loads(raw) if isinstance(raw, str) and raw else (raw or {})
+            if not isinstance(loadout, dict):
+                loadout = {}
+            added = merge_pack_into_loadout(loadout, pack)
+            if added:
+                repo.update(conn, "contract", contract_id, {"skill_loadout": json.dumps(loadout)})
+            print(f"  {contract_id}: +{added} line(s) from {pack_name}" + ("" if added else " (already applied)"))
+        conn.commit()
+    finally:
+        conn.close()
+    print("Loadout changes take effect on each member's next spawn.")
     return 0

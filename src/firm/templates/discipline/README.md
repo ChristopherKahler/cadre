@@ -2,10 +2,11 @@
 
 Quality constraints for Cadre firm Members — the execution discipline that makes "done" mean done, extracted from the PAUL framework (Plan-Apply-Unify Loop) and re-shaped for autonomous, headless member runs. PAUL's session ceremony (satellite state files, approval menus, context budgeting) is deliberately left out: Cadre's own entities — Units, Gates, seam-4 validation, Documents — already own those seams.
 
-Install with:
+**New firms get this family automatically at `cadre init`.** Retrofit an existing firm and attach the role packs with:
 
 ```bash
-cadre templates install discipline --workspace <your-firm>
+cadre templates install discipline --workspace <your-firm>   # retrofit (init does this for new firms)
+cadre templates apply discipline --map lead=CON-LEAD --map dev=CON-ENG
 ```
 
 See `SETUP.md` for the full walkthrough.
