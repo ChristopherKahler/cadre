@@ -14,7 +14,9 @@ holds the lock — a submitted turn never silently fizzles.
 from __future__ import annotations
 
 import json
+import os
 import signal
+import socket
 import threading
 import time
 from pathlib import Path
@@ -44,7 +46,8 @@ def run_pulse(
     Args:
         workspace: Root of the firm workspace.
         dry_run: If True, show who would activate without spawning.
-        abort: If True, send SIGTERM to tracked PIDs and exit.
+        abort: If True, abort the live pulse — SIGTERM in-process children,
+            then signal or clear the DB pulse_lock holder — and exit.
         firm_id: Firm scope.
         only: Member id — Board-targeted pulse activating only this Member
             (frequency throttle waived for the target).
@@ -56,9 +59,9 @@ def run_pulse(
     """
     workspace = workspace.expanduser().resolve()
 
-    # Abort mode: kill tracked processes
+    # Abort mode: kill tracked processes + resolve the DB lock holder
     if abort:
-        return _handle_abort()
+        return _handle_abort(workspace, firm_id)
 
     db_path = get_db_path(workspace)
     if not db_is_remote() and not db_path.exists():
@@ -267,19 +270,74 @@ def _drain_queue(workspace: Path, db_path: Path, firm_id: str) -> int:
     return 0
 
 
-def _handle_abort() -> int:
-    """Send SIGTERM to all tracked PIDs."""
-    if not _active_pids:
-        print(json.dumps({"ok": True, "aborted": 0, "message": "No active processes"}))
-        return 0
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
-    aborted = 0
-    for pid, proc in list(_active_pids.items()):
+
+def _handle_abort(workspace: Path, firm_id: str) -> int:
+    """Abort a live pulse.
+
+    Two layers. First, SIGTERM any subprocesses tracked in THIS process
+    (only populated when abort is called in-process). Then the cross-process
+    case every CLI invocation actually hits: read the DB ``pulse_lock`` —
+    a live local holder is signalled and given a grace window to release;
+    a dead local holder's stale lock is cleared (field failure 2026-07-11:
+    a systemd-killed pulse left its lock row, the next pulse bounced off it,
+    and abort reported "No active processes" while the table stayed wedged).
+    A holder on another machine is reported and left to the TTL steal.
+    """
+    result: dict[str, Any] = {"ok": True, "aborted": 0}
+
+    for _pid, proc in list(_active_pids.items()):
         try:
             proc.send_signal(signal.SIGTERM)
-            aborted += 1
+            result["aborted"] += 1
         except (ProcessLookupError, OSError):
             pass  # Already dead
 
-    print(json.dumps({"ok": True, "aborted": aborted}))
+    db_path = get_db_path(workspace)
+    if not db_is_remote() and not db_path.exists():
+        result["lock"] = "no-db"
+        print(json.dumps(result))
+        return 0
+
+    conn = connect(db_path)
+    try:
+        holder = dblock.current_holder(conn, firm_id)
+        if holder is None:
+            result["lock"] = "none"
+        else:
+            result["holder"] = holder
+            host, pid_str, _nonce = holder.split(":", 2)
+            if host != socket.gethostname():
+                result["lock"] = "remote-holder"
+                result["message"] = ("lock held from another machine; "
+                                     "its TTL frees it if the holder is dead")
+            elif _pid_alive(int(pid_str)):
+                os.kill(int(pid_str), signal.SIGTERM)
+                result["aborted"] += 1
+                for _ in range(10):  # grace: let it exit and release the lock
+                    time.sleep(0.5)
+                    if not _pid_alive(int(pid_str)):
+                        break
+                if _pid_alive(int(pid_str)):
+                    result["lock"] = "signalled"
+                    result["message"] = ("holder signalled, still exiting; "
+                                         "lock left for its own release")
+                else:
+                    dblock.release(conn, firm_id, holder)
+                    result["lock"] = "cleared"
+            else:
+                dblock.release(conn, firm_id, holder)
+                result["lock"] = "stale-cleared"
+    finally:
+        conn.close()
+
+    print(json.dumps(result))
     return 0

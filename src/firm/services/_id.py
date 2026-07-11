@@ -1,6 +1,6 @@
 """Unified ID generation for all firm entities.
 
-Pattern: PREFIX-NNN where NNN = COUNT(*) + 1 for rows with matching firm_id.
+Pattern: PREFIX-NNN where NNN = highest existing numeric suffix + 1 (MAX-based).
 Matches the LOG-NNN and USG-NNN patterns from Phase 2 hooks.
 
 Not concurrency-safe (v1 single-operator). Flag for Phase 6 MCP.
@@ -29,6 +29,19 @@ PREFIX_REGISTRY: dict[str, str] = {
 }
 
 SUB_UNIT_PREFIX = "SUB"
+
+
+def max_numeric_suffix(conn: sqlite3.Connection, table: str, prefix: str) -> int:
+    """Highest numeric suffix among ``{prefix}-NNN`` ids in *table* (0 if none).
+
+    SQLite ``substr`` is 1-based: the numeric tail starts at len(prefix)+2,
+    right past the prefix and its dash. Non-numeric tails CAST to 0.
+    """
+    row = conn.execute(
+        f"SELECT MAX(CAST(substr(id, ?) AS INTEGER)) FROM {table} WHERE id LIKE ?",
+        (len(prefix) + 2, f"{prefix}-%"),
+    ).fetchone()
+    return row[0] or 0
 
 
 def next_id(
@@ -60,10 +73,19 @@ def next_id(
 
     prefix = SUB_UNIT_PREFIX if (table == "unit" and is_sub_unit) else PREFIX_REGISTRY[table]
 
-    # Count ALL rows in the table (not firm-scoped) because `id` is a global
-    # PRIMARY KEY. Firm-scoped counts would collide when multiple firms exist.
-    # The firm_id parameter is kept in the signature for forward-compatibility
-    # (e.g., if we switch to firm-scoped sequence tables later).
-    row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
-    n = (row[0] or 0) + 1
+    # MAX-based, not COUNT-based: `id` is a global PRIMARY KEY, and COUNT+1
+    # collides whenever the row count lags the highest suffix — a deleted row,
+    # or a firm-scoped counter against a shared id space (field failure
+    # 2026-07-11: run_record's firm-scoped COUNT minted a duplicate USG id and
+    # crashed `firm run end` mid-hook). The highest existing suffix is the
+    # only safe floor. The firm_id parameter is kept in the signature for
+    # forward-compatibility (e.g., firm-scoped sequence tables later).
+    if table == "unit":
+        # UNIT and SUB share one sequence (same table's id space).
+        n = max(
+            max_numeric_suffix(conn, table, PREFIX_REGISTRY["unit"]),
+            max_numeric_suffix(conn, table, SUB_UNIT_PREFIX),
+        ) + 1
+    else:
+        n = max_numeric_suffix(conn, table, prefix) + 1
     return f"{prefix}-{n:03d}"

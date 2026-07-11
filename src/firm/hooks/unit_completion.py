@@ -22,19 +22,19 @@ import sqlite3
 from typing import Any
 
 from firm.core import repo
+from firm.services._id import max_numeric_suffix
 
 
 def _next_records_id(conn: sqlite3.Connection, firm_id: str) -> str:
-    """Return the next ``LOG-NNN`` id scoped to *firm_id*.
+    """Return the next ``LOG-NNN`` id.
 
-    Sequential per firm; count-based generation is safe because ``records`` is
-    immutable (no deletes shrink the count).
+    MAX-based on the global id column: ``records.id`` is a global PRIMARY KEY,
+    so a firm-scoped COUNT collides the moment another firm shares the DB —
+    immutability protects against deletes, not against other writers (field
+    failure 2026-07-11, the USG twin of this function). *firm_id* stays in the
+    signature for forward-compatibility.
     """
-    row = conn.execute(
-        "SELECT COUNT(*) FROM records WHERE firm_id = ?", (firm_id,)
-    ).fetchone()
-    n = (row[0] or 0) + 1
-    return f"LOG-{n:03d}"
+    return f"LOG-{max_numeric_suffix(conn, 'records', 'LOG') + 1:03d}"
 
 
 def on_unit_done(

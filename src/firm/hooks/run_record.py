@@ -23,20 +23,18 @@ from typing import Any
 
 from firm.hooks._redact import redact
 from firm.hooks.unit_completion import _next_records_id
+from firm.services._id import max_numeric_suffix
 
 
 def _next_usage_event_id(conn: sqlite3.Connection, firm_id: str) -> str:
-    """Return the next ``USG-NNN`` id scoped to *firm_id*.
+    """Return the next ``USG-NNN`` id.
 
-    Sequential per firm; count-based generation mirrors the ``LOG-NNN``
-    scheme from unit_completion (same concurrency caveat -- v1
-    single-operator).
+    MAX-based on the global id column: ``usage_event.id`` is a global PRIMARY
+    KEY, and the firm-scoped COUNT this used previously minted a duplicate id
+    and crashed ``firm run end`` mid-hook (field failure 2026-07-11). *firm_id*
+    stays in the signature for forward-compatibility.
     """
-    row = conn.execute(
-        "SELECT COUNT(*) FROM usage_event WHERE firm_id = ?", (firm_id,)
-    ).fetchone()
-    n = (row[0] or 0) + 1
-    return f"USG-{n:03d}"
+    return f"USG-{max_numeric_suffix(conn, 'usage_event', 'USG') + 1:03d}"
 
 
 def on_run_end(
