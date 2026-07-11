@@ -8,6 +8,7 @@ Contract invoke → parse → validate → retry → budget update → finalize.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any
@@ -81,8 +82,6 @@ def _register_deliverables(
     2026-07-07). Gated on the deliverable opt-in so scratch-writing members
     don't spam Documents; idempotent by content_path so retries don't dupe.
     """
-    import os
-
     if not _wants_deliverable_registration(validation_config):
         return
     seen: set[str] = set()
@@ -129,21 +128,81 @@ def _persist_final_text(
     })
 
 
+_MCP_LOG_ROOT = os.path.expanduser("~/.cache/claude-cli-nodejs")
+
+
+def _mcp_log_verdict(cwd: str, session_id: str | None, server: str) -> bool | None:
+    """Authoritative post-run connect check from claude's own MCP debug logs.
+
+    claude writes per-project, per-server connection logs to
+    ``~/.cache/claude-cli-nodejs/<cwd with / → ->/mcp-logs-<server>/*.jsonl``;
+    every entry carries the stream ``sessionId``, so the verdict is precise
+    to THIS run even with concurrent sessions in the same workspace.
+
+    Returns True when this session logged a successful connect, False when
+    this session's entries exist but never logged one (affirmative failure),
+    None when no evidence is findable (log dir absent, session unknown, cache
+    layout changed) — callers must treat None as "cannot assert", never flag.
+    """
+    if not cwd or not session_id:
+        return None
+    log_dir = os.path.join(
+        _MCP_LOG_ROOT, cwd.replace("/", "-"), f"mcp-logs-{server}",
+    )
+    try:
+        names = sorted(os.listdir(log_dir), reverse=True)  # ISO names: newest first
+    except OSError:
+        return None
+    session_seen = False
+    for name in names[:20]:  # this run's log was just written; bound the scan
+        if not name.endswith(".jsonl"):
+            continue
+        try:
+            with open(os.path.join(log_dir, name), encoding="utf-8",
+                      errors="replace") as fh:
+                for line in fh:
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(entry, dict) \
+                            or entry.get("sessionId") != session_id:
+                        continue
+                    session_seen = True
+                    if "Successfully connected" in str(entry.get("debug", "")):
+                        return True
+        except OSError:
+            continue
+    return False if session_seen else None
+
+
 def _mcp_startup_guard(
     conn: sqlite3.Connection,
     run_id: str,
     parsed: dict[str, Any],
     cwd: str,
 ) -> list[str]:
-    """Flag a run whose expected firm MCP toolset never materialized.
+    """Flag a run whose expected firm MCP toolset provably never became
+    reachable — visibly on the run row, instead of silently "completing"
+    (ESC-004 / RUN-051: runs closed clean while ``mcp__firm__*`` was absent).
 
-    Compares the servers declared in the workspace ``.mcp.json`` against the
-    spawned claude's init event (server statuses + tool index). A Member
-    running without its firm tools is a degraded run and must be visible as
-    one (ESC-004 / RUN-051: runs "completed" while ``mcp__firm__*`` was
-    silently absent). Writes a warning onto the run row and returns the
-    missing server names; [] = healthy, or nothing to assert (no ``.mcp.json``
-    expectation, or no init event observed — never false-fails).
+    Evidence model (RUN-053/054/055 postmortem, 2026-07-10): the init event
+    is a snapshot taken BEFORE MCP connections settle — under systemd-run
+    pulse timing the firm server reliably shows ``pending`` at init and
+    connects ~500ms later, tools fully usable. Init status alone therefore
+    CANNOT condemn a run. A server is healthy on any one of:
+
+    1. init status ``connected``, or its tools in the init tool index;
+    2. an ``mcp__<server>__*`` tool call observed anywhere in the stream;
+    3. claude's per-session MCP debug log recording a successful connect.
+
+    It is flagged missing only on affirmative failure with none of the above:
+    init status failed/needs-auth/absent-from-init, or this session's own log
+    entries exist without a connect. ``pending`` with no consultable log is
+    indeterminate and stays silent — the guard must never false-flag healthy
+    runs or the Board learns to ignore it.
+
+    Returns the missing server names; [] = healthy or nothing to assert.
     """
     expected = expected_mcp_servers(cwd)
     if not expected:
@@ -152,30 +211,46 @@ def _mcp_startup_guard(
     mcp_servers = parsed.get("mcp_servers")
     if init_tools is None and mcp_servers is None:
         return []
-    missing = []
+    statuses = {
+        s.get("name"): s.get("status") for s in (mcp_servers or [])
+    }
+    session_id = parsed.get("session_id")
+    missing: list[str] = []
+    evidence: dict[str, str] = {}
     for name in expected:
-        connected = any(
-            s.get("name") == name and s.get("status") == "connected"
-            for s in (mcp_servers or [])
-        )
-        has_tools = any(
-            t.startswith(f"mcp__{name}__") for t in (init_tools or [])
-        )
-        if not (connected or has_tools):
+        status = statuses.get(name)
+        prefix = f"mcp__{name}__"
+        if status == "connected":
+            continue
+        if any(t.startswith(prefix) for t in (init_tools or [])):
+            continue
+        if any(
+            isinstance(tc, dict) and str(tc.get("name") or "").startswith(prefix)
+            for tc in parsed.get("tool_calls") or []
+        ):
+            continue
+        log_verdict = _mcp_log_verdict(cwd, session_id, name)
+        if log_verdict is True:
+            continue
+        if status in ("failed", "needs-auth") or name not in statuses \
+                or log_verdict is False:
             missing.append(name)
+            evidence[name] = (
+                f"init={status if name in statuses else 'absent'}, "
+                f"log={'no-connect' if log_verdict is False else 'unavailable'}"
+            )
+        # status "pending" with no log verdict → indeterminate: stay silent
     if missing:
-        statuses = {
-            s.get("name"): s.get("status")
-            for s in (mcp_servers or []) if s.get("name") in missing
-        }
         repo.update(conn, "member_run", run_id, {
             "notes": json.dumps({
                 "warning": "mcp_degraded",
                 "missing_mcp_servers": missing,
-                "server_status": statuses,
+                "server_status": {n: statuses.get(n) for n in missing},
+                "evidence": evidence,
                 "detail": (
-                    "expected MCP servers from .mcp.json never connected — "
-                    "the Member ran without its firm tools"
+                    "expected MCP servers from .mcp.json show no evidence of "
+                    "connecting in this run — the Member worked without its "
+                    "firm tools"
                 ),
             }),
         })

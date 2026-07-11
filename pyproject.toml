@@ -46,7 +46,7 @@ Homepage = "https://github.com/chriskahler/agent-company-architecture"
 where = ["src"]
 
 [tool.setuptools.package-data]
-firm = ["migrations/*.sql", "dashboard/*.html"]
+firm = ["migrations/*.sql", "dashboard/*.html", "templates/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

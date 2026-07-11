@@ -218,6 +218,8 @@ Three mechanisms, narrowest wins:
 
 Constraints that are law across firms: no social/production credentials in loadouts; missing capability = procurement unit (Gate → loadout update), never a prompt hack; squad spawn rights (if the squad tool is installed) are per-member grants — `squad contract set <MEM-ID> --quota 5 --anchor "mon 00:00" --budget 1 --depth 1` writes the fragment that renders in that member's every run.
 
+**Don't write discipline law from scratch:** `cadre templates install discipline` ships the PAUL-extracted quality packs — a universal execution protocol (evidence-before-claims, deviation tiers, report-as-reconciliation) plus lead unit-authoring and dev TDD/ship-gate loadout packs. See the family's README/SETUP after install.
+
 ## 6. Walkthrough — zero to first pulse (hypothetical firm `acme`, 4 members, 2 chained units)
 
 ```bash
@@ -236,6 +238,12 @@ python3 -m venv .venv
 #   .claude/           — copy chrisai's session-pulse hook trio + commands/pulse.md, sed the firm name/paths
 #   .gitignore/.gitattributes — from any existing firm (LF enforced)
 mkdir -p reports scripts /mnt/c/Users/Chris/Claude/Projects/acme-boardroom
+
+# 2b. Discipline templates (ship inside the package — execution/quality law extracted from PAUL)
+.venv/bin/cadre templates install discipline
+#   → 15-execution-discipline.md lands in .firm/protocols/ (renders into every member run)
+#   → lead/dev loadout packs stage into .firm/templates/discipline/ — the seed merges them
+#     into lead/engineer contracts (see .firm/templates/discipline/SETUP.md)
 
 # 3. Seed script (scripts/seed_acme.py) — idempotent: guard EVERY create with repo.get
 ```

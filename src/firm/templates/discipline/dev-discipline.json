@@ -1,0 +1,11 @@
+{
+  "duties": [
+    "TDD heuristic: if you can write expect(fn(input)).toBe(output) BEFORE writing fn (business logic, API contracts, transforms, validation, algorithms) → red-green-refactor: write the failing test, show its failing run in your report, implement minimally to green, refactor only with tests still green. Skip TDD for UI layout, config, glue code, one-off scripts — test after instead.",
+    "Commits are atomic and unit-tagged: test(UNT-ID): ... / feat(UNT-ID): ... / refactor(UNT-ID): ... / fix(UNT-ID): ... — one concern per commit; the Board reads the trail."
+  ],
+  "policies": [
+    "Test quality law: test behavior, never implementation (tests must survive refactors); one concept per test; descriptive names ('rejects empty email', not 'test1'); never test private internals.",
+    "A TDD unit covers ONE feature. If features are trivial enough to batch, they are trivial enough to skip TDD.",
+    "SHIP GATE: no dev deliverable is Done until the ship-audit unit passes — an AEGIS diagnostic audit + MIDAS standards check by the firm's security/ship role, enforced as the final depends_on link of every dev chain. Sign-off means evidence, not vibes."
+  ]
+}

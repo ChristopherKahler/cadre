@@ -382,6 +382,33 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the planned changes without writing to the DB.",
     )
 
+    # ---- templates subparser ----
+    tmpl_parser = subparsers.add_parser(
+        "templates",
+        help="List or install ship-with-the-package template families (protocols + loadout packs).",
+    )
+    tmpl_sub = tmpl_parser.add_subparsers(dest="templates_command", metavar="<templates-command>")
+    tmpl_sub.add_parser(
+        "list",
+        help="List available template families and their files.",
+    )
+    tmpl_install_parser = tmpl_sub.add_parser(
+        "install",
+        help="Install a family into a firm workspace (protocols → .firm/protocols/, packs → .firm/templates/<family>/).",
+    )
+    tmpl_install_parser.add_argument(
+        "family",
+        help="Template family name (see `cadre templates list`).",
+    )
+    tmpl_install_parser.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Firm workspace root containing .firm/ (defaults to current directory).",
+    )
+    tmpl_install_parser.add_argument(
+        "--force", action="store_true",
+        help="Overwrite files that already exist in the workspace.",
+    )
+
     return parser
 
 
@@ -547,6 +574,19 @@ def main(argv: list[str] | None = None) -> int:
                 firm_id=firm_id,
             )
         parser.parse_args(["run", "--help"])
+        return 0
+
+    if args.command == "templates":
+        if args.templates_command == "list":
+            from firm.cli.templates import run_templates_list
+
+            return run_templates_list()
+        if args.templates_command == "install":
+            from firm.cli.templates import run_templates_install
+
+            workspace = args.workspace if args.workspace is not None else Path.cwd()
+            return run_templates_install(args.family, workspace, force=args.force)
+        parser.parse_args(["templates", "--help"])
         return 0
 
     parser.print_help()

@@ -1,0 +1,8 @@
+{
+  "duties": [
+    "Unit-authoring law: every unit you create specifies Files (exact paths), Action (specific instructions incl. what to avoid and WHY), Verify (a runnable command that proves it), Done (which acceptance criterion it satisfies). If you cannot fill all four, the unit is too vague to assign — sharpen it first.",
+    "Acceptance criteria in Given/When/Then form, each independently testable, error states and edge cases included, behavior described — never implementation.",
+    "Every unit carries explicit boundaries in its description: DO-NOT-CHANGE files/patterns and out-of-scope declarations. Boundaries are what make deviation detectable.",
+    "Sizing law: one unit = one member run inside the contract timeout. Split when a unit has >3 tasks, spans multiple subsystems, or touches >5 files. Slice vertically (feature end-to-end), not horizontally (all models, then all APIs). depends_on only for GENUINE dependencies, never for mere sequence."
+  ]
+}

@@ -94,11 +94,12 @@ def _add_budget_period(conn, bp_id, member_id, *, run_count=0, total_cost_usd=0.
 
 
 def _mock_spawn_result(text="Done. AC-1 satisfied.", cost=0.05,
-                       init_tools=None, mcp_servers=None):
+                       init_tools=None, mcp_servers=None, tool_calls=None):
     """Build a SpawnResult whose stdout is valid stream-json.
 
     init_tools / mcp_servers land on the init event when given (None = the
-    key is absent, like a stream from an older claude).
+    key is absent, like a stream from an older claude). tool_calls (list of
+    tool names) adds assistant tool_use events mid-stream.
     """
     init: dict = {"type": "system", "subtype": "init", "session_id": "ses-mock"}
     if init_tools is not None:
@@ -106,6 +107,15 @@ def _mock_spawn_result(text="Done. AC-1 satisfied.", cost=0.05,
     if mcp_servers is not None:
         init["mcp_servers"] = mcp_servers
     init_line = json.dumps(init)
+    tool_use_lines = [
+        json.dumps({
+            "type": "assistant",
+            "message": {"content": [
+                {"type": "tool_use", "name": name, "id": f"tu-{i}", "input": {}},
+            ]},
+        })
+        for i, name in enumerate(tool_calls or [])
+    ]
     assistant_line = json.dumps({
         "type": "assistant",
         "message": {"content": [{"type": "text", "text": text}]},
@@ -122,7 +132,7 @@ def _mock_spawn_result(text="Done. AC-1 satisfied.", cost=0.05,
         "stop_reason": "end_turn",
         "is_error": False,
     })
-    stdout = "\n".join([init_line, assistant_line, result_line])
+    stdout = "\n".join([init_line, *tool_use_lines, assistant_line, result_line])
     return SpawnResult(returncode=0, stdout=stdout, stderr="", pid=123, timed_out=False)
 
 
@@ -550,14 +560,27 @@ class TestFinalTextPersistence:
 
 class TestMcpStartupGuard:
     """ESC-004 / RUN-051 regression: when the workspace .mcp.json declares a
-    firm server that never connects in the spawned claude, the run row must
-    carry a visible mcp_degraded warning instead of silently completing."""
+    firm server that provably never connects in the spawned claude, the run
+    row must carry a visible mcp_degraded warning instead of silently
+    completing. RUN-053/054/055 counter-regression: the init event races
+    ahead of MCP connections under systemd-run timing, so ``pending`` at
+    init must NEVER flag a run by itself."""
 
     def _firm_workspace(self, tmp_path):
         (tmp_path / ".mcp.json").write_text(json.dumps(
             {"mcpServers": {"firm": {"command": "bash", "args": ["-lc", "x"]}}}
         ))
         return str(tmp_path)
+
+    def _fake_mcp_log(self, monkeypatch, cache_root, workspace, lines):
+        """Stand up a claude-cli cache dir for *workspace* with one firm log."""
+        import firm.pulse.runner as runner_mod
+        log_dir = cache_root / workspace.replace("/", "-") / "mcp-logs-firm"
+        log_dir.mkdir(parents=True)
+        (log_dir / "2026-07-10T00-00-00-000Z.jsonl").write_text(
+            "\n".join(json.dumps(e) for e in lines)
+        )
+        monkeypatch.setattr(runner_mod, "_MCP_LOG_ROOT", str(cache_root))
 
     def _seed(self, conn):
         _add_contract(conn, "CON-001")
@@ -628,3 +651,157 @@ class TestMcpStartupGuard:
 
         assert result["status"] == "completed"
         assert "mcp_degraded" not in result
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_pending_at_init_not_flagged(self, mock_spawn, tmp_path):
+        # RUN-053/054/055: init snapshot said "pending", the server connected
+        # ~500ms later, and the member used its tools — flagging this made
+        # three healthy production runs look degraded. Pending with no
+        # affirmative failure evidence must stay silent.
+        mock_spawn.return_value = _mock_spawn_result(
+            init_tools=["Bash", "Read"],
+            mcp_servers=[{"name": "firm", "status": "pending"}],
+        )
+
+        conn = _fresh_conn()
+        member = self._seed(conn)
+        result = make_runner("chrisai", self._firm_workspace(tmp_path))(conn, member)
+
+        assert result["status"] == "completed"
+        assert "mcp_degraded" not in result
+        run = get(conn, "member_run", result["run_id"])
+        assert run["notes"] is None
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_pending_with_firm_tool_call_not_flagged(self, mock_spawn, tmp_path):
+        # A successful mcp__firm__* call in the stream is absolute proof the
+        # toolset was reachable, whatever the init snapshot said.
+        mock_spawn.return_value = _mock_spawn_result(
+            init_tools=["Bash"],
+            mcp_servers=[{"name": "firm", "status": "pending"}],
+            tool_calls=["mcp__firm__firm_create_document"],
+        )
+
+        conn = _fresh_conn()
+        member = self._seed(conn)
+        result = make_runner("chrisai", self._firm_workspace(tmp_path))(conn, member)
+
+        assert "mcp_degraded" not in result
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_pending_with_log_no_connect_flagged(self, mock_spawn, tmp_path, monkeypatch):
+        # Affirmative failure: this session's own MCP debug log has entries
+        # but never a successful connect — pending was real this time.
+        mock_spawn.return_value = _mock_spawn_result(
+            init_tools=["Bash"],
+            mcp_servers=[{"name": "firm", "status": "pending"}],
+        )
+        (tmp_path / "ws").mkdir()
+        workspace = self._firm_workspace(tmp_path / "ws")
+        self._fake_mcp_log(monkeypatch, tmp_path / "cache", workspace, [
+            {"sessionId": "ses-mock", "debug": "Starting connection with timeout of 30000ms"},
+            {"sessionId": "ses-mock", "debug": "Connection failed: spawn error"},
+        ])
+
+        conn = _fresh_conn()
+        member = self._seed(conn)
+        result = make_runner("chrisai", workspace)(conn, member)
+
+        assert result["mcp_degraded"] == ["firm"]
+        run = get(conn, "member_run", result["run_id"])
+        notes = json.loads(run["notes"])
+        assert notes["warning"] == "mcp_degraded"
+        assert notes["evidence"]["firm"] == "init=pending, log=no-connect"
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_pending_with_log_connect_not_flagged(self, mock_spawn, tmp_path, monkeypatch):
+        # The log's "Successfully connected" clears a pending server even
+        # when the member never called a firm tool (text-only unit).
+        mock_spawn.return_value = _mock_spawn_result(
+            init_tools=["Bash"],
+            mcp_servers=[{"name": "firm", "status": "pending"}],
+        )
+        (tmp_path / "ws").mkdir()
+        workspace = self._firm_workspace(tmp_path / "ws")
+        self._fake_mcp_log(monkeypatch, tmp_path / "cache", workspace, [
+            {"sessionId": "ses-mock", "debug": "Starting connection with timeout of 30000ms"},
+            {"sessionId": "ses-mock", "debug": "Successfully connected (transport: stdio) in 540ms"},
+        ])
+
+        conn = _fresh_conn()
+        member = self._seed(conn)
+        result = make_runner("chrisai", workspace)(conn, member)
+
+        assert "mcp_degraded" not in result
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_failed_status_with_log_connect_not_flagged(self, mock_spawn, tmp_path, monkeypatch):
+        # Even a "failed" init snapshot yields to a logged successful connect
+        # for this session (e.g. reconnect after a first attempt died).
+        mock_spawn.return_value = _mock_spawn_result(
+            init_tools=["Bash"],
+            mcp_servers=[{"name": "firm", "status": "failed"}],
+        )
+        (tmp_path / "ws").mkdir()
+        workspace = self._firm_workspace(tmp_path / "ws")
+        self._fake_mcp_log(monkeypatch, tmp_path / "cache", workspace, [
+            {"sessionId": "ses-mock", "debug": "Successfully connected (transport: stdio) in 540ms"},
+        ])
+
+        conn = _fresh_conn()
+        member = self._seed(conn)
+        result = make_runner("chrisai", workspace)(conn, member)
+
+        assert "mcp_degraded" not in result
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_other_sessions_log_lines_are_ignored(self, mock_spawn, tmp_path, monkeypatch):
+        # A concurrent Board session's connect in the same workspace must not
+        # vouch for this run: only ses-mock entries count. Failed status +
+        # foreign connect line → still degraded.
+        mock_spawn.return_value = _mock_spawn_result(
+            init_tools=["Bash"],
+            mcp_servers=[{"name": "firm", "status": "failed"}],
+        )
+        (tmp_path / "ws").mkdir()
+        workspace = self._firm_workspace(tmp_path / "ws")
+        self._fake_mcp_log(monkeypatch, tmp_path / "cache", workspace, [
+            {"sessionId": "ses-other", "debug": "Successfully connected (transport: stdio) in 300ms"},
+        ])
+
+        conn = _fresh_conn()
+        member = self._seed(conn)
+        result = make_runner("chrisai", workspace)(conn, member)
+
+        assert result["mcp_degraded"] == ["firm"]
+
+
+def test_mcp_log_verdict_unit(tmp_path):
+    import firm.pulse.runner as runner_mod
+    from firm.pulse.runner import _mcp_log_verdict
+
+    ws = "/home/someone/firms/demo"
+    log_dir = tmp_path / ws.replace("/", "-") / "mcp-logs-firm"
+    log_dir.mkdir(parents=True)
+    logf = log_dir / "2026-07-10T00-00-00-000Z.jsonl"
+
+    orig_root = runner_mod._MCP_LOG_ROOT
+    runner_mod._MCP_LOG_ROOT = str(tmp_path)
+    try:
+        # no session entries at all → None (cannot assert)
+        logf.write_text(json.dumps({"sessionId": "other", "debug": "Successfully connected"}))
+        assert _mcp_log_verdict(ws, "ses-1", "firm") is None
+        # session entries without a connect → False (affirmative failure)
+        logf.write_text(json.dumps({"sessionId": "ses-1", "debug": "Starting connection"}))
+        assert _mcp_log_verdict(ws, "ses-1", "firm") is False
+        # session connect → True
+        logf.write_text("\n".join([
+            json.dumps({"sessionId": "ses-1", "debug": "Starting connection"}),
+            json.dumps({"sessionId": "ses-1", "debug": "Successfully connected (transport: stdio) in 540ms"}),
+        ]))
+        assert _mcp_log_verdict(ws, "ses-1", "firm") is True
+        # missing dir / missing session id → None
+        assert _mcp_log_verdict("/nowhere/at/all", "ses-1", "firm") is None
+        assert _mcp_log_verdict(ws, None, "firm") is None
+    finally:
+        runner_mod._MCP_LOG_ROOT = orig_root
