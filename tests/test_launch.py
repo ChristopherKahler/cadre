@@ -24,6 +24,9 @@ def _linux_branch(monkeypatch):
 # launch shares the global subprocess module — patching its Popen patches
 # everyone's, including the bash -n check below. Keep the real one.
 _REAL_POPEN = subprocess.Popen
+# Captured before the autouse fixture fakes sys.platform: on a real Windows
+# host, `bash` on PATH is the WSL stub (no distro on CI) — never lint there.
+_REAL_WINDOWS = sys.platform == "win32"
 
 
 @pytest.fixture
@@ -37,7 +40,7 @@ def spawn(monkeypatch):
 
 def _script(calls) -> tuple[Path, str]:
     path = Path(calls["argv"][-1])
-    if sys.platform != "win32":   # bash -n lint — the scripts are POSIX-branch artifacts
+    if not _REAL_WINDOWS:   # bash -n lint — the scripts are POSIX-branch artifacts
         assert _REAL_POPEN(["bash", "-n", str(path)]).wait() == 0
     return path, path.read_text()
 

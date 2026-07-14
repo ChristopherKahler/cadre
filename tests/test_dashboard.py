@@ -146,7 +146,7 @@ def test_unknown_action_raises():
 
 def test_index_html_ships_with_package():
     assert _INDEX_HTML.exists()
-    content = _INDEX_HTML.read_text()
+    content = _INDEX_HTML.read_text(encoding="utf-8")
     assert "Cadre Boardroom" in content
     assert "/api/state" in content
 
