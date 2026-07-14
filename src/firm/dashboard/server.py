@@ -569,7 +569,7 @@ def _load_firm_env(workspace: Path) -> None:
     if not env.exists():
         return
     try:
-        for line in env.read_text().splitlines():
+        for line in env.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 k, _, v = line.partition("=")
@@ -1998,7 +1998,7 @@ def equip_member(
                 # already wired — loadout entry is all that's missing
                 try:
                     own = json.loads(
-                        (workspace / ".mcp.json").read_text()).get("mcpServers") or {}
+                        (workspace / ".mcp.json").read_text(encoding="utf-8")).get("mcpServers") or {}
                 except (OSError, json.JSONDecodeError):
                     own = {}
                 if not isinstance(own.get(name), dict):

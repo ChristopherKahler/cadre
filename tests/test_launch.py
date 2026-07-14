@@ -37,7 +37,8 @@ def spawn(monkeypatch):
 
 def _script(calls) -> tuple[Path, str]:
     path = Path(calls["argv"][-1])
-    assert _REAL_POPEN(["bash", "-n", str(path)]).wait() == 0
+    if sys.platform != "win32":   # bash -n lint — the scripts are POSIX-branch artifacts
+        assert _REAL_POPEN(["bash", "-n", str(path)]).wait() == 0
     return path, path.read_text()
 
 

@@ -450,7 +450,7 @@ def status_payload() -> dict[str, Any]:
     health = provider_dir(PROVIDER) / "health.json"
     if health.exists():
         try:
-            last = json.loads(health.read_text()).get("last_activity")
+            last = json.loads(health.read_text(encoding="utf-8")).get("last_activity")
             entry["last_activity_age_sec"] = int(time.time() - float(last))
         except (OSError, ValueError, TypeError):
             pass

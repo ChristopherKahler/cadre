@@ -25,7 +25,7 @@ def _path() -> Path:
 
 def load() -> dict[str, list[str]]:
     try:
-        data = json.loads(_path().read_text())
+        data = json.loads(_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = {}
     if not isinstance(data, dict):

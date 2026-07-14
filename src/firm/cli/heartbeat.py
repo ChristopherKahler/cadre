@@ -64,7 +64,7 @@ def _read_env_file(workspace: Path) -> dict[str, str]:
     if not env_path.exists():
         return out
     try:
-        for line in env_path.read_text().splitlines():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 k, _, v = line.partition("=")
@@ -269,7 +269,7 @@ def run_disable(firm_id: str | None = None, *, unit_dir: Path | None = None) -> 
 
 
 def _service_workspace(service_path: Path) -> str | None:
-    for line in service_path.read_text().splitlines():
+    for line in service_path.read_text(encoding="utf-8").splitlines():
         if line.startswith("WorkingDirectory="):
             return line.partition("=")[2]
     return None

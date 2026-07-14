@@ -133,7 +133,7 @@ def _resolve_pack(family: str, pack_name: str, workspace: Path):
     if len(matches) != 1:
         return None, sorted(c.name for c in candidates)
     chosen = next(c for c in candidates if c.name in matches)
-    return chosen.name, json.loads(chosen.read_text() if hasattr(chosen, "read_text") else chosen.read_bytes().decode())
+    return chosen.name, json.loads(chosen.read_text(encoding="utf-8") if hasattr(chosen, "read_text") else chosen.read_bytes().decode())
 
 
 def merge_pack_into_loadout(loadout: dict, pack: dict) -> int:

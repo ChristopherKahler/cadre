@@ -65,7 +65,7 @@ def test_describe_shape(workspace):
 
 def test_read_write_file_with_backup_and_record(conn, workspace):
     out = svc.write_file(conn, "testco", workspace, "claude-md", "# v2\n")
-    assert out["backup"] and out["backup"].startswith(".firm/backups/sysconfig/")
+    assert out["backup"] and out["backup"].replace("\\", "/").startswith(".firm/backups/sysconfig/")
     assert (workspace / "CLAUDE.md").read_text() == "# v2\n"
     assert (workspace / out["backup"]).read_text() == "# Firm instructions\n"
     assert len(_records(conn, "sysconfig.file_updated")) == 1

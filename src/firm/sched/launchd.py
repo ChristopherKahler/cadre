@@ -30,7 +30,8 @@ class LaunchdScheduler:
     # -- internals ----------------------------------------------------------
 
     def _domain(self) -> str:
-        return f"gui/{os.getuid()}"
+        uid = os.getuid() if hasattr(os, "getuid") else 0   # non-POSIX: tests only
+        return f"gui/{uid}"
 
     def _plist(self, stem: str) -> Path:
         return self.agent_dir / f"{stem}.plist"

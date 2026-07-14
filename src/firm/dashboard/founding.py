@@ -774,7 +774,7 @@ def readiness(root: Path, firm_id: str) -> dict[str, Any]:
     servers: list[str] = []
     if mcp.is_file():
         try:
-            servers = list((json.loads(mcp.read_text()).get("mcpServers") or {}))
+            servers = list((json.loads(mcp.read_text(encoding="utf-8")).get("mcpServers") or {}))
         except (OSError, json.JSONDecodeError):
             servers = []
 

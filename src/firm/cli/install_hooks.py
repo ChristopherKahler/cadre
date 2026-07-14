@@ -163,7 +163,7 @@ def main() -> int:
 
     workspace = Path(payload.get("cwd") or os.getcwd())
     try:
-        rules = (json.loads((workspace / ".firm" / "policy.json").read_text())
+        rules = (json.loads((workspace / ".firm" / "policy.json").read_text(encoding="utf-8"))
                  or {}).get(member_id) or []
     except Exception:
         return 0
@@ -227,7 +227,7 @@ if __name__ == "__main__":
 def _load_settings(settings_path: Path) -> dict:
     if not settings_path.exists():
         return {}
-    raw = settings_path.read_text()
+    raw = settings_path.read_text(encoding="utf-8")
     if not raw.strip():
         return {}
     return json.loads(raw)
@@ -279,7 +279,7 @@ def install_policy_hook(workspace: Path) -> tuple[int, list[str]]:
     hooks_dir = workspace / ".claude" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
     dest = hooks_dir / POLICY_HOOK_SCRIPT_NAME
-    dest.write_text(_POLICY_HOOK_TEMPLATE)
+    dest.write_text(_POLICY_HOOK_TEMPLATE, encoding="utf-8")
     dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     messages.append(f"Installed policy gate: {dest}")
 
@@ -309,7 +309,7 @@ def install_hooks(workspace: Path) -> tuple[int, list[str]]:
     if dest.exists():
         messages.append(f"Hook already installed: {dest}")
     else:
-        dest.write_text(_HOOK_TEMPLATE)
+        dest.write_text(_HOOK_TEMPLATE, encoding="utf-8")
         dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         messages.append(f"Installed hook: {dest}")
 

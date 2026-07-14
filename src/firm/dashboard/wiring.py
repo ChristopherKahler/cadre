@@ -663,7 +663,7 @@ def commit(root: Path, firm_id: str, plan: dict[str, Any],
         chosen = list(plan.get("mcp") or [])
         specs = discovery.raw_specs(chosen)
         try:
-            own = json.loads((workspace / ".mcp.json").read_text()).get("mcpServers") or {}
+            own = json.loads((workspace / ".mcp.json").read_text(encoding="utf-8")).get("mcpServers") or {}
         except (OSError, json.JSONDecodeError):
             own = {}
         for n in chosen:

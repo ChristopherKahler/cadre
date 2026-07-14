@@ -56,7 +56,7 @@ def ensure_boardroom_claude(root: str | Path) -> None:
     target = Path(root) / "CLAUDE.md"
     if target.exists():
         return
-    target.write_text(_BOARDROOM_CLAUDE.read_text())
+    target.write_text(_BOARDROOM_CLAUDE.read_text(encoding="utf-8"))
 
 
 def _write_script(cwd: str, prompt: str, claude: str, suffix: str = ".sh") -> str:

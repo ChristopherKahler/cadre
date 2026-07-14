@@ -115,11 +115,11 @@ WantedBy=timers.target
         rc_f, _ = self._ctl("is-failed", probe)
         out["failed"] = rc_f == 0
         if service.exists():
-            for line in service.read_text().splitlines():
+            for line in service.read_text(encoding="utf-8").splitlines():
                 if line.startswith("WorkingDirectory="):
                     out["workdir"] = line.partition("=")[2]
         if timer.exists():
-            for line in timer.read_text().splitlines():
+            for line in timer.read_text(encoding="utf-8").splitlines():
                 if line.startswith("OnUnitActiveSec="):
                     out["interval"] = line.split("=", 1)[1].strip()
             rc, show = self._ctl(

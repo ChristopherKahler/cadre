@@ -102,7 +102,7 @@ def diagnose(workspace: Path, firm_id: str, *,
         registered = False
         try:
             settings = json.loads(
-                (workspace / ".claude" / "settings.json").read_text())
+                (workspace / ".claude" / "settings.json").read_text(encoding="utf-8"))
             registered = any(
                 h.get("command") == POLICY_HOOK_COMMAND
                 for e in (settings.get("hooks") or {}).get("PreToolUse") or []
@@ -120,7 +120,7 @@ def diagnose(workspace: Path, firm_id: str, *,
         want = policy_svc.member_denies(conn, firm_id)
         pol_path = workspace / ".firm" / policy_svc.POLICY_FILE
         try:
-            have = json.loads(pol_path.read_text())
+            have = json.loads(pol_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             have = None
         fresh = (have == want) or (not want and have in (None, {}))
@@ -184,7 +184,7 @@ def diagnose(workspace: Path, firm_id: str, *,
         if log_path.exists():
             try:
                 done = int((workspace / ".firm" / policy_svc.DENIAL_CURSOR)
-                           .read_text().strip() or 0)
+                           .read_text(encoding="utf-8").strip() or 0)
             except (OSError, ValueError):
                 done = 0
             backlog = max(0, len(log_path.read_text(

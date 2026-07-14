@@ -91,7 +91,7 @@ def ingest_denials(conn: sqlite3.Connection, workspace: Path, firm_id: str) -> i
         return 0
     cursor_path = workspace / ".firm" / DENIAL_CURSOR
     try:
-        done = int(cursor_path.read_text().strip() or 0)
+        done = int(cursor_path.read_text(encoding="utf-8").strip() or 0)
     except (OSError, ValueError):
         done = 0
 

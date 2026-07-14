@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import stat
 
 import pytest
@@ -31,7 +32,7 @@ def test_master_key_created_0600(home):
     assert key
     path = vault_mod.master_key_path()
     assert path.exists()
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert os.name != "posix" or stat.S_IMODE(path.stat().st_mode) == 0o600
     # Stable across calls.
     assert vault_mod.ensure_master_key() == key
 
@@ -42,7 +43,7 @@ def test_vault_roundtrip_and_encryption_at_rest(home):
     raw = path.read_bytes()
     assert b"xoxb-secret" not in raw          # never plaintext on disk
     assert vault_mod.read_vault(path) == {"SLACK_TOKEN": "xoxb-secret-123456"}
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert os.name != "posix" or stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_missing_vault_is_empty(home):
