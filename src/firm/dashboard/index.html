@@ -70,6 +70,8 @@ button{font-family:var(--font-body)}
   transition:width 220ms cubic-bezier(.16,1,.3,1);overflow:hidden}
 .app.rail .sidebar{width:var(--sidebar-w-rail)}
 .sb-head{height:4.25rem;display:flex;align-items:center;justify-content:center;flex:none}
+.wordlink{text-decoration:none;display:flex;align-items:center;border-radius:8px}
+.wordlink:hover .wordmark{filter:brightness(1.15)}
 .wordmark{font:800 26px/1 var(--font-display);letter-spacing:-.01em;background:var(--brand-gradient);
   -webkit-background-clip:text;background-clip:text;color:transparent;white-space:nowrap}
 .wordmark.mini{display:none;font-size:22px}
@@ -220,6 +222,50 @@ button.stat:hover{border-color:var(--brand-border-hover)}
 .attn-item .meta{color:var(--brand-text-dim);font-size:12px;margin:4px 0 8px}
 .attn-item .body{color:var(--brand-text-secondary);font-size:13px;white-space:pre-wrap;margin-bottom:14px}
 .empty{color:var(--brand-text-dim);font-size:13px;padding:4px 0}
+
+/* ---- system page ---- */
+.sys-pad{padding:16px 20px}
+.sys-pad + .sys-pad{border-top:1px solid var(--brand-border)}
+.sys-form{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.sys-form input,.sys-form select{background:var(--brand-elevated);border:1px solid var(--brand-border);
+  border-radius:8px;padding:8px 12px;color:var(--brand-text);font:400 13px var(--font-body);min-height:36px}
+.sys-form input:focus,.sys-form select:focus{outline:none;border-color:var(--brand-primary)}
+.sys-form .grow1{flex:1;min-width:150px}
+.sys-form .grow2{flex:2;min-width:220px}
+.sys-chip{display:inline-flex;align-items:center;font:500 10px var(--font-mono);letter-spacing:.06em;
+  border:1px solid var(--brand-border);border-radius:9999px;padding:2px 9px;color:var(--brand-text-secondary)}
+.sys-chip.global{color:var(--brand-warning);border-color:rgba(var(--brand-accent-rgb),.4)}
+.sys-editor{margin-top:4px}
+.sys-editor textarea{width:100%;min-height:300px;background:var(--brand-elevated);border:1px solid var(--brand-border);
+  border-radius:10px;padding:12px 14px;color:var(--brand-text);font:400 12px/1.6 var(--font-mono);resize:vertical}
+.sys-editor textarea.short{min-height:150px}
+.sys-editor textarea:focus{outline:none;border-color:var(--brand-primary)}
+.sys-filerow{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--brand-border)}
+.sys-filerow:last-child{border-bottom:none}
+.sys-filerow .fmeta{flex:1;min-width:0}
+.sys-alert{padding:12px 20px;border-bottom:1px solid var(--brand-border);font-size:13px;color:var(--brand-warning);
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:rgba(var(--brand-accent-rgb),.05)}
+.sys-alert.bad{color:var(--brand-danger);background:rgba(var(--brand-danger-rgb),.06)}
+.sys-invhead{font:500 10.5px var(--font-mono);letter-spacing:.1em;text-transform:uppercase;
+  color:var(--brand-text-dim);margin-bottom:8px}
+.sys-invrow{padding:3px 0;font-size:13px;color:var(--brand-text-secondary)}
+.sys-cmdchip{display:inline-block;font:500 12px var(--font-mono);border:1px solid var(--brand-border);
+  border-radius:9999px;padding:2px 10px;margin:2px 4px 2px 0;color:var(--brand-text-secondary)}
+.sys-fs{margin-top:12px;border:1px solid var(--brand-border);border-radius:10px;background:var(--brand-elevated);overflow:hidden}
+.sys-fs-head{display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--brand-border);flex-wrap:wrap}
+.sys-fs-head .fs-path{flex:1;min-width:180px;font:500 11px var(--font-mono);color:var(--brand-text-secondary);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
+.sys-fs-head input{background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:8px;
+  padding:6px 10px;color:var(--brand-text);font:400 12px var(--font-body);min-width:200px}
+.sys-fs-head input:focus{outline:none;border-color:var(--brand-primary)}
+.sys-fs-list{max-height:280px;overflow-y:auto}
+.sys-fs-row{display:flex;gap:8px;align-items:center;padding:7px 14px;cursor:pointer;font-size:13px;
+  color:var(--brand-text-secondary);border-bottom:1px solid color-mix(in srgb, var(--brand-border) 45%, transparent)}
+.sys-fs-row:hover{background:var(--brand-surface);color:var(--brand-text)}
+.sys-fs-row .nm{font:500 12px var(--font-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sys-fs-row.file .nm{color:var(--brand-primary)}
+.sys-fs-row .sub{font:400 10.5px var(--font-mono);color:var(--brand-text-dim);margin-left:auto;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:45%}
 
 /* ---- list rows (portal "divide-y rounded-xl border" pattern) ---- */
 .listcard{background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:12px;box-shadow:var(--shadow-card);overflow:hidden}
@@ -533,6 +579,11 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .toast.err{border-color:rgba(var(--brand-danger-rgb),.45)}
 .muted{color:var(--brand-text-dim);font-size:12px}
 .confignote{color:var(--brand-warning);font-size:12.5px;margin-bottom:20px}
+.confignote button{
+  background:none;border:1px solid var(--brand-border);border-radius:99px;cursor:pointer;
+  color:var(--brand-text-dim);font:inherit;font-size:11px;padding:1px 9px;margin-left:8px;
+}
+.confignote button:hover{color:var(--brand-text)}
 
 /* ---- mobile ---- */
 @media(max-width:768px){
@@ -548,8 +599,10 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 <div class="app" id="app">
   <aside class="sidebar">
     <div class="sb-head">
-      <span class="wordmark">cadre.</span>
-      <span class="wordmark mini">c.</span>
+      <a class="wordlink" href="/next/" title="The boardroom — every firm">
+        <span class="wordmark">cadre.</span>
+        <span class="wordmark mini">c.</span>
+      </a>
     </div>
     <div class="sb-switch" id="firmSwitch" hidden>
       <button id="fsBtn" aria-haspopup="menu" aria-expanded="false">
@@ -606,6 +659,10 @@ tr.flash td{animation:rowflash 2.2s ease-out}
         <button class="navitem" data-view="settings" title="Settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
           <span>Settings</span>
+        </button>
+        <button class="navitem" data-view="system" title="System — workspace config, variables, MCP servers, tooling">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m14.7 6.3 1 1a2.1 2.1 0 0 1 0 3l-8.4 8.4a2.1 2.1 0 0 1-3 0l-1-1a2.1 2.1 0 0 1 0-3l8.4-8.4a2.1 2.1 0 0 1 3 0Z"/><path d="m17.6 9.2 2.7-2.7a2.1 2.1 0 0 0 0-3l-.8-.8a2.1 2.1 0 0 0-3 0l-2.7 2.7"/><path d="m5 21 4-4"/></svg>
+          <span>System</span>
         </button>
       </div>
       <div class="navgroup" id="customNav" hidden>
@@ -739,8 +796,46 @@ tr.flash td{animation:rowflash 2.2s ease-out}
       <!-- ============ SETTINGS ============ -->
       <div class="page" id="page-settings">
         <div class="pagehead"><h1>Settings</h1><p>Runtime levers per contract. Model changes take effect on the next spawn — no restart, and every change lands in Records.</p></div>
+        <div class="seclabel">Firm pulse — <span class="mono" style="font-size:11px">systemd timer · manual pulsing always works regardless</span></div>
+        <div class="listcard" id="pulseCadence" style="padding:12px 14px">Loading…</div>
         <div class="seclabel">Member models — <span class="mono" style="font-size:11px">pulse_config.model → claude --model</span>; blank inherits your account default</div>
         <div class="listcard"><div class="tablewrap"><table id="settingsTable"></table></div></div>
+        <div class="seclabel">Training — <span class="mono" style="font-size:11px">re-decides loadouts, enforced NEVERs, and the charter under the current framework</span></div>
+        <div class="listcard" id="retrainCard" style="padding:12px 14px">
+          <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+            <div style="flex:1;min-width:260px;line-height:1.55">
+              <b>Re-Train this firm.</b> The wiring agent re-surveys the machine — live CLIs, servers,
+              skills — and re-decides who carries what. You review the plan before anything commits.
+              Keeps goals, models, units, Records, and cadence; regenerates the charter; re-decides
+              loadouts and deny rules. Run <span class="mono" style="font-size:11px">firm doctor</span>
+              first if you want the drift report card.
+            </div>
+            <a class="btn primary sm" id="retrainBtn" href="#" style="text-decoration:none;flex:none">Open Train →</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ SYSTEM ============ -->
+      <div class="page" id="page-system">
+        <div class="pagehead"><h1>System</h1><p id="sysDesc">Workspace configuration for this firm — variables, MCP servers, config files, installed tooling.</p></div>
+        <div class="stack">
+          <div>
+            <div class="seclabel">Variables — <span class="mono" style="font-size:11px">encrypted vault · firm overrides global · injected into member runs</span></div>
+            <div class="listcard" id="sysVars"><div class="sys-pad empty">Loading…</div></div>
+          </div>
+          <div>
+            <div class="seclabel">MCP servers — <span class="mono" style="font-size:11px">.mcp.json</span></div>
+            <div class="listcard" id="sysMcp"><div class="sys-pad empty">Loading…</div></div>
+          </div>
+          <div>
+            <div class="seclabel">Config files</div>
+            <div class="listcard" id="sysFiles"><div class="sys-pad empty">Loading…</div></div>
+          </div>
+          <div>
+            <div class="seclabel">Loadout — skills, commands, CLI tools</div>
+            <div class="listcard" id="sysInventory"><div class="sys-pad empty">Loading…</div></div>
+          </div>
+        </div>
       </div>
 
     </div>
@@ -885,7 +980,26 @@ document.getElementById('sbTrigger').addEventListener('click', () => {
 /* Hub tenancy: served under /f/<firm> the server stamps data-base on <html>;
    standalone it's absent and BASE is ''. Every API URL goes through BASE. */
 const BASE = document.documentElement.dataset.base || '';
-const VIEWS = {dashboard:'Dashboard', roster:'Roster', ops:'Operations', goals:'Goals & spend', docs:'Deliverables', runs:'Runs', records:'Records', genspend:'Gen Spend', settings:'Settings'};
+const VIEWS = {dashboard:'Dashboard', roster:'Roster', ops:'Operations', goals:'Goals & spend', docs:'Deliverables', runs:'Runs', records:'Records', genspend:'Gen Spend', settings:'Settings', system:'System'};
+
+/* Re-Train lives in the hub's founding flow (/next). Under the hub, BASE is
+   /f/<firm> — lift the id and point the Settings button at the Equip step
+   (refresh-safe route; Equip → Train → plan review → commit). Standalone
+   `firm dashboard` has no /next, so the card says how to get there instead. */
+(() => {
+  const btn = document.getElementById('retrainBtn');
+  if(!btn) return;
+  const m = BASE.match(/^\/f\/([^/]+)/);
+  if(m){
+    btn.href = '/next#/found/equip/' + m[1];
+  } else {
+    btn.remove();
+    const card = document.getElementById('retrainCard');
+    if(card) card.insertAdjacentHTML('beforeend',
+      '<div class="mono" style="font-size:11px;margin-top:8px;opacity:.7">' +
+      'Re-Train runs from the hub — open this firm via `cadre hub`, then Settings → Open Train.</div>');
+  }
+})();
 let currentView = 'dashboard';
 function show(view){
   const custom = CUSTOM_VIEWS[view];
@@ -893,6 +1007,7 @@ function show(view){
   if(custom && custom.mode === 'fullscreen'){ window.location.href = BASE + '/view/' + encodeURIComponent(view); return; }
   if(!VIEWS[view] && !custom) view = 'dashboard';
   currentView = view;
+  if(view === 'settings') loadPulseCadence();
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + view));
   document.querySelectorAll('.navitem[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   document.getElementById('crumbHere').textContent = VIEWS[view] || (custom && custom.title) || view;
@@ -901,6 +1016,7 @@ function show(view){
   if(location.hash !== '#/' + view) history.replaceState(null, '', '#/' + view);
   if(view === 'roster' && !viewInit) requestAnimationFrame(fitCanvas);
   if(view === 'genspend') fetchGenBalance();
+  if(view === 'system') loadSysconfig();
   if(custom && !custom.loaded) loadCustomFragment(view);
   loadBlocksFor(view);
 }
@@ -1326,8 +1442,20 @@ function render(){
   document.title = `${firm.name || firm.id} — Boardroom`;
   document.getElementById('dashTitle').textContent = firm.name ? `${firm.name} — Boardroom` : 'Boardroom';
   document.getElementById('dashDesc').textContent = firm.north_star || '';
-  document.getElementById('notifyState').textContent = S.notify_configured
-    ? '' : 'Board notifications are not configured — set firm.notify_config so escalations reach you directly.';
+  // Dismissable per firm — the Board heard it; don't nag on every visit.
+  const notifyEl = document.getElementById('notifyState');
+  const notifyKey = 'cadre.notify-dismissed.' + (firm.id || '');
+  if(S.notify_configured || localStorage.getItem(notifyKey) === '1'){
+    notifyEl.innerHTML = '';
+  } else if(!notifyEl.dataset.shown){
+    notifyEl.dataset.shown = '1';
+    notifyEl.innerHTML = 'Board notifications are not configured — set firm.notify_config ' +
+      'so escalations reach you directly. <button type="button" id="notifyDismiss">Dismiss</button>';
+    document.getElementById('notifyDismiss').onclick = () => {
+      localStorage.setItem(notifyKey, '1');
+      notifyEl.innerHTML = '';
+    };
+  }
 
   withScrollKept([], () => {
     renderStats(S); renderGates(S); renderEscalations(S); renderRecent(S);
@@ -2233,6 +2361,44 @@ const MODEL_OPTS = [
   ['sonnet', 'Sonnet'],
   ['haiku', 'Haiku'],
 ];
+/* Firm pulse cadence — hub-level truth (the systemd timer), not session
+   state. Loaded when Settings opens and after every change; never on the
+   poll cadence, so a mid-click row is never clobbered. */
+const PULSE_OPTS = ['10m', '30m', '1h', '4h', '1d'];
+async function loadPulseCadence(){
+  const el = document.getElementById('pulseCadence');
+  if(!el) return;
+  const fid = (BASE || '').split('/').pop();
+  if(!fid){ el.textContent = 'Pulse control needs the hub — open this firm via /f/<firm-id>/.'; return; }
+  let ps = null;
+  try{ ps = await (await fetch('/api/next/pulse-state/' + encodeURIComponent(fid))).json(); }catch(e){}
+  if(!ps || !ps.ok){ el.textContent = 'Pulse state unavailable — is the hub serving this dashboard?'; return; }
+  const cur = ps.enabled ? (ps.interval || '') : '';
+  el.innerHTML = ['', ...PULSE_OPTS].map(iv => `
+    <button data-iv="${iv}" style="margin:2px 8px 2px 0;padding:6px 14px;border-radius:999px;cursor:pointer;
+      background:none;border:1px solid ${iv === cur ? '#22c55e' : 'rgba(128,128,128,.35)'};
+      color:${iv === cur ? '#22c55e' : 'inherit'}">${iv || 'Manual'}</button>`).join('')
+    + `<span class="mono" style="font-size:11px;opacity:.6;margin-left:6px">${cur
+        ? 'wakes every ' + esc(cur)
+        : 'manual only — pulse from the dashboard or CLI when you want it to work'}</span>`;
+  for(const b of el.querySelectorAll('[data-iv]')){
+    b.onclick = async () => {
+      b.disabled = true; b.textContent = '…';
+      let r;
+      try{
+        r = await (await fetch('/api/next/pulse', {method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({firm_id: fid, interval: b.dataset.iv || '30m',
+                                enable: !!b.dataset.iv})})).json();
+      }catch(e){ r = {ok: false}; }
+      if(r.ok) toast(b.dataset.iv ? 'Pulse set — wakes every ' + b.dataset.iv
+                                  : 'Pulse timer removed — manual only');
+      else toast((r && r.error) || 'Could not change the pulse', true);
+      loadPulseCadence();
+    };
+  }
+}
+
 function renderSettings(S){
   const rows = S.contract_settings || [];
   const el = document.getElementById('settingsTable');
@@ -2265,6 +2431,282 @@ async function setContractModel(contractId, sel){
     toast(out.error || 'Model update failed', true);
   }
   sel.disabled = false;
+}
+
+/* ---- system config (platform-aware workspace editor) ---- */
+let SYS = {desc:null, revealed:{}};
+async function sysGet(p){
+  try{ const r = await fetch(BASE + '/api/sysconfig' + p); return await r.json(); }
+  catch(e){ return {ok:false, error:String(e)}; }
+}
+async function sysPost(p, body){
+  try{
+    const r = await fetch(BASE + '/api/sysconfig' + p, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body || {}),
+    });
+    return await r.json();
+  }catch(e){ return {ok:false, error:String(e)}; }
+}
+async function loadSysconfig(){
+  const [desc, vars, mcp, inv] = await Promise.all([
+    sysGet(''), sysGet('/vars'), sysGet('/mcp'), sysGet('/inventory')]);
+  SYS.desc = desc; SYS.revealed = {};
+  const d = document.getElementById('sysDesc');
+  // A server that predates this page answers every /api/sysconfig call with
+  // a generic 404 — say so loudly instead of rendering a page of ghosts.
+  if(!desc || typeof desc.platform === 'undefined'){
+    d.textContent = 'This page needs a dashboard server restart.';
+    const banner = `<div class="sys-alert bad">The running server predates the System page
+        (API said: ${esc((desc && desc.error) || 'no response')}). Restart it —
+        <span class="mono">cadre hub</span> / <span class="mono">cadre dashboard</span> — and reload.</div>`;
+    for(const id of ['sysVars','sysMcp','sysFiles','sysInventory'])
+      document.getElementById(id).innerHTML = id === 'sysVars' ? banner : '<div class="sys-pad empty">unavailable — server restart needed</div>';
+    return;
+  }
+  d.textContent = (desc.platform_label || 'Unknown platform')
+    + ' workspace · secrets via ' + (desc.secrets_provider === 'base' ? 'BASE vault' : 'cadre vault')
+    + (desc.crypto_available === false ? ' — ⚠ cryptography package missing, vault disabled' : '');
+  renderSysVars(vars, desc); renderSysMcp(mcp); renderSysFiles(desc); renderSysInventory(inv, desc);
+}
+const TIER_CHIP = t => `<span class="sys-chip${t === 'global' ? ' global' : ''}">${t === 'global' ? 'GLOBAL' : 'FIRM'}</span>`;
+function renderSysVars(v, desc){
+  const el = document.getElementById('sysVars');
+  const rows = (v.vars || []).map(x => `<tr data-key="${esc(x.key)}" data-tier="${esc(x.tier)}">
+      <td>${esc(x.key)}</td>
+      <td class="mono sys-val">${esc(x.masked)}</td>
+      <td>${TIER_CHIP(x.tier)}${x.overridden ? ' <span class="muted" style="font-size:11px">overridden by firm</span>' : ''}</td>
+      <td style="text-align:right;white-space:nowrap">
+        <button class="btn sm" onclick="sysRevealVar(this,'${esc(x.key)}')" title="Show/hide value">👁</button>
+        <button class="btn sm danger" onclick="sysDeleteVar('${esc(x.key)}','${esc(x.tier)}')" title="Remove from the ${esc(x.tier)} tier">✕</button>
+      </td></tr>`).join('');
+  const envKeys = (desc && desc.env_file_keys) || [];
+  const importBanner = envKeys.length ? `<div class="sys-alert">
+      Plaintext <span class="mono">.env</span> holds ${envKeys.length} key(s) — move them into the encrypted vault.
+      <span class="btn-row">
+        <button class="btn sm" onclick="sysImportEnv(false)">Import</button>
+        <button class="btn sm danger" onclick="sysImportEnv(true)" title="Import, verify, then delete .env">Import + scrub .env</button>
+      </span>
+    </div>` : '';
+  el.innerHTML = importBanner +
+    (rows ? `<div class="tablewrap"><table><thead><tr><th>Key</th><th>Value</th><th>Tier</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+          : '<div class="sys-pad empty">No variables yet — add the first one below. Values are encrypted at rest and injected into member runs.</div>') +
+    `<div class="sys-pad sys-form">
+      <input id="sysVarKey" class="grow1" placeholder="KEY" autocomplete="off" spellcheck="false">
+      <input id="sysVarVal" class="grow2" type="password" placeholder="value — Enter to save" autocomplete="new-password">
+      <select id="sysVarTier"><option value="firm">Firm</option><option value="global">Global (all firms)</option></select>
+      <button class="btn primary sm" onclick="sysAddVar()">Add</button>
+    </div>`;
+  const val = document.getElementById('sysVarVal');
+  val.addEventListener('keydown', e => { if(e.key === 'Enter') sysAddVar(); });
+}
+async function sysAddVar(){
+  const key = document.getElementById('sysVarKey').value.trim();
+  const value = document.getElementById('sysVarVal').value;
+  const tier = document.getElementById('sysVarTier').value;
+  if(!key || !value){ toast('Key and value required', true); return; }
+  const out = await sysPost('/vars', {key, value, tier});
+  if(out.ok){ toast(`${key} stored (${tier}, encrypted)`); loadSysconfig(); }
+  else toast(out.error || 'Store failed', true);
+}
+async function sysDeleteVar(key, tier){
+  if(!confirm(`Remove ${key} from the ${tier} tier?`)) return;
+  const out = await sysPost('/vars/delete', {key, tier});
+  if(out.ok){ toast(`${key} removed`); loadSysconfig(); }
+  else toast(out.error || 'Remove failed', true);
+}
+async function sysRevealVar(btn, key){
+  const cell = btn.closest('tr').querySelector('.sys-val');
+  if(SYS.revealed[key]){ delete SYS.revealed[key]; loadSysconfig(); return; }
+  const out = await sysPost('/vars/reveal', {key});
+  if(out.ok){ SYS.revealed[key] = true; cell.textContent = out.result.value; }
+  else toast(out.error || 'Reveal failed', true);
+}
+async function sysImportEnv(scrub){
+  if(scrub && !confirm('Import every .env key into the encrypted vault, verify, then DELETE .env?')) return;
+  const out = await sysPost('/vars/import', {scrub});
+  if(out.ok){ toast(`Imported ${out.result.count} key(s)${out.result.scrubbed ? ' — .env removed' : ''}`); loadSysconfig(); }
+  else toast(out.error || 'Import failed', true);
+}
+function renderSysMcp(m){
+  const el = document.getElementById('sysMcp');
+  const servers = (m && m.servers) || [];
+  const rows = servers.map(s => `<tr>
+      <td>${esc(s.name)}</td>
+      <td>${esc(s.transport || 'stdio')}</td>
+      <td class="mono" style="font-size:11px;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc((s.command || s.url || '') + ' ' + (s.args || []).join(' '))}">${esc(s.command || s.url || '—')} ${esc((s.args || []).join(' '))}</td>
+      <td class="mono" style="font-size:11px;opacity:.7">${(s.env_keys || []).map(esc).join(', ') || '—'}</td>
+      <td style="text-align:right;white-space:nowrap">
+        <button class="btn sm" onclick="sysEditMcp('${esc(s.name)}')">Edit</button>
+        <button class="btn sm danger" onclick="sysRemoveMcp('${esc(s.name)}')">✕</button>
+      </td></tr>`).join('');
+  el.innerHTML =
+    (rows ? `<div class="tablewrap"><table><thead><tr><th>Server</th><th>Transport</th><th>Command</th><th>Env keys</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+          : (m && m.error) ? `<div class="sys-alert bad">${esc(m.error)}</div>`
+          : '<div class="sys-pad empty">No MCP servers declared.</div>') +
+    `<div class="sys-pad" id="sysMcpForm">
+      <div class="btn-row"><button class="btn sm" onclick="sysEditMcp('')">+ Add server</button></div>
+      <div id="sysMcpEditor" hidden style="margin-top:12px">
+        <div class="sys-form" style="margin-bottom:10px"><input id="sysMcpName" class="grow1" placeholder="server name" autocomplete="off" spellcheck="false"></div>
+        <div class="sys-editor"><textarea id="sysMcpSpec" class="short" spellcheck="false"></textarea></div>
+        <div class="muted" style="font-size:11px;margin:8px 0">Server spec JSON — <span class="mono">{"command": "...", "args": [...], "env": {...}}</span> or <span class="mono">{"url": "..."}</span>. Tip: wrap stdio servers as <span class="mono">cadre env exec -- &lt;cmd&gt;</span> so secrets stay in the vault, not in this file.</div>
+        <div class="btn-row">
+          <button class="btn primary sm" onclick="sysSaveMcp()">Save server</button>
+          <button class="btn sm" onclick="document.getElementById('sysMcpEditor').hidden = true">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+  SYS.mcpServers = servers;
+}
+function sysEditMcp(name){
+  const ed = document.getElementById('sysMcpEditor');
+  ed.hidden = false;
+  document.getElementById('sysMcpName').value = name;
+  const existing = (SYS.mcpServers || []).find(s => s.name === name);
+  document.getElementById('sysMcpSpec').value = existing
+    ? JSON.stringify({command: existing.command, args: existing.args, url: existing.url, type: existing.transport}, (k, v) => v == null ? undefined : v, 2)
+    : '{\n  "command": "cadre",\n  "args": ["env", "exec", "--", "your-server-cmd"]\n}';
+  if(existing && existing.env_keys && existing.env_keys.length)
+    toast('Env values are not shown here — re-enter env in the spec, or better: move them to the vault', false);
+  document.getElementById('sysMcpName').focus();
+}
+async function sysSaveMcp(){
+  const name = document.getElementById('sysMcpName').value.trim();
+  let spec;
+  try{ spec = JSON.parse(document.getElementById('sysMcpSpec').value); }
+  catch(e){ toast('Spec is not valid JSON: ' + e.message, true); return; }
+  const out = await sysPost('/mcp', {op:'set', name, spec});
+  if(out.ok){ toast(`MCP server ${name} saved (backup written)`); loadSysconfig(); }
+  else toast(out.error || 'Save failed', true);
+}
+async function sysRemoveMcp(name){
+  if(!confirm(`Remove MCP server ${name} from .mcp.json?`)) return;
+  const out = await sysPost('/mcp', {op:'remove', name});
+  if(out.ok){ toast(`${name} removed (backup written)`); loadSysconfig(); }
+  else toast(out.error || 'Remove failed', true);
+}
+function renderSysFiles(desc){
+  const el = document.getElementById('sysFiles');
+  const surfaces = (desc && desc.surfaces) || [];
+  if(!surfaces.length){ el.innerHTML = '<div class="sys-pad empty">No platform detected — no editable config surfaces.</div>'; return; }
+  el.innerHTML = surfaces.map(s => `<div class="sys-filerow">
+      <div class="fmeta"><b>${esc(s.label)}</b> <span class="mono muted" style="font-size:11px">${esc(s.path)}</span>
+        <div class="muted" style="font-size:12px">${esc(s.description)}${s.exists ? '' : ' — <i>not created yet</i>'}</div></div>
+      <button class="btn sm" onclick="sysEditFile('${esc(s.key)}')">${s.exists ? 'Edit' : 'Create'}</button>
+    </div>`).join('') +
+    `<div class="sys-pad" id="sysFileEditor" hidden>
+      <div class="muted" style="margin-bottom:8px"><span class="mono" id="sysFilePath"></span> — saved with a timestamped backup + a Records entry</div>
+      <div class="sys-editor"><textarea id="sysFileText" spellcheck="false"></textarea></div>
+      <div class="btn-row" style="margin-top:10px">
+        <button class="btn primary sm" onclick="sysSaveFile()">Save</button>
+        <button class="btn sm" onclick="document.getElementById('sysFileEditor').hidden = true">Cancel</button>
+      </div>
+    </div>`;
+}
+async function sysEditFile(key){
+  const out = await sysGet('/file/' + encodeURIComponent(key));
+  if(out.error){ toast(out.error, true); return; }
+  SYS.fileKey = key; SYS.fileKind = out.kind;
+  document.getElementById('sysFilePath').textContent = out.path;
+  document.getElementById('sysFileText').value = out.content || (out.kind === 'json' ? '{}\n' : '');
+  document.getElementById('sysFileEditor').hidden = false;
+  document.getElementById('sysFileText').focus();
+}
+async function sysSaveFile(){
+  const content = document.getElementById('sysFileText').value;
+  if(SYS.fileKind === 'json'){
+    try{ JSON.parse(content || '{}'); }
+    catch(e){ toast('Not valid JSON: ' + e.message, true); return; }
+  }
+  const out = await sysPost('/file/' + encodeURIComponent(SYS.fileKey), {content});
+  if(out.ok){ toast(`Saved${out.result.backup ? ' — backup at ' + out.result.backup : ''}`); loadSysconfig(); }
+  else toast(out.error || 'Save failed', true);
+}
+function renderSysInventory(inv, desc){
+  const el = document.getElementById('sysInventory');
+  const skills = (inv && inv.skills) || [];
+  const commands = (inv && inv.commands) || [];
+  const tools = (inv && inv.tools) || [];
+  const extOk = desc && desc.base && desc.base.ext_capable;
+  el.innerHTML =
+    `<div class="sys-pad"><div class="cardgrid cols2">
+      <div><div class="sys-invhead">Skills (${skills.length})</div>` +
+        (skills.map(s => `<div class="sys-invrow"><b class="mono" style="font-size:12px">${esc(s.name)}</b>${s.description ? ` <span class="muted" style="font-size:12px">— ${esc(s.description)}</span>` : ''}</div>`).join('') || '<div class="empty">none installed</div>') +
+      `</div>
+      <div><div class="sys-invhead">Commands (${commands.length})</div>` +
+        (commands.map(c => `<span class="sys-cmdchip">/${esc(c)}</span>`).join('') || '<div class="empty">none installed</div>') +
+      `</div>
+    </div></div>
+    <div class="sys-pad"><div class="sys-invhead">CLI tools ${inv.tools_source ? `· via ${esc(inv.tools_source)}` : ''}</div>` +
+      (tools.map(t => `<div class="sys-invrow"><b class="mono" style="font-size:12px">${esc(t.name)}</b> <span class="muted mono" style="font-size:11px">${esc(t.version || '')}</span>${t.description ? ` <span class="muted" style="font-size:12px">— ${esc(t.description)}</span>` : ''}</div>`).join('')
+       || `<div class="empty">${extOk ? 'no tools installed yet' : 'BASE CLI not detected — CLI tool management unavailable (skills and commands above still work)'}</div>`) +
+      (extOk ? `<div class="sys-form" style="margin-top:12px">
+        <input id="sysToolSrc" class="grow2" placeholder="extension manifest (.toml) — Browse to locate it" autocomplete="off" spellcheck="false">
+        <button class="btn sm" onclick="sysFsToggle()">Browse…</button>
+        <button class="btn primary sm" onclick="sysInstallTool()">Install via base ext</button>
+      </div>
+      <div class="sys-fs" id="sysFs" hidden>
+        <div class="sys-fs-head">
+          <span class="fs-path mono" id="sysFsPath"></span>
+          <input id="sysFsSearch" placeholder="search .toml under this folder…" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="sys-fs-list" id="sysFsList"></div>
+      </div>` : '') +
+    `</div>`;
+}
+async function sysInstallTool(){
+  const source = document.getElementById('sysToolSrc').value.trim();
+  if(!source){ toast('Browse to an extension manifest (.toml) first', true); return; }
+  toast('Installing — this can take a minute…');
+  const out = await sysPost('/tools/install', {source});
+  if(out.ok){ toast(`Installed via base ext ${out.result.verb}`); loadSysconfig(); }
+  else toast(out.error || 'Install failed', true);
+}
+
+/* ---- manifest file browser (jailed to $HOME, .toml only) ---- */
+let sysFsCur = null, sysFsTimer = null;
+function sysFsToggle(){
+  const box = document.getElementById('sysFs');
+  box.hidden = !box.hidden;
+  if(!box.hidden){
+    const search = document.getElementById('sysFsSearch');
+    search.value = '';
+    search.oninput = () => {
+      clearTimeout(sysFsTimer);
+      sysFsTimer = setTimeout(() => sysFsLoad(sysFsCur, search.value.trim()), 300);
+    };
+    sysFsLoad(null, '');
+  }
+}
+async function sysFsLoad(path, q){
+  const list = document.getElementById('sysFsList');
+  list.innerHTML = '<div class="sys-fs-row"><span class="nm muted">loading…</span></div>';
+  const params = new URLSearchParams();
+  if(path) params.set('path', path);
+  if(q) params.set('q', q);
+  const qsStr = params.toString();
+  const out = await sysGet('/fs' + (qsStr ? '?' + qsStr : ''));
+  if(out.error){ list.innerHTML = `<div class="sys-fs-row"><span class="nm">${esc(out.error)}</span></div>`; return; }
+  sysFsCur = out.path;
+  document.getElementById('sysFsPath').textContent = out.path;
+  const rows = [];
+  if(!q && out.parent)
+    rows.push(`<div class="sys-fs-row" onclick="sysFsLoad('${esc(out.parent)}','')"><span class="nm">↑ ..</span></div>`);
+  if(!q) for(const d of out.dirs)
+    rows.push(`<div class="sys-fs-row" onclick="sysFsLoad('${esc(out.path)}/${esc(d)}','')"><span class="nm">📁 ${esc(d)}</span></div>`);
+  for(const f of out.files){
+    const sub = q ? f.path.replace(out.path + '/', '') : '';
+    rows.push(`<div class="sys-fs-row file" onclick="sysFsPick('${esc(f.path)}')"><span class="nm">📄 ${esc(f.name)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}</div>`);
+  }
+  if(out.truncated)
+    rows.push('<div class="sys-fs-row"><span class="nm muted">…more matches — narrow the search</span></div>');
+  if(!rows.length)
+    rows.push(`<div class="sys-fs-row"><span class="nm muted">${q ? 'no .toml matches under this folder' : 'no subfolders or .toml files here'}</span></div>`);
+  list.innerHTML = rows.join('');
+}
+function sysFsPick(path){
+  document.getElementById('sysToolSrc').value = path;
+  document.getElementById('sysFs').hidden = true;
+  toast('Manifest selected — hit Install');
 }
 
 function renderRecords(S){
@@ -2414,7 +2856,7 @@ async function initFirmSwitch(){
     const cur = firms.find(f => BASE === '/f/' + f.id);
     document.getElementById('fsName').textContent = cur ? cur.name : BASE.slice(3);
     document.getElementById('fsMenu').innerHTML =
-      '<a href="/">⌂ All boardrooms</a><div class="fs-sep"></div>' +
+      '<a href="/next/">⌂ All boardrooms</a><div class="fs-sep"></div>' +
       firms.map(f => `<a href="/f/${esc(f.id)}/" class="${BASE === '/f/' + f.id ? 'cur' : ''}" title="${esc(f.name)}"><span class="fs-nm">${esc(f.name)}</span>${f.running ? `<span class="fs-run${f.stale_runs ? ' stale' : ''}" title="${f.running} running${f.stale_runs ? `, ${f.stale_runs} stale` : ''}"></span>` : ''}${f.needs_you ? `<span class="fs-badge">${f.needs_you}</span>` : ''}</a>`).join('');
     document.getElementById('firmSwitch').hidden = false;
     const btn = document.getElementById('fsBtn'), menu = document.getElementById('fsMenu');
