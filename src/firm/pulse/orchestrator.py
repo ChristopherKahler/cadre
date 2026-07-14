@@ -532,6 +532,14 @@ def pulse(
     Returns:
         ActivationSummary with ran/skipped/errors lists.
     """
+    # Scope sanity FIRST: a wrong firm id used to read an empty firm and
+    # report {"ok": true, "ran": 0} — indistinguishable from a healthy idle
+    # firm (field failure 2026-07-12). Refuse to pretend.
+    if repo.get(conn, "firm", firm_id) is None:
+        raise ValueError(
+            f"firm {firm_id!r} does not exist in this database — "
+            "check the firm id (or seed the firm)")
+
     summary = ActivationSummary(dry_run=dry_run)
 
     # Gate 0: heal leaked state — close zombie 'running' rows before anything
@@ -553,6 +561,10 @@ def pulse(
 
     # Gate 2: per-member filters
     eligible, skipped = filter_members(conn, firm_id, now=now)
+    if not eligible and not skipped:
+        raise ValueError(
+            f"firm {firm_id!r} resolved zero active members — nothing can "
+            "ever run; check the roster (or the firm id)")
     if only_member_id:
         untargeted = [m for m in eligible if m["id"] != only_member_id]
         eligible = [m for m in eligible if m["id"] == only_member_id]
@@ -584,6 +596,22 @@ def pulse(
 
     if not sorted_members:
         return summary
+
+    # Gate 4: credential preflight — prove the firm can see before it spawns.
+    # A Member whose tool 401s mid-run ships output that looks complete and
+    # covers nothing; blocked-loudly beats green-and-empty. Per-surface: only
+    # the Members carrying a dead tool are held back. Dry runs skip it — the
+    # probes are real network calls and dry_run must stay offline.
+    if not dry_run:
+        from firm.pulse import preflight
+        dead = preflight.dead_tools(conn, firm_id)
+        if dead:
+            preflight.raise_escalations(conn, firm_id, dead)
+            sorted_members, blind = preflight.block_blind_members(
+                conn, firm_id, sorted_members, dead)
+            summary.skipped.extend(blind)
+            if not sorted_members:
+                return summary
 
     # Activation loop (sequential, max 1 concurrent in v1)
     for member in sorted_members:
