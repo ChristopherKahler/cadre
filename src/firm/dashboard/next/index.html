@@ -577,6 +577,9 @@ textarea.paragraph:focus{outline:none;border-color:var(--green);box-shadow:var(-
 .modelopt + .modelopt{border-top:1px solid var(--line)}
 .modelopt b{display:block;color:var(--ink);font-weight:600;font-size:13px}
 .modelopt.on b{color:var(--green)}
+.modelopt .burn{font-family:var(--mono);font-size:10px;color:var(--ink-3);
+  letter-spacing:.1em;margin-left:6px}
+.modelopt.on .burn{color:var(--green)}
 .modelopt .mhint{display:block;font-size:12px;line-height:1.5;margin-top:2px}
 
 /* the number — one goal, Board-owned, hire-blocking. Gold because it is the
@@ -2055,9 +2058,9 @@ window.toggleCut = (i) => {
    account. Without a pick, every Member inherits the session default — Opus,
    at Opus prices (the Cooper run: 30 minutes, $13.99). */
 const MODELS = [
-  {id: 'opus',   name: 'Opus',   hint: 'Deepest judgment, priciest seat. For roles that are pure strategy.'},
-  {id: 'sonnet', name: 'Sonnet', hint: 'The working default — strong reasoning at a fraction of the cost.'},
-  {id: 'haiku',  name: 'Haiku',  hint: 'Fast and cheap. Right for mechanical, high-volume work.'},
+  {id: 'opus',   name: 'Opus',   burn: '▮▮▮', hint: 'Maximum budget. Deepest judgment, highest burn — for seats whose output ships under the Board\'s name.'},
+  {id: 'sonnet', name: 'Sonnet', burn: '▮▮▯', hint: 'Standard budget. Strong reasoning at a fraction of the burn — the working default.'},
+  {id: 'haiku',  name: 'Haiku',  burn: '▮▯▯', hint: 'Lean budget. Fast and cheap — right for mechanical, high-volume work.'},
 ];
 const modelOf = (m) => MODELS.some(t => t.id === m.model) ? m.model : 'sonnet';
 
@@ -2068,14 +2071,14 @@ function modelPick(m, i){
   <span class="modelwrap">
     <button class="modelpill${open ? ' open' : ''}" onclick="toggleModelMenu(event, ${i})"
             aria-haspopup="menu" aria-expanded="${open}"
-            title="The model this Member runs on — every run bills at this tier">
+            title="This Member's model budget — every run bills at this tier">
       ${esc(MODELS.find(t => t.id === cur).name)} <span class="caret">▾</span>
     </button>
     <div class="modelmenu" role="menu" ${open ? '' : 'hidden'}>
       ${MODELS.map(t => `
         <button class="modelopt${t.id === cur ? ' on' : ''}" role="menuitemradio"
                 aria-checked="${t.id === cur}" onclick="setModel(event, ${i}, '${t.id}')">
-          <b>${t.name}</b><span class="mhint">${t.hint}</span>
+          <b>${t.name} <span class="burn">${t.burn}</span></b><span class="mhint">${t.hint}</span>
         </button>`).join('')}
     </div>
   </span>`;
