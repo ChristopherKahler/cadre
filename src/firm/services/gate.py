@@ -10,6 +10,7 @@ Records events: gate.requested, gate.approved, gate.rejected, gate.dismissed
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any
@@ -196,6 +197,29 @@ def _resolve_gate(
 
     updated = repo.update(conn, "gate", gate_id, update_data)
     assert updated is not None, "gate disappeared after require_exists"
+
+    # A create-goal gate is a PROPOSAL — approval is what makes it real.
+    # Materialized here, in the same transaction as the resolution, so every
+    # approval surface (dashboard, CLI, co-board) yields the goal without
+    # reimplementing it. A Member may argue for the number; only the Board
+    # sets it — this is the moment it gets set.
+    if resolution == "approved" and existing.get("action") == "create-goal":
+        from firm.services import goal as goal_svc
+        try:
+            payload = json.loads(existing.get("context") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            payload = None
+        if not isinstance(payload, dict) or not payload.get("target"):
+            raise ValueError(
+                f"gate {gate_id!r} carries an unreadable create-goal payload — "
+                "reject it and have the Member re-propose")
+        goal = goal_svc.create_goal(conn, existing["firm_id"], {
+            "target": payload.get("target"),
+            "parent_entity_type": payload.get("parent_entity_type"),
+            "parent_entity_id": payload.get("parent_entity_id"),
+            **({"metric": payload["metric"]} if payload.get("metric") else {}),
+        })
+        updated["goal"] = goal
 
     # Records entry
     log_event(

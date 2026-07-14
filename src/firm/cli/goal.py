@@ -1,9 +1,11 @@
-"""``firm goal update`` — refresh a Goal's metric from the command line.
+"""``firm goal create|update`` — the Board's goal authority, from the terminal.
 
-Thin CLI wrapper around ``firm.services.goal.update_goal_metric``. This is
-the real entry point the goal-health banner refers to — until it existed,
-metric refreshes required hand-writing the JSON shape the banner parser
-expects (Board Proxy field report COM-010).
+Thin CLI wrappers around ``firm.services.goal``. ``update`` refreshes a
+Goal's metric (the goal-health banner's entry point — Board Proxy field
+report COM-010). ``create`` authors a goal outright: it is a BOARD surface —
+Members never run the CLI; from inside a run they propose via
+``firm_propose_goal``, which raises a Gate (fork 008: goals were the only
+entity where a Member had more authority than the Board).
 """
 
 from __future__ import annotations
@@ -13,8 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from firm.core.db import connect, get_db_path
-from firm.services.goal import update_goal_metric
+from firm.core.db import connect, get_db_path, resolve_firm_id
+from firm.services.goal import create_goal, update_goal_metric
 
 
 def _num(v: str | None) -> Any:
@@ -26,6 +28,51 @@ def _num(v: str | None) -> Any:
         return int(f) if f.is_integer() else f
     except ValueError:
         return v
+
+
+def run_goal_create(
+    workspace: Path,
+    target: str,
+    *,
+    parent_entity_type: str,
+    parent_entity_id: str,
+    metric: str | None = None,
+    level: str | None = None,
+    firm_id: str | None = None,
+) -> int:
+    """Author a goal as the Board. Returns 0 on success, 1 on failure."""
+    workspace = workspace.expanduser().resolve()
+    db_path = get_db_path(workspace)
+    if not db_path.exists():
+        print(json.dumps({
+            "ok": False,
+            "reason": "db-not-found",
+            "workspace": str(workspace),
+        }), file=sys.stderr)
+        return 1
+
+    conn = connect(db_path)
+    try:
+        fid = resolve_firm_id(conn, firm_id)
+        data: dict[str, Any] = {
+            "target": target,
+            "parent_entity_type": parent_entity_type,
+            "parent_entity_id": parent_entity_id,
+        }
+        if metric:
+            data["metric"] = metric
+        if level:
+            data["level"] = level
+        goal = create_goal(conn, fid, data)
+        print(json.dumps({"ok": True, "goal_id": goal["id"],
+                          "target": goal.get("target")}, default=str))
+        return 0
+    except ValueError as exc:
+        print(json.dumps({"ok": False, "reason": "error",
+                          "message": str(exc)}), file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
 
 
 def run_goal_update(

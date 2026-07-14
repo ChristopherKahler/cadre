@@ -28,7 +28,7 @@ from typing import Any
 from urllib.parse import parse_qs
 
 from firm.core import repo
-from firm.core.db import connect, db_is_remote, get_db_path
+from firm.core.db import connect, db_is_remote, get_db_path, resolve_firm_id
 from firm.core.migrate import apply_migrations
 from firm.pulse.orchestrator import (
     _REAP_GRACE_SEC,
@@ -43,8 +43,15 @@ from firm.services import goal as goal_svc
 from firm.services import member as member_svc
 from firm.services import unit as unit_svc
 from firm.services._records import log_event
+from firm.secrets.vault import VaultError
+from firm.sysconfig import service as sysconfig_svc
 
 _INDEX_HTML = Path(__file__).parent / "index.html"
+
+# The Boardroom rebuild — onboarding + portfolio, served beside the current
+# landing page so the surface Chris governs from daily never moves. Swap by
+# flipping `/` to this once it has earned it.
+_NEXT_HTML = Path(__file__).parent / "next" / "index.html"
 
 _VIEW_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
 
@@ -549,9 +556,15 @@ def _gen_spend_summary(conn: sqlite3.Connection, firm_id: str) -> list[dict[str,
 
 
 def _load_firm_env(workspace: Path) -> None:
-    """Best-effort load of the firm's .env so adapter balance probes (e.g.
-    ELEVENLABS_API_KEY) have credentials. setdefault — never clobbers the
-    process env."""
+    """Best-effort load of the firm's credentials so adapter balance probes
+    (e.g. ELEVENLABS_API_KEY) have them. Vault first, then legacy plaintext
+    .env. setdefault — never clobbers the process env."""
+    try:
+        from firm.secrets.provider import resolve_provider
+        for k, v in resolve_provider().resolve(workspace).items():
+            os.environ.setdefault(k, v)
+    except Exception:
+        pass   # vault is additive — a broken vault must not take pages down
     env = workspace / ".env"
     if not env.exists():
         return
@@ -937,6 +950,20 @@ def perform_action(
             if body.get(k) not in (None, "")
         }
         return goal_svc.update_goal_metric(conn, entity_id, **fields)
+    if action == "goal-create":
+        # The Board authors success criteria; Members only propose (their MCP
+        # tool raises a create-goal Gate). This was inverted at birth — every
+        # write was gated except the one that defines what winning means.
+        # entity_id = the parent entity id; its type rides in the body.
+        goal_data: dict[str, Any] = {
+            "target": body.get("target"),
+            "parent_entity_type": body.get("parent_entity_type"),
+            "parent_entity_id": entity_id,
+        }
+        for k in ("metric", "level", "status"):
+            if body.get(k) not in (None, ""):
+                goal_data[k] = body[k]
+        return goal_svc.create_goal(conn, firm_id_of(conn, body), goal_data)
     if action == "comment-create":
         # entity_id carries the parent type; the id rides in the body.
         return comment_svc.create_comment(conn, firm_id_of(conn, body), {
@@ -1248,6 +1275,82 @@ def _run_action_log(
     return {"items": items, "cursor": len(lines), "running": running, "found": True}
 
 
+def _sysconfig_get(h: BaseHTTPRequestHandler, workspace: Path, path: str) -> None:
+    """GET /api/sysconfig[/…] — platform-aware firm workspace config reads."""
+    route, _, qs = path.partition("?")
+    parts = route.strip("/").split("/")   # api / sysconfig / ...
+    try:
+        if parts == ["api", "sysconfig"]:
+            _http_send(h, 200, sysconfig_svc.describe(workspace))
+        elif parts[2:] == ["fs"]:
+            params = {k: v[-1] for k, v in parse_qs(qs).items()}
+            _http_send(h, 200, sysconfig_svc.fs_browse(
+                params.get("path"), params.get("q")))
+        elif parts[2:] == ["vars"]:
+            _http_send(h, 200, sysconfig_svc.vars_list(workspace))
+        elif parts[2:] == ["mcp"]:
+            _http_send(h, 200, sysconfig_svc.mcp_list(workspace))
+        elif parts[2:] == ["inventory"]:
+            _http_send(h, 200, sysconfig_svc.inventory(workspace))
+        elif len(parts) == 4 and parts[2] == "file":
+            _http_send(h, 200, sysconfig_svc.read_file(workspace, parts[3]))
+        else:
+            _http_send(h, 404, {"error": f"unknown sysconfig route {route!r}"})
+    except (ValueError, VaultError) as exc:
+        _http_send(h, 400, {"ok": False, "error": str(exc)})
+
+
+def _sysconfig_post(
+    h: BaseHTTPRequestHandler,
+    workspace: Path,
+    db_path: Path,
+    firm_id: str,
+    path: str,
+    body: dict[str, Any],
+) -> None:
+    """POST /api/sysconfig/… — audited config writes (Records on every one)."""
+    parts = path.strip("/").split("/")
+    conn = connect(db_path)
+    try:
+        sub = parts[2:]
+        if sub[:1] == ["file"] and len(sub) == 2:
+            result = sysconfig_svc.write_file(
+                conn, firm_id, workspace, sub[1], str(body.get("content") or ""))
+        elif sub == ["vars"]:
+            result = sysconfig_svc.vars_set(
+                conn, firm_id, workspace,
+                str(body.get("key") or ""), body.get("value"),
+                str(body.get("tier") or "firm"))
+        elif sub == ["vars", "delete"]:
+            result = sysconfig_svc.vars_delete(
+                conn, firm_id, workspace,
+                str(body.get("key") or ""), str(body.get("tier") or "firm"))
+        elif sub == ["vars", "reveal"]:
+            result = sysconfig_svc.vars_reveal(workspace, str(body.get("key") or ""))
+        elif sub == ["vars", "import"]:
+            result = sysconfig_svc.vars_import(
+                conn, firm_id, workspace, scrub=bool(body.get("scrub")))
+        elif sub == ["mcp"]:
+            op = str(body.get("op") or "set")
+            name = str(body.get("name") or "")
+            if op == "remove":
+                result = sysconfig_svc.mcp_remove(conn, firm_id, workspace, name)
+            else:
+                result = sysconfig_svc.mcp_set(
+                    conn, firm_id, workspace, name, body.get("spec") or {})
+        elif sub == ["tools", "install"]:
+            result = sysconfig_svc.tool_install(
+                conn, firm_id, workspace, str(body.get("source") or ""))
+        else:
+            _http_send(h, 404, {"ok": False, "error": "unknown sysconfig route"})
+            return
+        _http_send(h, 200, {"ok": True, "result": result})
+    except (ValueError, VaultError) as exc:
+        _http_send(h, 400, {"ok": False, "error": str(exc)})
+    finally:
+        conn.close()
+
+
 def _firm_get(
     h: BaseHTTPRequestHandler,
     workspace: Path,
@@ -1395,12 +1498,23 @@ def _firm_get(
         finally:
             conn.close()
         return
+    if path == "/api/sysconfig" or path.startswith("/api/sysconfig/"):
+        _sysconfig_get(h, workspace, path)
+        return
     _http_send(h, 404, {"error": "not found"})
 
 
 def _slack_token_from_workspace(workspace: Path) -> str | None:
-    """Best-effort CADRE_SLACK_TOKEN from the workspace .mcp.json — the
-    operator convention keeps it there for the firm MCP server."""
+    """Best-effort CADRE_SLACK_TOKEN — the vault is the home for it now;
+    the .mcp.json regex remains as the legacy fallback for firms that
+    predate the vault and still carry the token inline."""
+    try:
+        from firm.secrets.provider import resolve_provider
+        token = resolve_provider().resolve(workspace).get("CADRE_SLACK_TOKEN")
+        if token:
+            return token
+    except Exception:
+        pass
     mcp = workspace / ".mcp.json"
     if not mcp.exists():
         return None
@@ -1433,19 +1547,32 @@ def _fire_pulse(
     token = _slack_token_from_workspace(workspace)
     if token:
         cmd.append(f"--setenv=CADRE_SLACK_TOKEN={token}")
+    # The firm's OWN venv, never the hub's interpreter — a hub started from
+    # one firm's venv must not run another firm's pulse with the wrong
+    # package (field failure 2026-07-13: dnd-table's python executed
+    # crows-and-pawns' workspace).
+    firm_python = workspace / ".venv" / "bin" / "python"
+    python_bin = str(firm_python) if firm_python.exists() else sys.executable
     pulse_argv = [
-        sys.executable, "-m", "firm", "pulse",
+        python_bin, "-m", "firm", "pulse",
         "--workspace", str(workspace), "--firm-id", firm_id,
     ]
     if only:
         pulse_argv += ["--only", only]
-    # Route the summary to .firm/last-pulse.json so /api/pulse-status can
-    # report the outcome back to the Board (a detached dispatch can't).
+    # Each pulse writes its own log, then claims last-pulse.json on
+    # completion — concurrent pulses previously redirected into the same
+    # file and the second clobbered the first mid-write. /api/pulse-status
+    # keeps reading last-pulse.json (last finisher wins, which is what
+    # "last pulse" means); the per-pulse logs are the durable record.
+    log_dir = workspace / ".firm" / "pulse-logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    pulse_log = log_dir / f"{unit}.json"
     status_file = workspace / ".firm" / "last-pulse.json"
     cmd += [
         "bash", "-c",
         " ".join(shlex.quote(a) for a in pulse_argv)
-        + f" > {shlex.quote(str(status_file))} 2>&1",
+        + f" > {shlex.quote(str(pulse_log))} 2>&1"
+        + f"; cp {shlex.quote(str(pulse_log))} {shlex.quote(str(status_file))}",
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
@@ -1520,6 +1647,17 @@ def _firm_post(
 ) -> None:
     """POST routing for one firm's boardroom (firm-relative *path*)."""
     parts = path.strip("/").split("/")
+    # Route: /api/sysconfig/… — platform config, vault vars, MCP, tools
+    if parts[:2] == ["api", "sysconfig"]:
+        length = int(h.headers.get("Content-Length") or 0)
+        raw = h.rfile.read(length) if length else b"{}"
+        try:
+            body = json.loads(raw or b"{}")
+        except json.JSONDecodeError:
+            _http_send(h, 400, {"ok": False, "error": "invalid JSON body"})
+            return
+        _sysconfig_post(h, workspace, db_path, firm_id, path, body)
+        return
     # Route: /api/extensions/install — drop-in extension package installer
     if parts == ["api", "extensions", "install"]:
         length = int(h.headers.get("Content-Length") or 0)
@@ -1567,9 +1705,17 @@ def _firm_post(
         return
     if action == "pulse":
         # Board's wake-the-firm button — no DB work here; the pulse
-        # process owns all state changes and audit records.
+        # process owns all state changes and audit records. A member id in
+        # the body (or as the entity) makes it a targeted single-member
+        # pulse instead of waking every eligible member.
+        only = body.get("member") or (
+            entity_id if entity_id.startswith("MEM-") else None
+        )
         try:
-            _http_send(h, 200, {"ok": True, "result": _fire_pulse(workspace, firm_id)})
+            _http_send(h, 200, {
+                "ok": True,
+                "result": _fire_pulse(workspace, firm_id, only=only),
+            })
         except ValueError as exc:
             _http_send(h, 400, {"ok": False, "error": str(exc)})
         return
@@ -1650,7 +1796,7 @@ def run_dashboard(
     *,
     host: str = "127.0.0.1",
     port: int = 8484,
-    firm_id: str = "chrisai",
+    firm_id: str | None = None,
 ) -> int:
     """Serve the Boardroom dashboard for *workspace*. Blocks until Ctrl-C."""
     workspace = workspace.expanduser().resolve()
@@ -1665,6 +1811,12 @@ def run_dashboard(
     conn = connect(db_path)
     try:
         apply_migrations(conn)
+        try:
+            firm_id = resolve_firm_id(conn, firm_id)
+        except ValueError as exc:
+            print(json.dumps({"ok": False, "reason": "firm-id-unresolved",
+                              "message": str(exc)}))
+            return 1
     finally:
         conn.close()
 
@@ -1745,7 +1897,46 @@ def discover_firms(root: Path) -> dict[str, dict[str, Any]]:
     return firms
 
 
-def hub_summary(firms: dict[str, dict[str, Any]]) -> dict[str, Any]:
+# --- Board prefs — floor order + the desk pad ------------------------------
+# One JSON sidecar at the firms root, so the arrangement survives any browser
+# and any device. Never firm state — never inside a firm's .firm/.
+_PREFS_NAME = ".cadre-hub.json"
+
+
+def load_prefs(root: Path) -> dict[str, Any]:
+    try:
+        data = json.loads((root / _PREFS_NAME).read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def save_prefs(root: Path, patch: dict[str, Any]) -> dict[str, Any]:
+    prefs = load_prefs(root)
+    prefs.update(patch)
+    (root / _PREFS_NAME).write_text(
+        json.dumps(prefs, indent=2), encoding="utf-8")
+    return prefs
+
+
+def _floor_sort(cards: list[dict[str, Any]],
+                order: list[str]) -> list[dict[str, Any]]:
+    """Bottom-up: order[0] = floor 01. Firms the Board has never arranged
+    stack above the arranged ones, oldest first — founding order, like a
+    real building. Every consumer of the firm list (the boardroom stack,
+    the firm-switcher dropdown) inherits this order from the payload."""
+    rank = {fid: i for i, fid in enumerate(order)}
+    cards.sort(key=lambda c: (0, rank[c["id"]]) if c["id"] in rank
+               else (1, str(c.get("founded_at") or ""), c["id"]))
+    for i, c in enumerate(cards):
+        c["floor"] = i + 1
+    return cards
+
+
+def hub_summary(firms: dict[str, dict[str, Any]],
+                prefs: dict[str, Any] | None = None) -> dict[str, Any]:
     """Portfolio payload: one health card per firm."""
     now = datetime.now(tz=timezone.utc)
     cards = []
@@ -1776,11 +1967,13 @@ def hub_summary(firms: dict[str, dict[str, Any]]) -> dict[str, Any]:
                 "SELECT COALESCE(SUM(dollar_equivalent), 0) FROM usage_event "
                 "WHERE firm_id = ?", (fid,),
             ).fetchone()[0]
+            founded = (repo.get(conn, "firm", fid) or {}).get("created_at")
         finally:
             conn.close()
         cards.append({
             "id": fid,
             "name": info["name"],
+            "founded_at": founded,
             "workspace": str(info["workspace"]),
             "needs_you": len(gates) + len(escalations),
             "gates_pending": len(gates),
@@ -1794,6 +1987,7 @@ def hub_summary(firms: dict[str, dict[str, Any]]) -> dict[str, Any]:
             "views": [{"id": v["id"], "title": v["title"]}
                       for v in load_custom_views(info["workspace"])],
         })
+    _floor_sort(cards, (prefs or {}).get("floor_order") or [])
     return {"generated_at": now.isoformat(), "firms": cards}
 
 
@@ -1913,7 +2107,109 @@ def make_hub_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             if path == "/api/hub":
                 registry.clear()
                 registry.update(discover_firms(root))
-                _http_send(self, 200, hub_summary(registry))
+                _http_send(self, 200, hub_summary(registry, load_prefs(root)))
+                return
+            if path in ("/next", "/next/", "/next/index.html"):
+                _http_send(self, 200, _NEXT_HTML.read_bytes(), "text/html; charset=utf-8")
+                return
+            if path == "/api/next/hub":
+                from firm.dashboard import boardroom
+                registry.clear()
+                registry.update(discover_firms(root))
+                prefs = load_prefs(root)
+                summary = hub_summary(registry, prefs)
+                summary["firms"] = boardroom.enrich(summary["firms"], registry)
+                summary["prefs"] = prefs
+                _http_send(self, 200, summary)
+                return
+            if path.startswith("/api/next/found/"):
+                from firm.dashboard import founding
+                route, _, qs = path.partition("?")
+                job_id = route.rsplit("/", 1)[-1]
+                cursor = 0
+                for kv in qs.split("&"):
+                    if kv.startswith("cursor="):
+                        try:
+                            cursor = max(0, int(kv.split("=", 1)[1]))
+                        except ValueError:
+                            cursor = 0
+                _http_send(self, 200, founding.status(job_id, cursor))
+                return
+            if path.startswith("/api/next/readiness/"):
+                from firm.dashboard import founding
+                fid = path.rsplit("/", 1)[-1].split("?")[0]
+                if fid not in registry:
+                    _http_send(self, 404, {"ok": False, "error": "not found"})
+                    return
+                _http_send(self, 200, founding.readiness(root, fid))
+                return
+            if path == "/api/next/coboard":
+                from firm.dashboard import coboard
+                _http_send(self, 200, {"ok": True,
+                                       "briefed": coboard.briefed_firms(root)})
+                return
+            if path == "/api/next/notify-presets":
+                from firm.dashboard import discovery
+                _http_send(self, 200, {"ok": True,
+                                       "presets": discovery.notify_presets(root)})
+                return
+            if path.startswith("/api/next/pulse-state/"):
+                from firm.dashboard import founding
+                fid = path.rsplit("/", 1)[-1].split("?")[0]
+                if fid not in registry:
+                    _http_send(self, 404, {"ok": False, "error": "not found"})
+                    return
+                _http_send(self, 200, founding.pulse_state(fid))
+                return
+            if path.startswith("/api/next/brief/"):
+                from firm.dashboard import coboard
+                route, _, qs = path.partition("?")
+                job_id = route.rsplit("/", 1)[-1]
+                cursor = 0
+                for kv in qs.split("&"):
+                    if kv.startswith("cursor="):
+                        try:
+                            cursor = max(0, int(kv.split("=", 1)[1]))
+                        except ValueError:
+                            cursor = 0
+                _http_send(self, 200, coboard.status(job_id, cursor))
+                return
+            if path.startswith("/api/next/wire/"):
+                from firm.dashboard import wiring
+                route, _, qs = path.partition("?")
+                job_id = route.rsplit("/", 1)[-1]
+                cursor = 0
+                for kv in qs.split("&"):
+                    if kv.startswith("cursor="):
+                        try:
+                            cursor = max(0, int(kv.split("=", 1)[1]))
+                        except ValueError:
+                            cursor = 0
+                _http_send(self, 200, wiring.status(job_id, cursor))
+                return
+            if path.startswith("/api/next/survey/"):
+                from firm.dashboard import discovery, exclusions
+                fid = path.rsplit("/", 1)[-1].split("?")[0]
+                info = _resolve(fid)
+                if info is None:
+                    _http_send(self, 404, {"ok": False, "error": "not found"})
+                    return
+                payload = discovery.survey(info["workspace"])
+                payload["exclusions"] = exclusions.load()
+                _http_send(self, 200, payload)
+                return
+            if path.startswith("/api/next/browse"):
+                from firm.dashboard import discovery
+                _, _, qs = path.partition("?")
+                target = None
+                for kv in qs.split("&"):
+                    if kv.startswith("path="):
+                        from urllib.parse import unquote
+                        target = unquote(kv.split("=", 1)[1])
+                try:
+                    _http_send(self, 200, discovery.browse(target))
+                except ValueError as exc:
+                    _http_send(self, 400, {"ok": False, "error": str(exc)})
                 return
             m = _FIRM_PREFIX_RE.match(path)
             if m:
@@ -1933,6 +2229,111 @@ def make_hub_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             _http_send(self, 404, {"error": "not found"})
 
         def do_POST(self) -> None:
+            if self.path.startswith("/api/next/"):
+                from firm.dashboard import founding
+                length = int(self.headers.get("Content-Length") or 0)
+                try:
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                except json.JSONDecodeError:
+                    _http_send(self, 400, {"ok": False, "error": "invalid JSON body"})
+                    return
+                verb = self.path.rsplit("/", 1)[-1]
+                if verb == "prefs":
+                    patch: dict[str, Any] = {}
+                    if isinstance(body.get("floor_order"), list):
+                        patch["floor_order"] = [str(x) for x in body["floor_order"]][:200]
+                    if isinstance(body.get("notes"), str):
+                        patch["notes"] = body["notes"][:20000]
+                    if not patch:
+                        _http_send(self, 400, {"ok": False, "error": "nothing to save"})
+                        return
+                    _http_send(self, 200, {"ok": True, "prefs": save_prefs(root, patch)})
+                elif verb == "found":
+                    _http_send(self, 200, founding.start(body.get("brief") or ""))
+                elif verb == "reshuffle":
+                    _http_send(self, 200, founding.reshuffle(
+                        body.get("proposal") or {}, str(body.get("note") or "")))
+                elif verb == "cancel":
+                    _http_send(self, 200, founding.cancel(body.get("job_id") or ""))
+                elif verb == "commit":
+                    result = founding.commit(root, body.get("proposal") or {})
+                    if result.get("ok"):
+                        registry.clear()   # the new floor appears without a restart
+                        registry.update(discover_firms(root))
+                    _http_send(self, 200, result)
+                elif verb == "pulse":
+                    fid = str(body.get("firm_id") or "")
+                    if fid not in registry:
+                        _http_send(self, 404, {"ok": False, "error": "not found"})
+                        return
+                    _http_send(self, 200, founding.set_pulse(
+                        root, fid,
+                        str(body.get("interval") or "30m"),
+                        enable=bool(body.get("enable", True))))
+                elif verb in ("brief", "brief-commit"):
+                    from firm.dashboard import coboard
+                    fid = str(body.get("firm_id") or "")
+                    info = _resolve(fid)
+                    if info is None:
+                        _http_send(self, 404, {"ok": False, "error": "not found"})
+                        return
+                    if verb == "brief":
+                        _http_send(self, 200, coboard.start(info["workspace"], fid, {
+                            "cadence": body.get("cadence"),
+                            "channel": body.get("channel"),
+                            "voice": body.get("voice") or "",
+                            "gaps": body.get("gaps") or [],
+                        }))
+                    else:
+                        _http_send(self, 200, coboard.commit(
+                            root, fid, str(body.get("brief") or "")))
+                elif verb == "manifest":
+                    fid = str(body.get("firm_id") or "")
+                    if fid not in registry:
+                        _http_send(self, 404, {"ok": False, "error": "not found"})
+                        return
+                    _http_send(self, 200, founding.set_manifest(
+                        root, fid, body.get("manifest") or {}))
+                elif verb in ("wire", "wire-commit"):
+                    from firm.dashboard import wiring
+                    fid = str(body.get("firm_id") or "")
+                    info = _resolve(fid)
+                    if info is None:
+                        _http_send(self, 404, {"ok": False, "error": "not found"})
+                        return
+                    if verb == "wire":
+                        _http_send(self, 200, wiring.start(info["workspace"], fid, {
+                            "mcp": body.get("mcp") or [],
+                            "folders": body.get("folders") or [],
+                            "voice": body.get("voice") or "",
+                        }))
+                    else:
+                        _http_send(self, 200, wiring.commit(
+                            root, fid, body.get("plan") or {}, body.get("keys") or {}))
+                elif verb == "exclude":
+                    from firm.dashboard import exclusions
+                    try:
+                        data = exclusions.toggle(
+                            str(body.get("kind") or ""),
+                            str(body.get("name") or ""),
+                            bool(body.get("excluded", True)))
+                    except ValueError as exc:
+                        _http_send(self, 400, {"ok": False, "error": str(exc)})
+                        return
+                    _http_send(self, 200, {"ok": True, "exclusions": data})
+                elif verb == "launch":
+                    from firm.dashboard import launch
+                    fid = str(body.get("firm_id") or "")
+                    if _resolve(fid) is None:
+                        _http_send(self, 404, {"ok": False, "error": "not found"})
+                        return
+                    # cwd is the firms root, not the firm — the Co-Board is an
+                    # overseer, not a member; /boardroom <fid> directs it in.
+                    _http_send(self, 200, launch.summon(
+                        str(root), fid, str(body.get("agenda") or "")))
+                else:
+                    _http_send(self, 404, {"ok": False, "error": "not found"})
+                return
             m = _FIRM_PREFIX_RE.match(self.path)
             if not m:
                 _http_send(self, 404, {"error": "not found"})
@@ -1969,6 +2370,8 @@ def run_hub(
     if not firms:
         print(json.dumps({"ok": False, "reason": "no-firms-found", "root": str(root)}))
         return 1
+    from firm.dashboard import launch
+    launch.ensure_boardroom_claude(root)   # the Co-Board's loadout, laid once
     handler = make_hub_handler(root)
     server = ThreadingHTTPServer((host, port), handler)
     print(json.dumps({

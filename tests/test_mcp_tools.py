@@ -158,14 +158,40 @@ class TestWriteTools:
         ))
         assert "error" not in result
 
-    def test_create_goal(self):
-        result = json.loads(mcp_tools.firm_create_goal(
+    def test_propose_goal_raises_gate_and_approval_materializes(self, monkeypatch):
+        # Fork 008: a Member may argue for the number; only the Board sets it.
+        monkeypatch.setenv("CADRE_MEMBER_ID", "MEM-001")
+        gate = json.loads(mcp_tools.firm_propose_goal(
             target="Publish 10 blog posts",
             parent_entity_type="operation",
             parent_entity_id="OP-001",
+            reasoning="output volume is the outcome I own",
         ))
-        assert "error" not in result
-        assert result["id"].startswith("GOAL-")
+        assert "error" not in gate
+        assert gate["id"].startswith("GATE-")
+        approved = json.loads(mcp_tools.firm_approve_gate(gate["id"]))
+        assert approved["goal"]["id"].startswith("GOAL-")
+        assert approved["goal"]["target"] == "Publish 10 blog posts"
+
+    def test_propose_goal_without_member_identity_is_refused(self, monkeypatch):
+        monkeypatch.delenv("CADRE_MEMBER_ID", raising=False)
+        result = json.loads(mcp_tools.firm_propose_goal(
+            target="x", parent_entity_type="operation",
+            parent_entity_id="OP-001", reasoning="r",
+        ))
+        assert "error" in result
+
+    def test_rejected_goal_proposal_creates_nothing(self, monkeypatch):
+        monkeypatch.setenv("CADRE_MEMBER_ID", "MEM-001")
+        before = len(json.loads(mcp_tools.firm_list_goals()))
+        gate = json.loads(mcp_tools.firm_propose_goal(
+            target="An easy goal I can definitely hit",
+            parent_entity_type="operation",
+            parent_entity_id="OP-001",
+            reasoning="sandbagging",
+        ))
+        json.loads(mcp_tools.firm_reject_gate(gate["id"], "set a real bar"))
+        assert len(json.loads(mcp_tools.firm_list_goals())) == before
 
     def test_create_operation(self):
         result = json.loads(mcp_tools.firm_create_operation(name="Social Pipeline"))
@@ -250,12 +276,21 @@ class TestCompleteUnit:
 
 class TestUpdateGoalMetric:
 
-    def test_shapes_metric_json(self):
+    @staticmethod
+    def _board_approved_goal(monkeypatch, target, metric=""):
+        """Goals only exist Board-approved now — go through the front door."""
+        monkeypatch.setenv("CADRE_MEMBER_ID", "MEM-001")
         ops = json.loads(mcp_tools.firm_list_operations())
-        goal = json.loads(mcp_tools.firm_create_goal(
-            ">= 5 approved-ready assets", "operation", ops[0]["id"],
-            metric="publish_ready_queue_depth",
+        gate = json.loads(mcp_tools.firm_propose_goal(
+            target, "operation", ops[0]["id"],
+            reasoning="test", metric=metric,
         ))
+        return json.loads(mcp_tools.firm_approve_gate(gate["id"]))["goal"]
+
+    def test_shapes_metric_json(self, monkeypatch):
+        goal = self._board_approved_goal(
+            monkeypatch, ">= 5 approved-ready assets",
+            metric="publish_ready_queue_depth")
 
         result = json.loads(mcp_tools.firm_update_goal_metric(
             goal["id"], current="6", value="5", unit="assets",
@@ -268,11 +303,8 @@ class TestUpdateGoalMetric:
         assert metric["unit"] == "assets"
         assert metric["type"] == "publish_ready_queue_depth"
 
-    def test_no_fields_returns_error(self):
-        ops = json.loads(mcp_tools.firm_list_operations())
-        goal = json.loads(mcp_tools.firm_create_goal(
-            "target", "operation", ops[0]["id"],
-        ))
+    def test_no_fields_returns_error(self, monkeypatch):
+        goal = self._board_approved_goal(monkeypatch, "target")
         result = json.loads(mcp_tools.firm_update_goal_metric(goal["id"]))
         assert "error" in result
 
