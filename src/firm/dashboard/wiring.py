@@ -439,7 +439,15 @@ def _run_wiring(job_id: str, workspace: Path, firm_id: str,
     # tick a plugin-provided server in a stale UI; the agent must never be told it
     # exists, or it will hand out a permission that resolves to nothing at run time.
     offerable = {s["name"] for s in sv["mcp"]["servers"] if s.get("available")}
-    mcp_names = [n for n in (picks.get("mcp") or []) if n in offerable]
+    # Already-equipped servers are ALWAYS in the plan. The Equip screen renders
+    # them checked but only sends fresh ticks — on a re-Train, a firm's whole
+    # armory would silently vanish from every loadout (the entries stay in
+    # .mcp.json, but the loadout is the law, so Members lose permission to
+    # tools the firm still carries). Equip has no unequip affordance; removal
+    # is a deliberate sysconfig act, never a side effect of a reroll.
+    equipped = [n for n in sv["mcp"]["equipped"] if n in offerable]
+    mcp_names = sorted(
+        {n for n in (picks.get("mcp") or []) if n in offerable} | set(equipped))
 
     # Host CLIs ride the same exclusion list founding honors — excluded means
     # never offered, here as there.
@@ -647,8 +655,18 @@ def commit(root: Path, firm_id: str, plan: dict[str, Any],
         #    A server we cannot resolve a spec for must ABORT, not be skipped — a
         #    silent skip leaves a loadout naming a tool the firm doesn't carry, and
         #    the failure only surfaces mid-run, in a Member, with nobody watching.
+        #    A server the firm ALREADY carries resolves from its own .mcp.json —
+        #    re-equipping what you own must never abort a re-Train just because
+        #    the spec's original source left the operator's config.
         chosen = list(plan.get("mcp") or [])
         specs = discovery.raw_specs(chosen)
+        try:
+            own = json.loads((workspace / ".mcp.json").read_text()).get("mcpServers") or {}
+        except (OSError, json.JSONDecodeError):
+            own = {}
+        for n in chosen:
+            if n not in specs and isinstance(own.get(n), dict):
+                specs[n] = own[n]
         unresolved = [n for n in chosen if n not in specs]
         if unresolved:
             raise ValueError(
