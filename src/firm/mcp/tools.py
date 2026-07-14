@@ -177,13 +177,20 @@ def firm_view_unit(unit_id: str) -> str:
 
 
 @mcp.tool()
-def firm_create_unit(name: str, project_id: str, firm_id: str = "", priority: str = "medium", acceptance_criteria: str = "[]", depends_on: str = "[]") -> str:
-    """Create a new unit (work item) in a project. acceptance_criteria and depends_on are JSON arrays."""
+def firm_create_unit(name: str, project_id: str, firm_id: str = "", priority: str = "medium", acceptance_criteria: str = "[]", depends_on: str = "[]", model: str = "") -> str:
+    """Create a new unit (work item) in a project. acceptance_criteria and depends_on are JSON arrays.
+
+    model: optional per-unit model override (opus/sonnet/haiku or a full id) —
+    beats the assignee's contract model for THIS unit's run. Use it to stop
+    paying judgment rates for mechanical work: triage units say sonnet even
+    when the member's default is opus."""
     data: dict[str, Any] = {
         "name": name,
         "project_id": project_id,
         "priority": priority,
     }
+    if model:
+        data["model"] = model
     # Parse JSON strings to lists for the service layer
     try:
         data["acceptance_criteria"] = json.loads(acceptance_criteria) if isinstance(acceptance_criteria, str) else acceptance_criteria

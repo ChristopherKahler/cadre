@@ -1054,6 +1054,9 @@ def perform_action(
             data["assignee_member_id"] = body["assignee_member_id"]
         if body.get("priority"):
             data["priority"] = body["priority"]
+        if body.get("model"):
+            # Per-unit model override — beats the contract for this run.
+            data["model"] = body["model"]
         if data.get("name") is None or data.get("project_id") is None:
             raise ValueError("name and project_id are required")
         return unit_svc.create_unit(conn, firm_id_of(conn, body), data)

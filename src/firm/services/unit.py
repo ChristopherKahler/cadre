@@ -75,7 +75,7 @@ def create_unit(
     for field in (
         "description", "assignee_member_id", "parent_unit_id", "status",
         "priority", "rank", "goal_ids", "acceptance_criteria", "depends_on",
-        "due_date", "outputs", "tags",
+        "due_date", "outputs", "tags", "model",
     ):
         if field in data:
             row_data[field] = data[field]

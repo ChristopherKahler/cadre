@@ -171,6 +171,45 @@ class TestInvoke:
         result = ClaudeCodeRuntime().invoke(conn, contract, member, unit, cwd="/tmp")
         assert result.handle.metadata["timeout_sec"] == 120
 
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    @mock.patch("firm.contracts.claude_code.assemble_prompt")
+    def test_unit_model_overrides_contract_model(self, mock_prompt, mock_spawn):
+        # Fork 004: the Contract says who a Member IS; the Unit says what
+        # THIS work is worth. unit.model beats pulse_config.model.
+        conn = _fresh_conn()
+        contract, member, unit = _seed(conn)
+        contract = dict(contract)
+        contract["pulse_config"] = json.dumps(
+            {"timeout_sec": 120, "model": "opus"})
+        unit = dict(unit)
+        unit["model"] = "sonnet"
+
+        mock_prompt.return_value = "prompt"
+        mock_spawn.return_value = SpawnResult(
+            returncode=0, stdout="", stderr="", pid=1, timed_out=False,
+        )
+
+        result = ClaudeCodeRuntime().invoke(conn, contract, member, unit, cwd="/tmp")
+        assert mock_spawn.call_args.kwargs["model"] == "sonnet"
+        assert result.handle.metadata["model"] == "sonnet"
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    @mock.patch("firm.contracts.claude_code.assemble_prompt")
+    def test_unit_without_model_inherits_contract(self, mock_prompt, mock_spawn):
+        conn = _fresh_conn()
+        contract, member, unit = _seed(conn)
+        contract = dict(contract)
+        contract["pulse_config"] = json.dumps(
+            {"timeout_sec": 120, "model": "opus"})
+
+        mock_prompt.return_value = "prompt"
+        mock_spawn.return_value = SpawnResult(
+            returncode=0, stdout="", stderr="", pid=1, timed_out=False,
+        )
+
+        ClaudeCodeRuntime().invoke(conn, contract, member, unit, cwd="/tmp")
+        assert mock_spawn.call_args.kwargs["model"] == "opus"
+
 
 # ---------------------------------------------------------------------------
 # _get_timeout

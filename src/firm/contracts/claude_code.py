@@ -32,7 +32,10 @@ class ClaudeCodeRuntime:
         unit_id = unit["id"]
 
         timeout = self._get_timeout(contract)
-        model = self._get_model(contract)
+        # The Unit outranks the Contract: the Contract says who this Member
+        # IS, the Unit says what THIS work is worth. unit.model ?? contract
+        # model ?? session default — the per-run half of the cost lever.
+        model = str(unit.get("model") or "") or self._get_model(contract)
         prompt = assemble_prompt(conn, firm_id, member_id, unit_id, cwd=cwd)
         spawn_result = spawn_member_run(
             prompt, timeout_sec=timeout, cwd=cwd, model=model,
