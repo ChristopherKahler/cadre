@@ -189,4 +189,11 @@ def apply_migrations(
     finally:
         conn.isolation_level = saved_isolation
 
+    if newly_applied:
+        # A migration may ALTER TABLE; the repo's process-global column
+        # cache must not keep serving the pre-migration shape (a long-lived
+        # hub would otherwise reject the new column until restart).
+        from firm.core import repo
+        repo._COLUMN_CACHE.clear()
+
     return newly_applied

@@ -22,7 +22,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from firm.core.db import get_db_path
+from firm.core.db import connect, get_db_path, resolve_firm_id
 from firm.pulse.spawn import resolve_claude_bin
 
 _UNIT_PREFIX = "cadre-heartbeat-"
@@ -138,7 +138,7 @@ def _emit(payload: dict) -> None:
 
 def run_enable(
     workspace: Path,
-    firm_id: str,
+    firm_id: str | None,
     interval: str,
     *,
     unit_dir: Path | None = None,
@@ -147,6 +147,15 @@ def run_enable(
     if not get_db_path(workspace).exists():
         _emit({"ok": False, "reason": "db-not-found", "workspace": str(workspace)})
         return 1
+    if not firm_id:
+        conn = connect(get_db_path(workspace))
+        try:
+            firm_id = resolve_firm_id(conn)
+        except ValueError as exc:
+            _emit({"ok": False, "reason": str(exc)})
+            return 1
+        finally:
+            conn.close()
     try:
         interval = validate_interval(interval)
     except ValueError as exc:
@@ -172,7 +181,25 @@ def run_enable(
             _emit({"ok": False, "reason": f"systemctl {' '.join(step)}: {out}"})
             return 1
 
+    # firm.schedule is the single source of truth for cadence (fork 005) —
+    # the hub reads it to tell "not operational" from "healthy and idle",
+    # two states that looked identical while the whole portfolio sat in the
+    # first one. The timer is the mechanism; the row is the record. A DB that
+    # can't take the write (mid-init, unmigrated) doesn't undo a timer that
+    # is already running — but the miss is reported, never swallowed.
+    schedule_recorded = True
+    try:
+        from firm.core import repo
+        conn = connect(get_db_path(workspace))
+        try:
+            repo.update(conn, "firm", firm_id, {"schedule": interval})
+        finally:
+            conn.close()
+    except Exception:
+        schedule_recorded = False
+
     _emit({
+        "schedule_recorded": schedule_recorded,
         "ok": True,
         "firm_id": firm_id,
         "interval": interval,
@@ -184,12 +211,31 @@ def run_enable(
     return 0
 
 
-def run_disable(firm_id: str, *, unit_dir: Path | None = None) -> int:
+def run_disable(firm_id: str | None = None, *, unit_dir: Path | None = None) -> int:
+    if not firm_id:
+        db = get_db_path(Path.cwd())
+        if db.exists():
+            conn = connect(db)
+            try:
+                firm_id = resolve_firm_id(conn)
+            except ValueError:
+                firm_id = None
+            finally:
+                conn.close()
+    if not firm_id:
+        _emit({"ok": False, "reason": "no firm id — pass --firm-id or run "
+                                      "from a firm workspace"})
+        return 1
     unit_dir = unit_dir or default_unit_dir()
     stem = f"{_UNIT_PREFIX}{firm_id}"
     if not (unit_dir / f"{stem}.timer").exists():
         _emit({"ok": False, "reason": f"no heartbeat installed for firm {firm_id!r}"})
         return 1
+
+    # The workspace path lives in the service file — read it BEFORE the
+    # unlink, so firm.schedule can be nulled after the units are gone.
+    ws_str = _service_workspace(unit_dir / f"{stem}.service") \
+        if (unit_dir / f"{stem}.service").exists() else None
 
     rc, out = _systemctl("disable", "--now", f"{stem}.timer")
     if rc != 0:
@@ -198,7 +244,28 @@ def run_disable(firm_id: str, *, unit_dir: Path | None = None) -> int:
     for suffix in (".timer", ".service"):
         (unit_dir / f"{stem}{suffix}").unlink(missing_ok=True)
     _systemctl("daemon-reload")
-    _emit({"ok": True, "firm_id": firm_id, "removed": f"{stem}.timer"})
+    # A unit that ever failed stays in systemd's runtime as `not-found
+    # failed` after its file is removed — permanent ghost noise that reads
+    # as a broken firm in every health sweep (fork 005, chief-of-staff).
+    _systemctl("reset-failed", f"{stem}.service", f"{stem}.timer")
+
+    schedule_recorded = False
+    if ws_str:
+        try:
+            from firm.core import repo
+            db = get_db_path(Path(ws_str))
+            if db.exists():
+                conn = connect(db)
+                try:
+                    repo.update(conn, "firm", firm_id, {"schedule": None})
+                    schedule_recorded = True
+                finally:
+                    conn.close()
+        except Exception:
+            pass
+
+    _emit({"ok": True, "firm_id": firm_id, "removed": f"{stem}.timer",
+           "schedule_recorded": schedule_recorded})
     return 0
 
 

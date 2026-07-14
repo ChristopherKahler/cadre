@@ -83,7 +83,15 @@ def _validate_table(table: str) -> None:
 def _table_columns(conn: sqlite3.Connection, table: str) -> frozenset[str]:
     if table not in _COLUMN_CACHE:
         rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-        _COLUMN_CACHE[table] = frozenset(row[1] for row in rows)
+        cols = frozenset(row[1] for row in rows)
+        # An empty PRAGMA means the table doesn't exist on THIS connection —
+        # an unmigrated or foreign DB. The cache is process-global; caching
+        # "no columns" poisons every later connection in the process (found
+        # 2026-07-14: one write against a pre-migration firm.db made every
+        # subsequent firm write in the process fail "Unknown column 'id'").
+        if not cols:
+            return cols
+        _COLUMN_CACHE[table] = cols
     return _COLUMN_CACHE[table]
 
 
