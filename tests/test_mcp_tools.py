@@ -138,14 +138,23 @@ class TestWriteTools:
         assert result["id"].startswith("GATE-")
         assert result["status"] == "pending"
 
-    def test_approve_gate(self):
+    def test_gate_resolution_is_not_a_member_tool(self):
+        # Fork 010: a Member that can approve its own Gate makes every other
+        # control theatre. Members request; the Board resolves (hub action
+        # endpoint / CLI). The tools must be ABSENT, not merely discouraged.
+        assert not hasattr(mcp_tools, "firm_approve_gate")
+        assert not hasattr(mcp_tools, "firm_reject_gate")
+
+    def test_gate_resolves_through_the_board_surface(self):
+        from firm.services import gate as gate_svc
         gate = json.loads(mcp_tools.firm_request_gate(
             requesting_member_id="MEM-001",
             action="test_action",
             target_entity_type="firm",
             target_entity_id="chrisai",
         ))
-        result = json.loads(mcp_tools.firm_approve_gate(gate["id"], "Looks good"))
+        result = gate_svc.approve_gate(
+            mcp_tools._get_conn(), gate["id"], {"approver_comment": "Looks good"})
         assert result["status"] == "approved"
 
     def test_create_comment(self):
@@ -169,7 +178,8 @@ class TestWriteTools:
         ))
         assert "error" not in gate
         assert gate["id"].startswith("GATE-")
-        approved = json.loads(mcp_tools.firm_approve_gate(gate["id"]))
+        from firm.services import gate as gate_svc
+        approved = gate_svc.approve_gate(mcp_tools._get_conn(), gate["id"])
         assert approved["goal"]["id"].startswith("GOAL-")
         assert approved["goal"]["target"] == "Publish 10 blog posts"
 
@@ -190,7 +200,9 @@ class TestWriteTools:
             parent_entity_id="OP-001",
             reasoning="sandbagging",
         ))
-        json.loads(mcp_tools.firm_reject_gate(gate["id"], "set a real bar"))
+        from firm.services import gate as gate_svc
+        gate_svc.reject_gate(mcp_tools._get_conn(), gate["id"],
+                             {"approver_comment": "set a real bar"})
         assert len(json.loads(mcp_tools.firm_list_goals())) == before
 
     def test_create_operation(self):
@@ -278,14 +290,16 @@ class TestUpdateGoalMetric:
 
     @staticmethod
     def _board_approved_goal(monkeypatch, target, metric=""):
-        """Goals only exist Board-approved now — go through the front door."""
+        """Goals only exist Board-approved now — go through the front door.
+        Approval is a Board surface (fork 010), so it goes via the service."""
+        from firm.services import gate as gate_svc
         monkeypatch.setenv("CADRE_MEMBER_ID", "MEM-001")
         ops = json.loads(mcp_tools.firm_list_operations())
         gate = json.loads(mcp_tools.firm_propose_goal(
             target, "operation", ops[0]["id"],
             reasoning="test", metric=metric,
         ))
-        return json.loads(mcp_tools.firm_approve_gate(gate["id"]))["goal"]
+        return gate_svc.approve_gate(mcp_tools._get_conn(), gate["id"])["goal"]
 
     def test_shapes_metric_json(self, monkeypatch):
         goal = self._board_approved_goal(

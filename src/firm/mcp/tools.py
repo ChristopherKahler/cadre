@@ -265,20 +265,14 @@ def firm_request_gate(requesting_member_id: str, action: str, target_entity_type
     return json.dumps(result, default=str)
 
 
-@mcp.tool()
-def firm_approve_gate(gate_id: str, approver_comment: str = "") -> str:
-    """Approve a pending gate request."""
-    data = {"approver_comment": approver_comment} if approver_comment else None
-    result = _safe(gate_svc.approve_gate, gate_id, data)
-    return json.dumps(result, default=str)
-
-
-@mcp.tool()
-def firm_reject_gate(gate_id: str, approver_comment: str = "") -> str:
-    """Reject a pending gate request."""
-    data = {"approver_comment": approver_comment} if approver_comment else None
-    result = _safe(gate_svc.reject_gate, gate_id, data)
-    return json.dumps(result, default=str)
+# Gate RESOLUTION is not a Member tool and never will be (fork 010). A Gate
+# assumes the asker and the approver are different entities; a Member that can
+# approve its own Gate turns every control in the system — the send locks, the
+# spend gates, the goal proposals — into a speed bump with a self-service
+# bypass. The Board resolves gates through the hub's audited action endpoint
+# (`gate-approve`/`gate-reject`) or the CLI; the Board Proxy may never touch
+# one. Members request; they do not resolve. Not an exclusion — a
+# constitutional line, same class as _BOARD_ONLY_COMMANDS.
 
 
 # ---------------------------------------------------------------------------
