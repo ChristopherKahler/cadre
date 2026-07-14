@@ -253,6 +253,15 @@ The Board also said this, in their own words:
 - **Name real things only.** Every skill, command, and server you assign must appear
   verbatim in the lists above. Do not invent, do not guess at a name, do not
   approximate. If the right tool is not in the list, say so in `gaps`.
+- **Capabilities come in bundles; lock what the bundle over-grants.** For every
+  credentialed tool you assign, ask what ELSE its scopes permit that this Member's
+  gates forbid. A Gmail scope granted for labels also carries send; a calendar
+  scope granted for reads also carries invite emails. The gates say what the
+  Member must ASK before doing — your `deny` rules are the LOCK for the subset a
+  credential would let them do anyway. Deny rules are enforced at the tool
+  boundary by the runtime; they hold even if the Member ignores every word of
+  the charter. Write them tight (match the forbidden verb, e.g. "messages.send"),
+  not broad (a deny that matches reads starves the role you just staffed).
 
 ## Output
 
@@ -267,6 +276,8 @@ Return ONLY a JSON object, no prose, no code fence:
       "mcp": ["server names verbatim, [] if none fit"],
       "cli": ["CLI tool names verbatim from the list, [] if none fit"],
       "knowledge": [{{"path": "an attached folder path, verbatim", "teaches": "one line"}}],
+      "deny": [{{"match": "pattern over the tool call — bare string = substring, * ? [ = glob",
+                 "reason": "one line: which NEVER this enforces"}}],
       "note": "One sentence: how this person works, given what they carry."
     }}
   ],
@@ -375,13 +386,23 @@ def _validate(plan: dict[str, Any], members: list[dict[str, Any]],
                 for k in (m.get("knowledge") or [])
                 if isinstance(k, dict) and k.get("path") in allowed["folders"]
             ],
+            # NEVERs as controls (fork 009): sanitized here, enforced by the
+            # PreToolUse policy gate. Capped — a 50-rule denylist is a sign
+            # the loadout is wrong, not a policy.
+            "deny": [
+                {"match": str(d["match"]).strip()[:120],
+                 "reason": str(d.get("reason") or "").strip()[:200]}
+                for d in (m.get("deny") or [])
+                if isinstance(d, dict) and str(d.get("match") or "").strip()
+            ][:12],
             "note": str(m.get("note") or ""),
         })
     seen = {m["name"] for m in out_members}
     for m in members:                      # nobody falls off the roster
         if m["name"] not in seen:
             out_members.append({"name": m["name"], "skills": [], "commands": [],
-                                "mcp": [], "cli": [], "knowledge": [], "note": ""})
+                                "mcp": [], "cli": [], "knowledge": [],
+                                "deny": [], "note": ""})
 
     gaps = []
     for g in plan.get("gaps") or []:
@@ -564,6 +585,8 @@ def _render_charter(firm: dict[str, Any], members: list[dict[str, Any]],
             lines.append("- **CLI:** " + ", ".join(f"`{c}`" for c in p["cli"]))
         for k in p.get("knowledge") or []:
             lines.append(f"- **Knowledge:** `{k['path']}` — {k['teaches']}")
+        for d in p.get("deny") or []:
+            lines.append(f"- **Never (enforced):** `{d['match']}` — {d['reason']}")
         if not any(p.get(f) for f in ("skills", "commands", "mcp", "cli", "knowledge")):
             lines.append("- Carries nothing beyond the firm's standing tools.")
         loadouts.append("\n".join(lines))
@@ -641,7 +664,7 @@ def commit(root: Path, firm_id: str, plan: dict[str, Any],
             p = by_name.get(m["name"])
             if not p or not m.get("contract_id"):
                 continue
-            contract_svc.update_contract(conn, m["contract_id"], {
+            updates: dict[str, Any] = {
                 "skill_loadout": {
                     "skills": p["skills"],
                     "commands": p["commands"],
@@ -649,7 +672,15 @@ def commit(root: Path, firm_id: str, plan: dict[str, Any],
                     "cli": p.get("cli") or [],
                     "knowledge": p["knowledge"],
                 },
-            })
+            }
+            # Deny rules ride validation_config next to gates_required —
+            # merged, not replaced, so the founding gates survive a rewire.
+            from firm.services.policy import _parse_vc
+            contract_row = repo.get(conn, "contract", m["contract_id"]) or {}
+            vc = _parse_vc(contract_row)
+            vc["deny"] = p.get("deny") or []
+            updates["validation_config"] = vc
+            contract_svc.update_contract(conn, m["contract_id"], updates)
             wrote.append(f"loadout:{m['name']}")
 
         # 3b. The tools themselves. A loadout that names a skill nobody
@@ -769,6 +800,24 @@ def commit(root: Path, firm_id: str, plan: dict[str, Any],
         wrote.append("CLAUDE.md")
     except OSError as exc:
         return {"ok": False, "error": f"could not write the charter: {exc}"}
+
+    # 5. The lock. The deny rules just written are prose until they are
+    #    materialized where the PreToolUse gate reads them and the gate is
+    #    installed in the workspace. If a NEVER is worth writing, it is
+    #    worth enforcing (fork 009).
+    try:
+        from firm.cli.install_hooks import install_policy_hook
+        from firm.services import policy as policy_svc
+        conn = connect(get_db_path(workspace))
+        try:
+            policy_svc.materialize(conn, workspace, firm_id)
+        finally:
+            conn.close()
+        _, hook_msgs = install_policy_hook(workspace)
+        wrote.append("policy:materialized")
+        wrote.extend(f"policy:{m}" for m in hook_msgs[:1])
+    except Exception as exc:
+        return {"ok": False, "error": f"could not arm the policy gate: {exc}"}
 
     return {"ok": True, "firm_id": firm_id, "wrote": wrote,
             "charter": str(workspace / "CLAUDE.md")}

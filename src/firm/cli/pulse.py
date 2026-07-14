@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from firm.core.db import connect, db_is_remote, get_db_path
+from firm.core.db import connect, db_is_remote, get_db_path, resolve_firm_id
 from firm.pulse import dblock
 from firm.pulse.orchestrator import pulse
 from firm.pulse.runner import make_runner
@@ -37,7 +37,7 @@ def run_pulse(
     *,
     dry_run: bool = False,
     abort: bool = False,
-    firm_id: str = "chrisai",
+    firm_id: str | None = None,
     only: str | None = None,
     drain_queue: bool = False,
 ) -> int:
@@ -48,7 +48,8 @@ def run_pulse(
         dry_run: If True, show who would activate without spawning.
         abort: If True, abort the live pulse — SIGTERM in-process children,
             then signal or clear the DB pulse_lock holder — and exit.
-        firm_id: Firm scope.
+        firm_id: Firm scope; None resolves to the firm this workspace's
+            db holds (see resolve_firm_id).
         only: Member id — Board-targeted pulse activating only this Member
             (frequency throttle waived for the target).
         drain_queue: Claim pending pulse_request rows and pulse once per
@@ -71,6 +72,16 @@ def run_pulse(
             "workspace": str(workspace),
         }))
         return 0
+
+    rconn = connect(db_path)
+    try:
+        firm_id = resolve_firm_id(rconn, firm_id)
+    except ValueError as exc:
+        print(json.dumps({"ok": False, "reason": "firm-id-unresolved",
+                          "message": str(exc)}))
+        return 1
+    finally:
+        rconn.close()
 
     # Preflight: don't spawn N doomed subprocesses (and write N failed
     # member_run rows) when the Member runtime isn't wired at all.
@@ -137,6 +148,14 @@ def _pulse_once(
     dry_run: bool = False, only: str | None = None,
 ) -> dict[str, Any]:
     """One pulse cycle → summary dict. Caller owns lock + connection."""
+    # Denials the policy gate logged since the last pulse become Records +
+    # escalations here — the hook may only append to a file, never open the
+    # DB, so the pulse carries its receipts the rest of the way (fork 009).
+    denied = 0
+    if not dry_run:
+        from firm.services import policy as policy_svc
+        denied = policy_svc.ingest_denials(conn, workspace, firm_id)
+
     runner = make_runner(firm_id, str(workspace))
     summary = pulse(conn, firm_id, runner, dry_run=dry_run, only_member_id=only)
 
@@ -147,6 +166,8 @@ def _pulse_once(
         "skipped": len(summary.skipped),
         "errors": len(summary.errors),
     }
+    if denied:
+        output["policy_denials_ingested"] = denied
 
     if summary.skipped:
         # Aggregate skip reasons so a 0-ran pulse explains itself
@@ -280,7 +301,7 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _handle_abort(workspace: Path, firm_id: str) -> int:
+def _handle_abort(workspace: Path, firm_id: str | None) -> int:
     """Abort a live pulse.
 
     Two layers. First, SIGTERM any subprocesses tracked in THIS process
@@ -309,6 +330,13 @@ def _handle_abort(workspace: Path, firm_id: str) -> int:
 
     conn = connect(db_path)
     try:
+        try:
+            firm_id = resolve_firm_id(conn, firm_id)
+        except ValueError as exc:
+            result["lock"] = "firm-id-unresolved"
+            result["message"] = str(exc)
+            print(json.dumps(result))
+            return 1
         holder = dblock.current_holder(conn, firm_id)
         if holder is None:
             result["lock"] = "none"
