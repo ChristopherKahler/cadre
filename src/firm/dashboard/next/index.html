@@ -1,0 +1,3775 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cadre</title>
+<style>
+/* ==========================================================================
+   Cadre — the Boardroom
+   Tactical Hub tokens. Stdlib-served, zero build, no network.
+   ========================================================================== */
+
+[data-theme="dark"]{
+  --canvas:#0f1211; --surface:#161a18; --raised:#1c211e;
+  --line:#252b27; --line-hi:#33403a;
+  --ink:#e8ebe9; --ink-2:#98a29c; --ink-3:#6b746f;
+  --green:#22c55e; --green-soft:#34d399; --green-dim:rgba(34,197,94,.10);
+  --gold:#d4a94a; --gold-dim:rgba(212,169,74,.10);
+  --red:#ef4444;
+  --glow:0 0 0 1px rgba(34,197,94,.20), 0 8px 32px rgba(34,197,94,.06);
+  --lift:0 1px 2px rgba(0,0,0,.24), 0 8px 28px rgba(0,0,0,.18);
+  --dot:rgba(255,255,255,.035);
+}
+[data-theme="light"]{
+  --canvas:#e9eae5; --surface:#fdfdfc; --raised:#ffffff;
+  --line:#dcdedb; --line-hi:#c2c7c1;
+  --ink:#12150f; --ink-2:#5a615a; --ink-3:#868d86;
+  --green:#2e7d32; --green-soft:#3f9142; --green-dim:rgba(46,125,50,.09);
+  --gold:#9a7420; --gold-dim:rgba(154,116,32,.10);
+  --red:#c0392b;
+  --glow:0 0 0 1px rgba(46,125,50,.18), 0 8px 32px rgba(46,125,50,.05);
+  --lift:0 1px 2px rgba(0,0,0,.06), 0 8px 28px rgba(0,0,0,.05);
+  --dot:rgba(0,0,0,.035);
+}
+
+/* 4px base. Every gap in the app is one of these — no orphan values. */
+:root{
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px;
+  --s6:32px; --s7:48px; --s8:64px; --s9:96px;
+  --r-sm:8px; --r:12px; --r-lg:16px; --r-full:9999px;
+  --ui:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  --mono:'SF Mono',ui-monospace,'JetBrains Mono',Menlo,monospace;
+  --ease:cubic-bezier(.22,.61,.36,1);
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+/* Tells the browser which way its own chrome goes — autofill, spinners, the caret,
+   scrollbars. Without it a form control paints white in dark mode no matter what
+   the CSS says. */
+[data-theme="dark"]{color-scheme:dark}
+[data-theme="light"]{color-scheme:light}
+input,textarea,select{
+  font:inherit;color:var(--ink);background-color:var(--surface);
+  border:1px solid var(--line);border-radius:var(--r);
+}
+input::placeholder,textarea::placeholder{color:var(--ink-3);opacity:1}
+/* Chrome paints autofilled fields a hard yellow-white; the inset shadow is the
+   only way to override it. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus{
+  -webkit-text-fill-color:var(--ink);
+  -webkit-box-shadow:0 0 0 1000px var(--surface) inset;
+  caret-color:var(--ink);
+  transition:background-color 9999s ease-out 0s;
+}
+body{
+  background:var(--canvas); color:var(--ink);
+  font:400 15px/1.55 var(--ui);
+  -webkit-font-smoothing:antialiased;
+  min-height:100vh;
+  background-image:radial-gradient(var(--dot) 1px, transparent 1px);
+  background-size:32px 32px;
+  transition:background-color 300ms var(--ease), color 300ms var(--ease);
+}
+h1,h2,h3{font-weight:600;letter-spacing:-.018em;line-height:1.2}
+h1{font-size:26px}
+h2{font-size:19px}
+h3{font-size:15px;letter-spacing:-.008em}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--green);outline-offset:3px;border-radius:var(--r-sm)}
+::selection{background:var(--green-dim);color:var(--ink)}
+
+.wrap{max-width:1080px;margin:0 auto;padding:var(--s7) var(--s5) var(--s9);
+  position:relative;z-index:1}
+/* Auto margins, or it pins to the left edge of the 1080px wrap and every centered
+   child inside it centers on the wrong axis. */
+.narrow{max-width:660px;margin-inline:auto}
+
+/* --- the view from the penthouse -----------------------------------------
+   A skyline you feel more than see. Inline SVG, so it follows the theme
+   tokens — silhouettes barely lighter than the night in dark, haze-grey in
+   light. Opacities stay whisper-low so type always wins. Only the boardroom
+   and the desk look out the window; the founding flow faces in. */
+.vista-sky{
+  position:fixed;inset:auto 0 0 0;width:100%;height:38vh;z-index:0;
+  pointer-events:none;opacity:0;transition:opacity 900ms var(--ease);
+}
+body.vista .vista-sky{opacity:1}
+.vista-sky .far{fill:var(--ink);fill-opacity:.028}
+.vista-sky .near{fill:var(--ink);fill-opacity:.05}
+.vista-sky .win{fill:var(--green);fill-opacity:.35;animation:window-life 11s ease-in-out infinite}
+.vista-sky .win.g{fill:var(--gold)}
+.vista-sky .win:nth-of-type(2n){animation-delay:-4s;animation-duration:17s}
+.vista-sky .win:nth-of-type(3n){animation-delay:-9s;animation-duration:23s}
+@keyframes window-life{0%,100%{fill-opacity:.10}50%{fill-opacity:.38}}
+/* daylight — windows don't glow at noon */
+[data-theme="light"] .vista-sky .win{fill-opacity:.12;animation:none}
+/* city glow — light pollution rising off the streets, breathing very slowly */
+body::after{
+  content:"";position:fixed;inset:auto 0 0 0;height:44vh;z-index:0;pointer-events:none;
+  opacity:0;transition:opacity 900ms var(--ease);
+  background:
+    radial-gradient(120% 62% at 50% 110%, var(--gold-dim), transparent 62%),
+    radial-gradient(85% 48% at 20% 108%, var(--green-dim), transparent 66%);
+}
+body.vista::after{opacity:.7;animation:city-breathe 26s ease-in-out infinite}
+@keyframes city-breathe{0%,100%{opacity:.45}50%{opacity:.8}}
+
+/* --- chrome ------------------------------------------------------------- */
+.top{
+  display:flex;align-items:center;justify-content:space-between;
+  gap:var(--s4);margin-bottom:var(--s7);
+}
+.brand{display:flex;align-items:baseline;gap:var(--s3);min-width:0}
+.brand .mark{
+  font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--green);
+}
+.brand .where{color:var(--ink-3);font-size:13px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tools{display:flex;align-items:center;gap:var(--s2);flex:none}
+
+.btn{
+  display:inline-flex;align-items:center;gap:var(--s2);
+  padding:8px 16px;border-radius:var(--r-full);
+  border:1px solid var(--line);background:var(--surface);
+  font-size:14px;font-weight:500;
+  transition:border-color 160ms var(--ease), background-color 160ms var(--ease),
+             transform 120ms var(--ease);
+}
+.btn:hover{border-color:var(--line-hi)}
+.btn:active{transform:translateY(1px)}
+.btn.primary{
+  background:var(--green);border-color:var(--green);color:#fff;
+  box-shadow:var(--glow);
+}
+[data-theme="light"] .btn.primary{color:#fff}
+.btn.primary:hover{background:var(--green-soft);border-color:var(--green-soft)}
+.btn.quiet{background:transparent;border-color:transparent;color:var(--ink-2)}
+.btn.quiet:hover{color:var(--ink);border-color:var(--line)}
+.btn.danger:hover{border-color:var(--red);color:var(--red)}
+.btn[disabled]{opacity:.4;pointer-events:none}
+.btn.icon{padding:8px;width:34px;height:34px;justify-content:center}
+
+/* --- the building --------------------------------------------------------
+   One column, stacked like the thing it is: the penthouse on top, every firm
+   a floor beneath it, the newest floor highest. No illustration — the stack
+   is the metaphor. Floor numbers follow founding order and never shuffle. */
+.building{display:flex;flex-direction:column;gap:var(--s2);max-width:840px;margin-inline:auto}
+#stack{display:flex;flex-direction:column;gap:var(--s2)}
+.storey{display:flex;gap:var(--s3);align-items:stretch}
+.storey>.lvl{
+  flex:none;width:34px;padding-top:var(--s5);text-align:right;
+  font-family:var(--mono);font-size:11px;color:var(--ink-3);
+  font-variant-numeric:tabular-nums;letter-spacing:.06em;user-select:none;
+}
+.storey[data-fid]>.lvl{cursor:grab}
+.grip{display:block;font-size:9px;letter-spacing:.02em;opacity:0;transition:opacity 140ms var(--ease)}
+.storey[data-fid]:hover .grip{opacity:1}
+.storey.dragging{opacity:.55}
+.storey.dragging .floor{border-color:color-mix(in srgb,var(--green) 45%,transparent)}
+.storey.ph>.lvl{color:var(--gold)}
+.ph-suite{
+  flex:1;min-width:0;text-align:left;
+  background:var(--surface);border:1px solid color-mix(in srgb,var(--gold) 30%,transparent);
+  border-radius:var(--r-lg);padding:var(--s5);box-shadow:var(--lift);
+  transition:border-color 180ms var(--ease);
+}
+.ph-suite:hover{border-color:color-mix(in srgb,var(--gold) 55%,transparent)}
+.ph-top{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s3)}
+.ph-open{font-size:13px;color:var(--gold);flex:none}
+.ph-suite .eyebrow{
+  font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--gold);margin-bottom:var(--s3);
+}
+.ph-suite p{color:var(--ink);font-size:16px;line-height:1.65;max-width:64ch}
+
+/* desk rows — a decision or a working member, one line, click lands on the floor */
+.deskrow{
+  display:flex;gap:var(--s3);align-items:baseline;width:100%;text-align:left;
+  padding:var(--s3) var(--s4);margin-bottom:6px;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);
+  font-size:14px;color:var(--ink-2);line-height:1.5;
+  transition:border-color 140ms var(--ease);
+}
+.deskrow:hover{border-color:var(--line-hi)}
+.deskrow b{color:var(--ink);font-weight:500}
+.deskrow .fname{
+  font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-3);flex:none;padding-top:3px;
+}
+.deskrow{cursor:pointer}
+.deskrow .grow{flex:1;min-width:0}
+
+/* co-board actions — summon / deploy / copy, living in the card's footer */
+.acts{margin-left:auto;display:flex;gap:6px;align-items:center}
+.act{
+  font-family:var(--mono);font-size:11px;letter-spacing:.02em;white-space:nowrap;
+  padding:3px 10px;border-radius:var(--r-full);
+  border:1px solid var(--line);color:var(--ink-3);background:transparent;
+  transition:border-color 140ms var(--ease), color 140ms var(--ease);
+}
+.act:hover:not([disabled]){border-color:var(--line-hi);color:var(--ink)}
+.act.on{border-color:var(--green);color:var(--green);background:var(--green-dim)}
+.act[disabled]{opacity:.55}
+
+/* per-decision copy — quiet until the row is under the cursor */
+.copychip{
+  flex:none;margin-left:auto;font-size:12px;line-height:1;
+  padding:3px 7px;border-radius:var(--r-sm);
+  border:1px solid var(--line);color:var(--ink-3);background:transparent;
+  opacity:0;transition:opacity 140ms var(--ease), border-color 140ms var(--ease);
+}
+.floor:hover .copychip,.deskrow:hover .copychip,.agrow:hover .copychip,
+.copychip:focus-visible,.copychip.on{opacity:1}
+.copychip:hover{border-color:var(--line-hi);color:var(--ink)}
+.copychip.on{border-color:var(--green);color:var(--green)}
+
+/* header runs indicator — appears only while a floor is actually working */
+.runswrap{position:relative}
+.runspill{
+  display:inline-flex;align-items:center;gap:7px;
+  font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums;
+  padding:4px 12px;border-radius:var(--r-full);
+  border:1px solid color-mix(in srgb,var(--green) 32%,transparent);
+  color:var(--green);background:transparent;
+}
+.runspill .dot{width:6px;height:6px;border-radius:var(--r-full);background:var(--green);
+  animation:breathe 2.2s var(--ease) infinite}
+.runspill:hover,.runspill.open{background:var(--green-dim)}
+.runsmenu{
+  position:absolute;right:0;top:calc(100% + 8px);z-index:60;width:min(380px,86vw);
+  background:var(--canvas);border:1px solid var(--line-hi);border-radius:var(--r-lg);
+  box-shadow:0 24px 64px rgba(0,0,0,.4);padding:var(--s2);
+  max-height:70vh;overflow-y:auto;
+  animation:fade 140ms var(--ease) both;
+}
+.runitem{padding:var(--s3) var(--s4);border-radius:var(--r-sm);cursor:pointer}
+.runitem:hover{background:var(--brand-hover-bg,rgba(255,255,255,.04))}
+.runitem + .runitem{border-top:1px solid var(--line)}
+.runhead{display:flex;align-items:baseline;gap:var(--s3)}
+.runhead b{color:var(--ink);font-weight:600;font-size:14px}
+.runhead .runct{font-family:var(--mono);font-size:11px;color:var(--green);margin-left:auto;flex:none}
+.runline{font-size:13px;color:var(--ink-2);line-height:1.6;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.runline .nm2{color:var(--ink)}
+.runacts{display:flex;gap:6px;margin-top:var(--s2)}
+
+/* the desk — an operations console, not a report */
+.console{
+  background:color-mix(in srgb, var(--canvas) 78%, transparent);
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  border:1px solid var(--line);border-radius:var(--r-lg);
+  padding:var(--s6);
+}
+
+/* decisions wear severity on the edge — red is earned, not implied.
+   gold = wants your verdict · red = severe block · neutral = routine block */
+.deskrow.gate{
+  border-left:3px solid var(--gold);
+  background:color-mix(in srgb,var(--gold) 4%,var(--surface));
+}
+.deskrow.esc{border-left:3px solid var(--line-hi)}
+.deskrow.esc.sev{
+  border-left-color:var(--red);
+  background:color-mix(in srgb,var(--red) 4%,var(--surface));
+}
+.kchip{
+  font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;
+  padding:2px 8px;border-radius:var(--r-full);flex:none;border:1px solid;
+}
+.kchip.gate{color:var(--gold);background:var(--gold-dim);
+  border-color:color-mix(in srgb,var(--gold) 35%,transparent)}
+.kchip.esc{color:var(--ink-3);background:transparent;border-color:var(--line-hi)}
+.kchip.esc.sev{color:var(--red);background:color-mix(in srgb,var(--red) 8%,transparent);
+  border-color:color-mix(in srgb,var(--red) 35%,transparent)}
+.dgroup-head .count{color:var(--gold)}
+.fstats .sw{color:var(--gold)}
+.fstats .sr{color:var(--green)}
+.deskside .check .box{color:var(--gold)}
+
+/* someone is actually at their desk — make it read like it */
+.deskrow.live{
+  position:relative;overflow:hidden;
+  border-color:color-mix(in srgb,var(--green) 45%,transparent);
+  box-shadow:var(--glow);
+}
+.deskrow.live > *{position:relative}
+.deskrow.live::before{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(115deg,transparent 0%,rgba(34,197,94,.05) 42%,
+             rgba(52,211,153,.10) 50%,rgba(34,197,94,.05) 58%,transparent 100%);
+  background-size:250% 100%;animation:sheen 4s linear infinite;
+}
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--s3);margin-bottom:var(--s6)}
+.kpi{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  padding:var(--s4) var(--s5);
+}
+.kpi .kv{font-size:28px;font-weight:600;letter-spacing:-.02em;line-height:1.15}
+.kpi .kl{font-size:12px;color:var(--ink-3);margin-top:4px}
+.kpi.hot{border-color:color-mix(in srgb,var(--gold) 45%,transparent)}
+.kpi.hot .kv{color:var(--gold)}
+.kpi.live{border-color:color-mix(in srgb,var(--green) 45%,transparent)}
+.kpi.live .kv{color:var(--green)}
+
+.deskcols{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:var(--s6);align-items:start}
+@media(max-width:980px){
+  .deskcols{grid-template-columns:1fr}
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+
+.dgroup{margin-bottom:var(--s5)}
+.dgroup-head{
+  display:flex;align-items:baseline;gap:var(--s3);cursor:pointer;
+  padding:var(--s1) 0;margin-bottom:var(--s2);
+}
+.dgroup-head b{font-size:14px;font-weight:600;color:var(--ink)}
+.dgroup-head .goto{
+  margin-left:auto;font-size:12px;color:var(--ink-3);flex:none;
+  opacity:0;transition:opacity 140ms var(--ease);
+}
+.dgroup-head:hover .goto,.dgroup-head:focus-visible .goto{opacity:1}
+
+.frow{
+  display:flex;align-items:center;gap:var(--s3);
+  padding:var(--s2) var(--s3);border-radius:var(--r-sm);cursor:pointer;
+  border:1px solid transparent;
+}
+.frow:hover{background:var(--surface);border-color:var(--line)}
+.frow .pip{flex:none}
+.frow .fmain{flex:1;min-width:0}
+.frow .fmain b{
+  display:block;font-size:13px;font-weight:500;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.frow .fstats{
+  display:block;font-family:var(--mono);font-size:10px;color:var(--ink-3);
+  font-variant-numeric:tabular-nums;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.frow .facts{
+  display:flex;gap:4px;flex:none;
+  opacity:0;transition:opacity 140ms var(--ease);
+}
+.frow:hover .facts,.frow:focus-within .facts{opacity:1}
+
+/* deploy sheet — pick the agenda before the terminal opens */
+.agrow{
+  display:flex;align-items:flex-start;gap:var(--s3);width:100%;text-align:left;
+  padding:var(--s3) var(--s4);margin-bottom:6px;border-radius:var(--r-sm);
+  border:1px solid var(--line);background:var(--surface);cursor:pointer;
+  font-size:14px;color:var(--ink-2);line-height:1.5;
+  transition:border-color 140ms var(--ease);
+}
+.agrow .grow{flex:1;min-width:0}
+.agrow:hover{border-color:var(--line-hi)}
+.agrow.on{border-color:color-mix(in srgb,var(--green) 45%,transparent);background:var(--green-dim)}
+.agrow .box{font-family:var(--mono);font-size:12px;color:var(--ink-3);flex:none;padding-top:2px}
+.agrow.on .box{color:var(--green)}
+.agrow b{color:var(--ink);font-weight:500}
+.storey.ground .floor{
+  display:flex;align-items:center;justify-content:center;
+  border-style:dashed;color:var(--ink-2);padding:var(--s4) var(--s5);
+}
+.storey.ground .floor:hover{color:var(--ink);transform:none;box-shadow:none}
+.floor{
+  position:relative;text-align:left;width:100%;flex:1;min-width:0;cursor:pointer;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);
+  padding:var(--s5);overflow:hidden;
+  transition:border-color 180ms var(--ease), transform 180ms var(--ease),
+             box-shadow 180ms var(--ease);
+}
+.floor:hover{border-color:var(--line-hi);transform:translateY(-1px);box-shadow:var(--lift)}
+.floor.attn{border-color:color-mix(in srgb, var(--gold) 45%, transparent)}
+.floor.live{border-color:color-mix(in srgb, var(--green) 45%, transparent)}
+
+.floor-head{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--s3)}
+.floor h2{font-size:17px}
+.floor .slug{
+  font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-3);margin-top:var(--s1);
+}
+.pip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;flex:none}
+.pip .dot{width:6px;height:6px;border-radius:var(--r-full);background:var(--ink-3)}
+.pip.live{color:var(--green)}
+.pip.live .dot{background:var(--green);animation:breathe 2.2s var(--ease) infinite}
+.pip.attn{color:var(--gold)}
+.pip.attn .dot{background:var(--gold)}
+@keyframes breathe{0%,100%{opacity:1}50%{opacity:.35}}
+
+.says{margin-top:var(--s4);display:flex;flex-direction:column;gap:var(--s2)}
+.says .line{font-size:14px;color:var(--ink-2);line-height:1.5;
+  display:flex;gap:var(--s2);align-items:baseline}
+.says .line b{color:var(--ink);font-weight:500}
+/* names sit in a fixed column so the ask text ledger-aligns across rows */
+.says .nm{flex:none;width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.says .grow{flex:1;min-width:0}
+.says .ask{color:var(--gold)}
+.says .quiet{color:var(--ink-3);font-style:italic}
+
+.meta{
+  margin-top:var(--s5);padding-top:var(--s3);border-top:1px solid var(--line);
+  display:flex;flex-wrap:wrap;gap:var(--s4);
+  font-family:var(--mono);font-size:11px;color:var(--ink-3);
+  font-variant-numeric:tabular-nums;
+}
+
+/* --- empty state -------------------------------------------------------- */
+.hollow{
+  min-height:62vh;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;text-align:center;gap:var(--s5);
+}
+.hollow h1{font-size:30px;font-weight:550}
+.hollow p{color:var(--ink-2);max-width:44ch;line-height:1.6}
+
+/* --- founding ----------------------------------------------------------- */
+.step{animation:rise 420ms var(--ease) both}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+.ask-head{margin-bottom:var(--s6)}
+.ask-head h1{margin-bottom:var(--s3)}
+.ask-head p{color:var(--ink-2);line-height:1.6;max-width:52ch}
+
+textarea.paragraph{
+  width:100%;min-height:200px;resize:vertical;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);
+  padding:var(--s5);font-size:17px;line-height:1.65;
+  transition:border-color 160ms var(--ease), box-shadow 160ms var(--ease);
+}
+textarea.paragraph::placeholder{color:var(--ink-3)}
+textarea.paragraph:focus{outline:none;border-color:var(--green);box-shadow:var(--glow)}
+
+.ask-foot{
+  display:flex;align-items:center;justify-content:space-between;
+  gap:var(--s4);margin-top:var(--s4);
+}
+.hint{color:var(--ink-3);font-size:13px}
+
+/* the wait — deliberation, not a spinner */
+.thinking{min-height:56vh;display:flex;flex-direction:column;justify-content:center}
+.thinking h2{margin-bottom:var(--s5);display:flex;align-items:center;gap:var(--s3)}
+.pulsebar{
+  width:100%;height:2px;border-radius:var(--r-full);
+  background:var(--line);overflow:hidden;margin-bottom:var(--s6);
+}
+/* The glow crosses at a constant speed and leaves the frame entirely before it
+   returns — linear, not eased, so it reads as a patrol rather than a lunge.
+   translateX is a % of the element's own width: at 40% wide, 250% puts its left
+   edge exactly on the container's right edge. */
+.pulsebar i{
+  display:block;height:100%;width:40%;border-radius:inherit;
+  background:linear-gradient(90deg,transparent,var(--green),transparent);
+  animation:sweep 3.2s linear infinite;
+}
+@keyframes sweep{from{transform:translateX(-100%)}to{transform:translateX(250%)}}
+
+/* honest expectations under the pulsebar — a few minutes, and a clock that
+   proves time is passing even when the agent is quiet */
+.stage-meta{
+  display:flex;align-items:baseline;justify-content:space-between;gap:var(--s3);
+  margin:calc(var(--s6) * -1 + var(--s2)) 0 var(--s5);
+  color:var(--ink-3);font-size:12.5px;
+}
+.stage-meta .clock{
+  font-family:var(--mono);font-size:11px;letter-spacing:.06em;
+  font-variant-numeric:tabular-nums;
+}
+
+.thoughts{display:flex;flex-direction:column;gap:var(--s3);min-height:180px}
+.thought{
+  display:flex;gap:var(--s3);align-items:baseline;
+  color:var(--ink-2);font-size:14px;line-height:1.55;
+  animation:rise 380ms var(--ease) both;
+}
+.thought .tick{color:var(--green);font-family:var(--mono);font-size:11px;flex:none}
+
+/* what the agent had to guess at — withheld until the Board asks to reroll */
+.tips{
+  background:var(--surface);border:1px solid color-mix(in srgb,var(--gold) 32%,transparent);
+  border-radius:var(--r);padding:var(--s4) var(--s5);
+}
+.tips .eyebrow{
+  font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--gold);margin-bottom:var(--s3);
+}
+.tip{
+  display:flex;gap:var(--s3);align-items:baseline;
+  color:var(--ink-2);font-size:14px;line-height:1.6;padding:3px 0;
+}
+.tip .tick{color:var(--gold);font-family:var(--mono);font-size:11px;flex:none}
+.thought.fade{color:var(--ink-3)}
+
+/* the slate — the hire */
+.slate-head{margin-bottom:var(--s6)}
+.slate-head .premise{
+  color:var(--ink-2);font-size:16px;line-height:1.6;margin-top:var(--s3);max-width:60ch;
+}
+.dept{margin-bottom:var(--s6)}
+.dept-name{
+  display:flex;align-items:baseline;gap:var(--s3);margin-bottom:var(--s4);
+  padding-bottom:var(--s2);border-bottom:1px solid var(--line);
+}
+.dept-name h3{font-family:var(--mono);font-size:11px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-3);font-weight:500}
+.dept-name .purpose{color:var(--ink-3);font-size:13px}
+
+.candidates{display:flex;flex-direction:column;gap:var(--s3)}
+.candidate{
+  display:flex;gap:var(--s4);align-items:flex-start;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  padding:var(--s4) var(--s5);
+  transition:border-color 160ms var(--ease), opacity 200ms var(--ease);
+}
+.candidate:hover{border-color:var(--line-hi)}
+.candidate.cut{opacity:.32}
+.candidate.cut .plate{text-decoration:line-through}
+
+.plate{flex:1;min-width:0}
+.plate .who{display:flex;align-items:baseline;gap:var(--s3);flex-wrap:wrap}
+.plate .name{font-size:16px;font-weight:600;letter-spacing:-.01em}
+.plate .role{color:var(--ink-2);font-size:14px}
+.tag{
+  font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;
+  padding:2px 7px;border-radius:var(--r-full);border:1px solid currentColor;
+}
+.tag.lead{color:var(--gold)}
+.tag.trust{color:var(--ink-3)}
+.plate .owns{color:var(--ink-2);font-size:14px;line-height:1.5;margin-top:6px;max-width:56ch}
+.plate .needs{
+  margin-top:var(--s3);display:flex;flex-wrap:wrap;gap:6px;
+}
+.chip{
+  font-size:11px;color:var(--ink-3);
+  border:1px solid var(--line);border-radius:var(--r-full);
+  padding:3px 9px;
+}
+.chip.gate{color:var(--gold);border-color:color-mix(in srgb,var(--gold) 30%,transparent)}
+
+/* the model pick — the cost lever, worn on the nameplate. Closed it reads as
+   a tag; clicked, it opens the three tiers with their price posture. */
+.modelwrap{position:relative;display:inline-flex}
+.modelpill{
+  font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;
+  display:inline-flex;align-items:center;gap:5px;
+  padding:2px 7px;border-radius:var(--r-full);
+  border:1px solid var(--line-hi);color:var(--ink-2);background:transparent;cursor:pointer;
+  transition:border-color 140ms var(--ease), color 140ms var(--ease);
+}
+.modelpill:hover,.modelpill.open{border-color:var(--green);color:var(--green)}
+.modelpill .caret{font-size:8px;opacity:.7}
+.modelmenu{
+  position:absolute;left:0;top:calc(100% + 6px);z-index:70;width:min(300px,80vw);
+  background:var(--canvas);border:1px solid var(--line-hi);border-radius:var(--r-lg);
+  box-shadow:0 24px 64px rgba(0,0,0,.4);padding:var(--s2);
+  animation:fade 140ms var(--ease) both;
+}
+.modelopt{
+  display:block;width:100%;text-align:left;cursor:pointer;
+  padding:var(--s3) var(--s4);border-radius:var(--r-sm);
+  background:transparent;border:0;color:var(--ink-2);
+}
+.modelopt:hover{background:var(--brand-hover-bg,rgba(255,255,255,.04))}
+.modelopt + .modelopt{border-top:1px solid var(--line)}
+.modelopt b{display:block;color:var(--ink);font-weight:600;font-size:13px}
+.modelopt.on b{color:var(--green)}
+.modelopt .mhint{display:block;font-size:12px;line-height:1.5;margin-top:2px}
+
+.slate-foot{
+  position:sticky;bottom:0;margin-top:var(--s7);
+  display:flex;align-items:center;justify-content:space-between;gap:var(--s4);
+  padding:var(--s4) 0;
+  background:linear-gradient(to top,var(--canvas) 62%,transparent);
+}
+.tally{color:var(--ink-2);font-size:14px}
+.tally b{color:var(--ink);font-weight:600}
+
+/* the welcome — the one moment in the product allowed to be a moment */
+/* Fill what's left of the viewport under the chrome and the wrap's own padding,
+   so "centered" means centered on screen rather than centered in a box. */
+.arrived{
+  min-height:calc(100vh - 230px);
+  display:flex;flex-direction:column;justify-content:center;
+  align-items:center;text-align:center;gap:var(--s4);
+}
+.arrived h1{font-size:32px}
+.arrived .sub{color:var(--ink-2);font-size:16px;line-height:1.65;max-width:50ch}
+
+/* the crest — the number is real: firms your Co-Board can run */
+.crest{
+  position:relative;width:104px;height:104px;margin-bottom:var(--s3);
+  display:flex;align-items:center;justify-content:center;
+}
+.crest-ring{
+  position:absolute;inset:0;border-radius:50%;
+  border:1px solid color-mix(in srgb,var(--green) 55%,transparent);
+  box-shadow:0 0 0 0 rgba(34,197,94,.35);
+  animation:crest-ring 2600ms var(--ease) 240ms infinite;
+}
+@keyframes crest-ring{
+  0%  {transform:scale(.94);box-shadow:0 0 0 0 rgba(34,197,94,.30)}
+  70% {transform:scale(1.06);box-shadow:0 0 0 22px rgba(34,197,94,0)}
+  100%{transform:scale(.94);box-shadow:0 0 0 0 rgba(34,197,94,0)}
+}
+.crest-core{
+  width:80px;height:80px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--green-dim);border:1px solid color-mix(in srgb,var(--green) 45%,transparent);
+  color:var(--green);font:650 34px/1 var(--ui);letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums;
+  animation:crest-core 760ms var(--ease) both;
+}
+@keyframes crest-core{
+  from{opacity:0;transform:scale(.6)}
+  62% {transform:scale(1.09)}
+  to  {opacity:1;transform:scale(1)}
+}
+
+/* a staggered arrival, so the page assembles itself instead of appearing */
+.rise-1{animation:rise 520ms var(--ease) 200ms both}
+.rise-2{animation:rise 520ms var(--ease) 340ms both}
+.rise-3{animation:rise 520ms var(--ease) 480ms both;width:100%;max-width:440px}
+.rise-4{animation:rise 520ms var(--ease) 900ms both}
+
+/* the firm's card on the alive screen — it lights up when the floor wakes */
+.firmcard{
+  width:100%;max-width:560px;margin-top:var(--s4);text-align:left;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);
+  padding:var(--s5);
+  transition:border-color 300ms var(--ease), box-shadow 300ms var(--ease);
+}
+.firmcard.live{border-color:color-mix(in srgb,var(--green) 45%,transparent);box-shadow:var(--glow)}
+.fc-head{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--s3)}
+.fc-head h3{font-size:16px}
+.fc-head .slug{
+  font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-3);margin-top:var(--s1);
+}
+.fc-actions{display:flex;gap:var(--s2);margin-top:var(--s4);flex-wrap:wrap}
+@media (max-width:640px){ .fc-actions .btn{flex:1;justify-content:center} }
+.nameplates{display:flex;flex-direction:column;gap:var(--s2);margin:var(--s3) 0}
+.nameplate{
+  display:flex;align-items:baseline;gap:var(--s3);
+  padding:var(--s3) var(--s4);
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);
+  border-left:2px solid var(--green);
+  animation:plate 500ms var(--ease) both;
+}
+@keyframes plate{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
+.nameplate .name{font-weight:600}
+.nameplate .role{color:var(--ink-2);font-size:14px}
+
+/* the people you just hired, kept in frame through the form-y middle */
+.crewline{color:var(--ink-2);font-size:14px;margin-top:var(--s3)}
+.crewline b{color:var(--ink);font-weight:500}
+
+/* the Board's pen on the loadout — every chip removable before it's law */
+.chip .chipx,.owns .chipx{
+  cursor:pointer;color:var(--ink-3);font-size:10px;margin-left:4px;
+  opacity:0;transition:opacity 140ms var(--ease), color 140ms var(--ease);
+}
+.chip:hover .chipx,.owns:hover .chipx{opacity:1}
+.chip .chipx:hover,.owns .chipx:hover{color:var(--red)}
+
+/* exclude-in-place — quiet ✕ on every pick row */
+.pick .exx{
+  flex:none;font-size:11px;line-height:1;color:var(--ink-3);
+  padding:3px 6px;border-radius:var(--r-sm);
+  opacity:0;transition:opacity 140ms var(--ease), color 140ms var(--ease);
+}
+.pick:hover .exx{opacity:1}
+.pick .exx:hover{color:var(--red)}
+
+/* the die — pull a fresh name from the pool */
+.who .dice{
+  font-size:14px;line-height:1;padding:2px 6px;border-radius:var(--r-sm);
+  color:var(--ink-3);opacity:0;
+  transition:opacity 140ms var(--ease), color 140ms var(--ease);
+}
+.candidate:hover .who .dice,.who .dice:focus-visible{opacity:1}
+.who .dice:hover{color:var(--green)}
+
+/* click-to-rename — names are yours to change */
+.plate .name[contenteditable],h1[contenteditable]{cursor:text;border-radius:4px}
+.plate .name[contenteditable]:hover,h1[contenteditable]:hover{
+  box-shadow:0 1px 0 0 var(--ink-3);
+}
+.plate .name[contenteditable]:focus,h1[contenteditable]:focus{
+  outline:none;box-shadow:0 1px 0 0 var(--green);
+}
+
+/* ---- Equip: the armory ------------------------------------------------- */
+.stage-head{margin-bottom:var(--s6)}
+.stage-head .step-of{
+  font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-3);margin-bottom:var(--s3);
+}
+.stage-head h1{margin-bottom:var(--s3)}
+.stage-head p{color:var(--ink-2);line-height:1.6;max-width:58ch}
+
+/* BASE — the engine of the Ferrari. It gets the loudest card on the page. */
+.trophy{
+  position:relative;overflow:hidden;
+  background:var(--surface);border:1px solid color-mix(in srgb,var(--green) 45%,transparent);
+  border-radius:var(--r-lg);padding:var(--s5);margin-bottom:var(--s6);
+  box-shadow:var(--glow);
+}
+.trophy::before{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(115deg,transparent 0%,rgba(34,197,94,.05) 40%,
+             rgba(52,211,153,.10) 50%,rgba(34,197,94,.05) 60%,transparent 100%);
+  background-size:250% 100%;animation:sheen 5s linear infinite;
+}
+@keyframes sheen{from{background-position:120% 0}to{background-position:-120% 0}}
+.trophy > *{position:relative}
+.trophy-head{display:flex;align-items:baseline;gap:var(--s3);flex-wrap:wrap}
+.trophy-head h2{font-size:20px}
+.trophy-head .ver{
+  font-family:var(--mono);font-size:11px;color:var(--green);
+  border:1px solid color-mix(in srgb,var(--green) 35%,transparent);
+  border-radius:var(--r-full);padding:2px 9px;
+}
+.trophy .tagline{color:var(--ink-2);font-size:14px;margin-top:6px;line-height:1.55}
+.trophy .exts{
+  margin-top:var(--s5);display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:var(--s2);
+}
+.ext{
+  display:flex;align-items:baseline;gap:var(--s2);
+  padding:var(--s2) var(--s3);border-radius:var(--r-sm);
+  background:var(--green-dim);border:1px solid transparent;
+  font-size:13px;
+}
+.ext .n{font-weight:600;color:var(--ink)}
+.ext .v{font-family:var(--mono);font-size:10px;color:var(--ink-3)}
+.trophy.absent{border-color:var(--line);box-shadow:none}
+.trophy.absent::before{display:none}
+.trophy.absent .trophy-head h2{color:var(--ink-2)}
+
+.rack{margin-bottom:var(--s6)}
+.rack-head{
+  display:flex;align-items:baseline;justify-content:space-between;gap:var(--s3);
+  margin-bottom:var(--s4);padding-bottom:var(--s2);border-bottom:1px solid var(--line);
+}
+.rack-head h3{
+  font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:500;
+}
+.rack-head .count{font-size:13px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+
+.picks{display:flex;flex-direction:column;gap:6px}
+.pick{
+  display:flex;align-items:center;gap:var(--s3);text-align:left;width:100%;
+  padding:var(--s3) var(--s4);border-radius:var(--r-sm);
+  background:var(--surface);border:1px solid var(--line);
+  transition:border-color 140ms var(--ease), background-color 140ms var(--ease);
+}
+.pick:hover{border-color:var(--line-hi)}
+.pick.on{border-color:var(--green);background:var(--green-dim)}
+.pick .box{
+  width:16px;height:16px;flex:none;border-radius:4px;border:1px solid var(--line-hi);
+  display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--green);
+}
+.pick.on .box{border-color:var(--green)}
+.pick .n{font-weight:500;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.pick .src{
+  font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-3);border:1px solid var(--line);border-radius:var(--r-full);
+  padding:2px 7px;flex:none;
+}
+.pick .keyneed{font-size:11px;color:var(--gold);flex:none}
+.pick .grow{flex:1}
+.pick.have{opacity:.55;pointer-events:none}
+.pick.have .box{border-color:var(--green);background:var(--green-dim)}
+
+.pick .desc{
+  font-size:12px;color:var(--ink-3);flex:none;
+  max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.pick .n.mono{font-family:var(--mono);font-size:13px}
+
+/* filter — its own control, not a squashed textarea */
+.filterbar{
+  display:flex;align-items:center;gap:var(--s2);
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r-full);
+  padding:0 var(--s4);margin-bottom:var(--s3);
+  transition:border-color 160ms var(--ease), box-shadow 160ms var(--ease);
+}
+.filterbar:focus-within{border-color:var(--green);box-shadow:var(--glow)}
+.filterbar .mag{color:var(--ink-3);font-size:15px;flex:none;line-height:1}
+.filterbar input{
+  flex:1;min-width:0;background:none;border:none;outline:none;border-radius:0;
+  color:var(--ink);font:400 14px/1 var(--ui);padding:11px 0;
+}
+.filterbar input::placeholder{color:var(--ink-3)}
+.filterbar input::-webkit-search-cancel-button{
+  -webkit-appearance:none;appearance:none;
+  width:14px;height:14px;cursor:pointer;
+  background:var(--ink-3);
+  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 4l8 8M12 4l-8 8' stroke='black' stroke-width='2' fill='none'/%3E%3C/svg%3E") center/contain no-repeat;
+}
+.filterbar input::-webkit-search-cancel-button:hover{background:var(--ink)}
+
+.scrollpicks{max-height:300px;overflow-y:auto;padding-right:2px}
+.scrollpicks::-webkit-scrollbar{width:8px}
+.scrollpicks::-webkit-scrollbar-thumb{
+  background:var(--line-hi);border-radius:var(--r-full);
+}
+.scrollpicks::-webkit-scrollbar-track{background:transparent}
+
+.cli-row{display:flex;flex-wrap:wrap;gap:6px}
+.cli{
+  display:inline-flex;align-items:center;gap:6px;
+  font-family:var(--mono);font-size:12px;
+  padding:4px 10px;border-radius:var(--r-full);
+  border:1px solid var(--line);color:var(--ink-3);
+}
+.cli.on{color:var(--ink-2)}
+.cli.live{color:var(--green);border-color:color-mix(in srgb,var(--green) 32%,transparent)}
+.cli.warn{color:var(--gold);border-color:color-mix(in srgb,var(--gold) 30%,transparent)}
+.cli.off{opacity:.5;text-decoration:line-through}
+
+.voice{
+  width:100%;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  padding:var(--s4);font-size:15px;line-height:1.6;color:var(--ink);
+}
+textarea.voice{min-height:110px;resize:vertical}
+input.voice{padding:11px var(--s4)}
+.voice:focus{outline:none;border-color:var(--green);box-shadow:var(--glow)}
+.voice::placeholder{color:var(--ink-3)}
+
+.folders{display:flex;flex-direction:column;gap:6px;margin-bottom:var(--s3)}
+.folder{
+  display:flex;align-items:center;gap:var(--s3);
+  padding:var(--s2) var(--s4);border-radius:var(--r-sm);
+  background:var(--surface);border:1px solid var(--line);
+  font-family:var(--mono);font-size:12px;color:var(--ink-2);
+}
+.folder .grow{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.folder .n{color:var(--ink-3);flex:none}
+
+/* browse modal — never a native dialog */
+.scrim{
+  position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(2px);
+  display:flex;align-items:center;justify-content:center;padding:var(--s5);z-index:50;
+  animation:fade 180ms var(--ease) both;
+}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.sheet{
+  background:var(--canvas);border:1px solid var(--line-hi);border-radius:var(--r-lg);
+  width:min(560px,100%);max-height:76vh;display:flex;flex-direction:column;
+  box-shadow:0 24px 64px rgba(0,0,0,.4);
+  animation:rise 240ms var(--ease) both;
+}
+.sheet header{
+  padding:var(--s4) var(--s5);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:var(--s3);
+}
+.sheet header .here{
+  flex:1;font-family:var(--mono);font-size:12px;color:var(--ink-2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;
+}
+.sheet .body{overflow-y:auto;padding:var(--s3) var(--s3)}
+.sheet footer{
+  padding:var(--s4) var(--s5);border-top:1px solid var(--line);
+  display:flex;gap:var(--s2);justify-content:flex-end;
+}
+.dirrow{
+  display:flex;align-items:center;gap:var(--s3);width:100%;text-align:left;
+  padding:var(--s3) var(--s4);border-radius:var(--r-sm);font-size:14px;
+}
+.dirrow:hover{background:var(--brand-hover-bg,rgba(255,255,255,.04))}
+.dirrow .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.dirrow .docs{font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+
+.stage-foot{
+  position:sticky;bottom:0;margin-top:var(--s7);
+  display:flex;align-items:center;justify-content:space-between;gap:var(--s4);
+  padding:var(--s4) 0;
+  background:linear-gradient(to top,var(--canvas) 62%,transparent);
+}
+
+/* ---- the level-up ------------------------------------------------------ */
+/* The only number here is real: how many firms this Co-Board can actually run. */
+.levelup{
+  position:relative;overflow:hidden;
+  background:var(--surface);border:1px solid color-mix(in srgb,var(--green) 40%,transparent);
+  border-radius:var(--r-lg);padding:var(--s6) var(--s5);margin-bottom:var(--s6);
+  text-align:center;box-shadow:var(--glow);
+}
+.levelup::before{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(115deg,transparent 0%,rgba(34,197,94,.06) 42%,
+             rgba(52,211,153,.12) 50%,rgba(34,197,94,.06) 58%,transparent 100%);
+  background-size:250% 100%;animation:sheen 4s linear infinite;
+}
+.levelup > *{position:relative}
+.lvl-row{
+  display:flex;align-items:baseline;justify-content:center;gap:var(--s4);
+  margin-bottom:var(--s2);
+}
+.lvl-was{font-size:20px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.lvl-arrow{color:var(--ink-3);font-size:16px}
+.lvl-now{
+  font-size:30px;font-weight:650;letter-spacing:-.02em;color:var(--green);
+  font-variant-numeric:tabular-nums;
+  animation:pop 620ms var(--ease) both;
+}
+@keyframes pop{
+  from{opacity:0;transform:scale(.86)}
+  60%{transform:scale(1.04)}
+  to{opacity:1;transform:none}
+}
+
+.briefdoc{
+  background:var(--canvas);border:1px solid var(--line);border-radius:var(--r);
+  padding:var(--s5);max-height:420px;overflow-y:auto;
+  font:400 14px/1.7 var(--ui);color:var(--ink-2);
+  white-space:pre-wrap;
+}
+.briefdoc:focus{outline:none;border-color:var(--green);box-shadow:var(--glow)}
+
+/* readiness — hiring is not outfitting */
+.ready{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  padding:var(--s5);margin:var(--s3) 0;
+}
+.ready .eyebrow{
+  font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-3);margin-bottom:var(--s4);
+}
+.check{
+  display:flex;align-items:center;gap:var(--s3);
+  padding:var(--s2) 0;font-size:14px;color:var(--ink-2);
+}
+.check .box{
+  width:16px;height:16px;flex:none;border-radius:4px;
+  border:1px solid var(--line-hi);
+  display:flex;align-items:center;justify-content:center;
+  font-size:10px;color:var(--green);
+}
+.check.done .box{border-color:var(--green);background:var(--green-dim)}
+.check.done .what{color:var(--ink)}
+/* A thing you could have but don't need. Not a failure — a fact. */
+.check.soft{opacity:.6}
+.check.soft .box{border-style:dashed;color:var(--ink-3)}
+.check .what{flex:1;min-width:0}
+.check .det{font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+.check .stage{
+  font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--gold);border:1px solid color-mix(in srgb,var(--gold) 30%,transparent);
+  border-radius:var(--r-full);padding:2px 8px;flex:none;
+}
+
+/* the last step — it's alive */
+.golive{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  padding:var(--s5);margin-top:var(--s4);opacity:.55;
+  transition:opacity 300ms var(--ease), border-color 300ms var(--ease),
+             box-shadow 300ms var(--ease);
+}
+.golive.armed{opacity:1;border-color:color-mix(in srgb,var(--green) 40%,transparent);
+  box-shadow:var(--glow)}
+.golive-head{margin-bottom:var(--s4)}
+.golive-head h3{margin-bottom:4px}
+.cadence{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+.tick{
+  padding:6px 12px;border-radius:var(--r-full);
+  border:1px solid var(--line);font-size:13px;font-variant-numeric:tabular-nums;
+  color:var(--ink-2);
+  transition:border-color 140ms var(--ease), color 140ms var(--ease);
+}
+.tick:hover:not([disabled]){border-color:var(--line-hi);color:var(--ink)}
+.tick.on{border-color:var(--green);color:var(--green);background:var(--green-dim)}
+.tick[disabled]{opacity:.45;pointer-events:none}
+.cadence .btn.primary{margin-left:auto}
+.alive{
+  margin-top:var(--s4);padding:var(--s3) var(--s4);
+  border-left:2px solid var(--green);background:var(--green-dim);
+  border-radius:var(--r-sm);font-size:14px;color:var(--ink);
+  animation:rise 420ms var(--ease) both;
+}
+
+/* gaps — facts about the firm, colour-coded by how much they actually cost */
+.gap{
+  background:var(--surface);border:1px solid var(--line);border-left-width:3px;
+  border-radius:var(--r);padding:var(--s4) var(--s5);margin-bottom:var(--s2);
+}
+.gap-head{display:flex;align-items:center;gap:var(--s3);margin-bottom:6px}
+.gap-head b{font-size:15px}
+.gap .sev{
+  font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;
+  border:1px solid currentColor;border-radius:var(--r-full);padding:2px 8px;
+}
+.gap .gap-what{color:var(--ink);font-size:14px;line-height:1.55}
+.gap .why{color:var(--ink-3);font-size:13px;line-height:1.55;margin-top:6px}
+.gap.sev-blocking{border-left-color:var(--red)}
+.gap.sev-blocking .sev{color:var(--red)}
+.gap.sev-limiting{border-left-color:var(--gold)}
+.gap.sev-limiting .sev{color:var(--gold)}
+.gap.sev-recommendation{border-left-color:var(--line-hi)}
+.gap.sev-recommendation .sev{color:var(--ink-3)}
+
+.oops{
+  background:var(--surface);border:1px solid var(--red);border-radius:var(--r);
+  padding:var(--s4) var(--s5);color:var(--ink);margin-bottom:var(--s4);
+}
+.oops .why{color:var(--ink-2);font-size:14px;margin-top:6px}
+
+.loading{color:var(--ink-3);padding:var(--s8);text-align:center}
+
+@media (max-width:640px){
+  .wrap{padding:var(--s5) var(--s4) var(--s8)}
+  h1{font-size:23px}
+  .hollow h1,.arrived h1{font-size:25px}
+  .storey>.lvl{width:22px;font-size:10px}
+  .candidate{flex-direction:column;gap:var(--s3)}
+  .slate-foot{flex-direction:column;align-items:stretch}
+  .slate-foot .btn{justify-content:center}
+  textarea.paragraph{font-size:16px;min-height:170px}
+}
+
+/* Decoration stops. The progress sweep does not — it is the only thing telling the
+   Board the founding agent is still alive, so it degrades to an in-place pulse
+   (no translation, no vestibular load) rather than freezing mid-track. */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    animation-duration:.01ms !important;animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+  }
+  .pulsebar i{
+    width:100% !important;transform:none !important;
+    animation:softpulse 2s ease-in-out infinite !important;
+    animation-duration:2s !important;animation-iteration-count:infinite !important;
+  }
+}
+@keyframes softpulse{0%,100%{opacity:.25}50%{opacity:1}}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="loading">Opening the building…</div></div>
+
+<!-- the skyline outside the boardroom window — see .vista-sky -->
+<svg class="vista-sky" viewBox="0 0 1600 420" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
+  <g class="far">
+    <rect x="30" y="150" width="90" height="270"/><rect x="150" y="210" width="70" height="210"/>
+    <rect x="300" y="120" width="60" height="300"/><rect x="430" y="230" width="110" height="190"/>
+    <rect x="620" y="90" width="75" height="330"/><rect x="760" y="190" width="95" height="230"/>
+    <rect x="930" y="140" width="65" height="280"/><rect x="1060" y="240" width="120" height="180"/>
+    <rect x="1250" y="110" width="80" height="310"/><rect x="1420" y="200" width="100" height="220"/>
+    <rect x="655" y="40" width="3" height="50"/><rect x="1287" y="65" width="3" height="45"/>
+  </g>
+  <g class="near">
+    <rect x="80" y="260" width="120" height="160"/><rect x="240" y="300" width="90" height="120"/>
+    <rect x="370" y="250" width="80" height="170"/><rect x="520" y="310" width="130" height="110"/>
+    <rect x="700" y="270" width="90" height="150"/><rect x="850" y="320" width="110" height="100"/>
+    <rect x="1010" y="280" width="85" height="140"/><rect x="1140" y="250" width="95" height="170"/>
+    <rect x="1300" y="300" width="120" height="120"/><rect x="1470" y="270" width="90" height="150"/>
+  </g>
+  <g>
+    <rect class="win" x="642" y="120" width="4" height="5"/>
+    <rect class="win g" x="60" y="180" width="4" height="5"/>
+    <rect class="win" x="320" y="150" width="4" height="5"/>
+    <rect class="win g" x="455" y="262" width="4" height="5"/>
+    <rect class="win" x="1270" y="140" width="4" height="5"/>
+    <rect class="win g" x="785" y="215" width="4" height="5"/>
+    <rect class="win" x="950" y="170" width="4" height="5"/>
+    <rect class="win g" x="1080" y="262" width="4" height="5"/>
+    <rect class="win" x="334" y="195" width="4" height="5"/>
+    <rect class="win g" x="170" y="238" width="4" height="5"/>
+    <rect class="win" x="656" y="160" width="4" height="5"/>
+    <rect class="win g" x="1445" y="232" width="4" height="5"/>
+    <rect class="win" x="1285" y="185" width="4" height="5"/>
+    <rect class="win g" x="1330" y="330" width="4" height="5"/>
+    <rect class="win" x="100" y="290" width="4" height="5"/>
+  </g>
+</svg>
+
+<script>
+'use strict';
+
+/* ---------------------------------------------------------------- plumbing */
+const $ = (h) => { const d = document.createElement('div'); d.innerHTML = h.trim(); return d.firstElementChild; };
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const app = document.getElementById('app');
+
+async function GET(p){ const r = await fetch(p); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+async function POST(p, body){
+  const r = await fetch(p, {method:'POST', headers:{'Content-Type':'application/json'},
+                           body: JSON.stringify(body || {})});
+  return r.json();
+}
+
+function ago(iso){
+  if(!iso) return 'never';
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if(s < 90) return 'just now';
+  if(s < 5400) return Math.round(s/60) + 'm ago';
+  if(s < 129600) return Math.round(s/3600) + 'h ago';
+  return Math.round(s/86400) + 'd ago';
+}
+const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+
+/* Theme follows the OS unless the Board says otherwise. */
+const THEME_KEY = 'cadre.theme';
+function theme(next){
+  const t = next || localStorage.getItem(THEME_KEY) ||
+    (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  document.documentElement.dataset.theme = t;
+  if(next) localStorage.setItem(THEME_KEY, t);
+  return t;
+}
+theme();
+
+/* ------------------------------------------------------------------- state */
+const S = { firms: [], job: null, cursor: 0, thoughts: [], proposal: null,
+            cut: new Set(), modelMenu: null, founded: null, readiness: null, interval: '30m',
+            survey: null, surveyFor: null, picked: new Set(), folders: [],
+            skills: new Set(), cmds: new Set(), filter: '',
+            voiceTools: '', voiceKnow: '', browse: null,
+            wireJob: null, wireCursor: 0, plan: null, lastGaps: [],
+            autoPulse: true, channel: 'none', alive: null, manifest: null,
+            briefJob: null, briefCursor: 0, brief: null, coboard: null,
+            paragraph: '', tips: [], sheet: null, reworking: false,
+            coboardCount: 0,
+            crew: [], crewFor: null, chToken: '', chTarget: '', watching: null,
+            notifyPresets: null, chPreset: null,
+            reco: null, recoFor: null, recoApplied: {},
+            leanMode: false,
+            notes: '', notesTimer: null, dragging: false,
+            deploy: null, runsOpen: false,
+            error: null };
+
+/* ------------------------------------------------------------------ chrome */
+function runsIndicator(){
+  const live = (S.firms || []).filter(f => (f.running || 0) > (f.stale_runs || 0));
+  if(!live.length){ S.runsOpen = false; return ''; }
+  const runs = (f) => Math.max(0, f.running - f.stale_runs);
+  const total = live.reduce((n, f) => n + runs(f), 0);
+  return `
+  <div class="runswrap">
+    <button class="runspill${S.runsOpen ? ' open' : ''}" id="runspill"
+      title="${plural(total, 'active run')} across ${plural(live.length, 'firm')}"
+      aria-expanded="${!!S.runsOpen}">
+      <span class="dot"></span>${total}
+    </button>
+    <div class="runsmenu" id="runsmenu" ${S.runsOpen ? '' : 'hidden'}>
+      ${live.map(f => `
+        <div class="runitem" role="link" tabindex="0" data-walk="/f/${esc(f.id)}/">
+          <div class="runhead">
+            <b>${esc(f.name)}</b>
+            <span class="runct">${plural(runs(f), 'run')} · ${esc(ago(f.last_run_at))}</span>
+          </div>
+          ${(f.in_flight || []).slice(0, 3).map(r => `
+            <div class="runline"><span class="nm2">${esc(r.who)}</span> is on ${esc(r.on)}</div>`).join('')}
+          <div class="runacts">
+            <button class="act" data-summon="${esc(f.id)}"
+              title="Open a Co-Board terminal on this firm — blank session">▶ Summon</button>
+            <button class="act" data-deploy="${esc(f.id)}"
+              title="Pick gates and escalations, then open a targeted session">☰ Deploy</button>
+            <button class="act" data-copyboot="${esc(f.id)}"
+              title="Copy a boot prompt for a session that's already open">⧉ Boot</button>
+          </div>
+        </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+function chrome(where){
+  return `
+  <div class="top">
+    <div class="brand">
+      <span class="mark">Cadre</span>
+      <span class="where">${esc(where)}</span>
+    </div>
+    <div class="tools">
+      ${runsIndicator()}
+      <button class="btn icon quiet" id="theme" title="Switch theme" aria-label="Switch theme">◐</button>
+    </div>
+  </div>`;
+}
+
+function mount(html){
+  app.innerHTML = html;
+  const t = document.getElementById('theme');
+  if(t) t.onclick = () => theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+  const rp = document.getElementById('runspill');
+  if(rp) rp.onclick = (e) => {
+    e.stopPropagation();
+    const m = document.getElementById('runsmenu');
+    S.runsOpen = m.hidden;
+    m.hidden = !m.hidden;
+    rp.classList.toggle('open', S.runsOpen);
+    rp.setAttribute('aria-expanded', String(S.runsOpen));
+  };
+  wireRail();   // walk/copy/summon/deploy targets exist in the chrome menu too
+}
+
+/* --------------------------------------------------------------- boardroom */
+const pad2 = (n) => String(n).padStart(2, '0');
+
+/* The server owns the floor numbers now — the Board's saved arrangement first,
+   founding order for anything never arranged. Sort ascending: floor 01 first. */
+function byFloor(firms){
+  return [...firms].sort((a, b) => (a.floor || 0) - (b.floor || 0) ||
+    String(a.founded_at || '').localeCompare(String(b.founded_at || '')));
+}
+
+/* --- co-board pointers — one builder behind every copy and deploy surface.
+   Pointers, not payloads: the session resolves live state itself, so the
+   copied text can never go stale. */
+function pointer(fid, d){
+  return d.kind === 'gate'
+    ? `Address gate ${d.id} on ${fid} — ${d.who} asks: "${d.ask}".`
+    : `Address escalation ${d.id} on ${fid} — ${d.who} is blocked: "${d.ask}".`;
+}
+function sevClass(d){
+  if(d.kind === 'gate') return 'gate';
+  const severe = ['high', 'critical', 'blocking']
+    .includes(String(d.severity || '').toLowerCase());
+  return severe ? 'esc sev' : 'esc';
+}
+function bootPointer(f){
+  return `If this session is not already a boardroom session, read ~/.claude/commands/boardroom.md and follow it now, scoped to ${f.id}. Then boot into ${f.id} — run the boardroom brief for this floor and hold for my direction.`;
+}
+async function copyText(btn, text){
+  // The dash is often browsed at http://firm.dash — a non-secure origin, where
+  // navigator.clipboard does not exist. Fall back to the selection dance.
+  let ok = true;
+  try{
+    if(window.isSecureContext && navigator.clipboard){
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      ok = document.execCommand('copy');
+      ta.remove();
+    }
+  }catch(e){ ok = false; }
+  const was = btn.textContent;
+  btn.textContent = ok ? '✓' : '✕';
+  if(ok) btn.classList.add('on'); else btn.title = 'copy failed';
+  setTimeout(() => { btn.textContent = was; btn.classList.remove('on'); }, 1600);
+}
+
+function floorRow(f, n){
+  const live = f.running > f.stale_runs;
+  const attn = f.needs_you > 0;
+  const decisions = f.decisions || [];
+  const flight = f.in_flight || [];
+  const shipped = f.shipped || [];
+
+  const says = [];
+  for(const d of decisions.slice(0, 2)){
+    const verb = d.kind === 'gate' ? 'needs a decision' : 'is blocked';
+    says.push(`<div class="line ask">
+      <b class="nm">${esc(d.who)}</b>
+      <span class="grow">${verb}: ${esc(d.ask)}</span>
+      <button class="copychip" data-copydec="${esc(f.id)}|${d.kind}|${esc(d.id)}"
+        title="Copy this ${d.kind} for the Co-Board">⧉</button>
+    </div>`);
+  }
+  for(const r of flight.slice(0, 2)){
+    says.push(`<div class="line"><b class="nm">${esc(r.who)}</b><span class="grow">is on ${esc(r.on)}.</span></div>`);
+  }
+  if(!decisions.length && !flight.length){
+    if(shipped.length){
+      says.push(`<div class="line">Last shipped <b>${esc(shipped[0].what)}</b> ${esc(ago(shipped[0].at))}.</div>`);
+    } else {
+      says.push(`<div class="line quiet">Nothing to report yet.</div>`);
+    }
+  }
+
+  const pip = live
+    ? `<span class="pip live"><span class="dot"></span>${plural(f.running, 'run')}</span>`
+    : attn
+      ? `<span class="pip attn"><span class="dot"></span>Needs you</span>`
+      : `<span class="pip"><span class="dot"></span>Quiet</span>`;
+
+  return `
+  <div class="storey" data-fid="${esc(f.id)}">
+    <div class="lvl" title="Drag to move this floor"><span class="grip">⋮⋮</span>${pad2(n)}</div>
+    <div class="floor${attn ? ' attn' : ''}${live ? ' live' : ''}"
+         role="link" tabindex="0" data-walk="/f/${esc(f.id)}/">
+      <div class="floor-head">
+        <div>
+          <h2>${esc(f.name)}</h2>
+          <div class="slug">${esc(f.id)}</div>
+        </div>
+        ${pip}
+      </div>
+      <div class="says">${says.join('')}</div>
+      <div class="meta">
+        <span>${f.members_active}/${f.members_total} on staff</span>
+        <span>${f.shipped_this_week || 0} shipped this week</span>
+        <span>$${(f.spend_usd || 0).toFixed(2)} payroll</span>
+        <span>${esc(ago(f.last_run_at))}</span>
+        <span class="acts">
+          <button class="act" data-summon="${esc(f.id)}"
+            title="Open a Co-Board terminal on this firm — blank session">Summon</button>
+          <button class="act" data-deploy="${esc(f.id)}"
+            title="Pick gates and escalations, then open a targeted session">Deploy</button>
+          <button class="act" data-copyboot="${esc(f.id)}"
+            title="Copy a boot prompt for a session that's already open">⧉ Boot</button>
+        </span>
+      </div>
+    </div>
+  </div>`;
+}
+
+function deskNumbers(firms){
+  return {
+    needs: firms.reduce((n, f) => n + (f.needs_you || 0), 0),
+    running: firms.reduce((n, f) => n + Math.max(0, f.running - f.stale_runs), 0),
+    week: firms.reduce((n, f) => n + (f.shipped_this_week || 0), 0),
+    payroll: firms.reduce((n, f) => n + (f.spend_usd || 0), 0),
+  };
+}
+
+function phSuite(firms){
+  const {needs, running, week, payroll} = deskNumbers(firms);
+  const bits = [];
+  bits.push(`You are the Board of ${plural(firms.length, 'firm')}.`);
+  if(week) bits.push(`They shipped ${plural(week, 'thing')} in the last seven days.`);
+  if(running) bits.push(`${plural(running, 'member')} ${running === 1 ? 'is' : 'are'} working right now.`);
+  bits.push(needs
+    ? `${plural(needs, 'decision')} ${needs === 1 ? 'is' : 'are'} waiting on you.`
+    : `Nothing is waiting on you.`);
+
+  return `
+  <div class="storey ph">
+    <div class="lvl">PH</div>
+    <button class="ph-suite" onclick="go('#/desk')">
+      <div class="ph-top">
+        <div class="eyebrow">The boardroom · this morning</div>
+        <span class="ph-open">Open the desk →</span>
+      </div>
+      <p>${esc(bits.join(' '))}</p>
+      <div class="meta">
+        <span>${plural(needs, 'decision')} waiting</span>
+        <span>${running} working now</span>
+        <span>${week} shipped this week</span>
+        <span>$${payroll.toFixed(2)} payroll to date</span>
+      </div>
+    </button>
+  </div>`;
+}
+
+function viewBoardroom(){
+  if(!S.firms.length) return viewHollow();
+  const rows = byFloor(S.firms)
+    .map((f, i) => ({f, n: f.floor || i + 1}))
+    .reverse()                                    // top floor renders first
+    .map(({f, n}) => floorRow(f, n)).join('');
+  mount(`
+    ${chrome('The boardroom')}
+    <div class="building">
+      ${phSuite(S.firms)}
+      <div id="stack">${rows}</div>
+      <div class="storey ground">
+        <div class="lvl"></div>
+        <button class="floor" onclick="go('#/found')">＋ Found another firm — add a floor</button>
+      </div>
+    </div>
+    ${S.deploy ? deploySheet() : ''}
+  `);
+  wireDrag();
+  if(S.deploy) wireDeploySheet();
+}
+
+/* --- summon / deploy / copy ----------------------------------------------
+   Summon opens a blank Co-Board terminal scoped to the firm. Deploy opens the
+   same terminal with an agenda picked here. Copy serves the session that's
+   already open — same pointers, your clipboard instead of a new tab. */
+function wireRail(){
+  // Cards and desk rows are divs now (buttons can't nest buttons), so they
+  // carry their destination and the inner controls stop the walk themselves.
+  for(const el of document.querySelectorAll('[data-walk]')){
+    el.onclick = () => { location.href = el.dataset.walk; };
+    el.onkeydown = (e) => { if(e.key === 'Enter' && e.target === el) location.href = el.dataset.walk; };
+  }
+  for(const b of document.querySelectorAll('[data-copydec]')){
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const [fid, kind, id] = b.dataset.copydec.split('|');
+      const f = S.firms.find(x => x.id === fid);
+      const d = f && (f.decisions || []).find(x => x.kind === kind && String(x.id) === id);
+      if(d) copyText(b, pointer(fid, d));
+    };
+  }
+  for(const b of document.querySelectorAll('[data-summon]')){
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      const was = b.textContent;
+      b.disabled = true; b.textContent = '…';
+      let r;
+      try{ r = await POST('/api/next/launch', {firm_id: b.dataset.summon}); }
+      catch(err){ r = {ok: false, error: String(err)}; }
+      b.textContent = r.ok ? '✓' : '✕';
+      if(r.ok) b.classList.add('on'); else b.title = r.error || 'could not open a terminal';
+      setTimeout(() => {
+        b.textContent = was; b.classList.remove('on'); b.disabled = false;
+      }, 2200);
+    };
+  }
+  for(const b of document.querySelectorAll('[data-deploy]')){
+    b.onclick = (e) => {
+      e.stopPropagation();
+      S.deploy = {fid: b.dataset.deploy, sel: new Set(), text: ''};
+      repaint();   // the sheet opens on whatever view asked for it
+    };
+  }
+  for(const b of document.querySelectorAll('[data-copyboot]')){
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const f = S.firms.find(x => x.id === b.dataset.copyboot);
+      if(f) copyText(b, bootPointer(f));
+    };
+  }
+}
+
+function deploySheet(){
+  const f = S.firms.find(x => x.id === S.deploy.fid);
+  if(!f) return '';
+  const ds = f.decisions || [];
+  const gates = ds.filter(d => d.kind === 'gate');
+  const escs = ds.filter(d => d.kind === 'escalation');
+  const row = (d) => {
+    const k = d.kind + ':' + d.id;
+    const on = S.deploy.sel.has(k);
+    return `<div class="agrow${on ? ' on' : ''}" data-ag="${esc(k)}"
+         role="checkbox" aria-checked="${on}" tabindex="0">
+      <span class="box">${on ? '✓' : '·'}</span>
+      <span class="grow"><b>${esc(d.who)}</b> ${d.kind === 'gate' ? 'asks' : 'is blocked'}: ${esc(d.ask)}</span>
+      <button class="copychip" data-copydec="${esc(f.id)}|${d.kind}|${esc(d.id)}"
+        title="Copy just this one for an open session">⧉</button>
+    </div>`;
+  };
+  return `
+  <div class="scrim" onclick="if(event.target===this) closeDeploy()">
+    <div class="sheet" role="dialog" aria-label="Deploy the Co-Board">
+      <header><span class="here" style="direction:ltr;font-family:var(--ui);font-size:15px;font-weight:600;color:var(--ink)">
+        Deploy the Co-Board — ${esc(f.name)}</span></header>
+      <div class="body" style="padding:var(--s5)">
+        ${gates.length ? `<div class="eyebrow" style="margin-bottom:var(--s2)">Gates waiting</div>
+          ${gates.map(row).join('')}` : ''}
+        ${escs.length ? `<div class="eyebrow" style="margin:var(--s3) 0 var(--s2)">Escalations open</div>
+          ${escs.map(row).join('')}` : ''}
+        ${!ds.length ? `<p class="hint">No open gates or escalations — the agenda is whatever you write below.</p>` : ''}
+        <textarea class="voice" id="deploy-extra" style="min-height:96px;margin-top:var(--s3)"
+          placeholder="Anything else for the agenda — one item per line.">${esc(S.deploy.text)}</textarea>
+        <p class="hint" style="margin-top:var(--s2)">
+          Deploy opens a terminal already addressing these. Copy puts the same
+          agenda on your clipboard for a session that's already open.
+        </p>
+        <div class="oops" id="deploy-err" hidden style="margin-top:var(--s3)"></div>
+      </div>
+      <footer>
+        <button class="btn quiet" onclick="closeDeploy()">Cancel</button>
+        <button class="btn" id="deploy-copy">Copy agenda</button>
+        <button class="btn primary" id="deploy-go">Deploy Co-Board</button>
+      </footer>
+    </div>
+  </div>`;
+}
+
+function wireDeploySheet(){
+  const agenda = () => {
+    const f = S.firms.find(x => x.id === S.deploy.fid);
+    const lines = [];
+    for(const d of ((f && f.decisions) || [])){
+      if(S.deploy.sel.has(d.kind + ':' + d.id)) lines.push('- ' + pointer(f.id, d));
+    }
+    const extra = document.getElementById('deploy-extra').value;
+    for(const t of extra.split('\n')) if(t.trim()) lines.push('- ' + t.trim());
+    return lines.join('\n');
+  };
+  for(const b of document.querySelectorAll('[data-ag]')){
+    b.onclick = () => {
+      S.deploy.text = document.getElementById('deploy-extra').value;  // keep typing across the repaint
+      const k = b.dataset.ag;
+      if(S.deploy.sel.has(k)) S.deploy.sel.delete(k); else S.deploy.sel.add(k);
+      repaint();
+    };
+    b.onkeydown = (e) => {
+      if((e.key === 'Enter' || e.key === ' ') && e.target === b){ e.preventDefault(); b.onclick(); }
+    };
+  }
+  document.getElementById('deploy-copy').onclick = (e) => {
+    const a = agenda();
+    if(a) copyText(e.target, a);
+  };
+  document.getElementById('deploy-go').onclick = async (e) => {
+    const go2 = e.target;
+    go2.disabled = true; go2.textContent = 'Opening…';
+    let r;
+    try{ r = await POST('/api/next/launch', {firm_id: S.deploy.fid, agenda: agenda()}); }
+    catch(err){ r = {ok: false, error: String(err)}; }
+    if(r.ok) return closeDeploy();
+    go2.disabled = false; go2.textContent = 'Deploy Co-Board';
+    const err = document.getElementById('deploy-err');
+    if(err){ err.hidden = false; err.textContent = r.error || 'Could not open a terminal.'; }
+  };
+}
+window.closeDeploy = () => { S.deploy = null; repaint(); };
+
+/* Re-render the view the Board is actually on — no navigation, no refetch. */
+function repaint(){
+  const h = location.hash || '#/';
+  if(h === '#/desk') return viewDesk(false);
+  if(h.startsWith('#/found')) return go('#/');   // founding flow has no sheet surface
+  viewBoardroom();
+}
+
+/* --- rearranging the building --------------------------------------------
+   Grab a floor by its number and move it. The order lives at the firms root,
+   so the stack and the firm-switcher dropdown agree on every device. */
+function wireDrag(){
+  const stack = document.getElementById('stack');
+  if(!stack) return;
+  let dragEl = null;
+  for(const row of stack.querySelectorAll('.storey[data-fid]')){
+    // Arm from anywhere on the row — a drag moves the floor, a plain click
+    // still walks it. Grabbing only the number was too subtle to discover.
+    row.addEventListener('mousedown', () => { row.draggable = true; });
+    row.addEventListener('mouseup',   () => { row.draggable = false; });
+    row.addEventListener('dragstart', (e) => {
+      dragEl = row; S.dragging = true;
+      row.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      try{ e.dataTransfer.setData('text/plain', row.dataset.fid); }catch(_){ }
+    });
+    row.addEventListener('dragend', () => {
+      row.classList.remove('dragging');
+      row.draggable = false;
+      dragEl = null; S.dragging = false;
+      // Commit, then repaint from state — the numbers can never go stale.
+      commitFloors(stack).then(viewBoardroom);
+    });
+  }
+  stack.addEventListener('dragover', (e) => {
+    if(!dragEl) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const others = [...stack.querySelectorAll('.storey[data-fid]:not(.dragging)')];
+    const next = others.find(r => {
+      const b = r.getBoundingClientRect();
+      return e.clientY < b.top + b.height / 2;
+    });
+    if(next) stack.insertBefore(dragEl, next); else stack.appendChild(dragEl);
+    renumber(stack);
+  });
+  stack.addEventListener('drop', (e) => e.preventDefault());
+}
+
+function renumber(stack){
+  const rows = [...stack.querySelectorAll('.storey[data-fid]')];   // top → bottom
+  const n = rows.length;
+  rows.forEach((r, i) => {
+    const lvl = r.querySelector('.lvl');
+    // Touch only the number's text node — the grip span keeps its identity.
+    if(lvl && lvl.lastChild) lvl.lastChild.textContent = pad2(n - i);
+  });
+}
+
+async function commitFloors(stack){
+  const topDown = [...stack.querySelectorAll('.storey[data-fid]')].map(r => r.dataset.fid);
+  const order = topDown.slice().reverse();        // bottom-up: floor 01 first
+  const rank = new Map(order.map((fid, i) => [fid, i + 1]));
+  S.firms.forEach(f => { if(rank.has(f.id)) f.floor = rank.get(f.id); });
+  try{ await POST('/api/next/prefs', {floor_order: order}); }
+  catch(e){ /* the next hub fetch restores the saved truth */ }
+}
+
+/* ------------------------------------------------------------------- desk */
+async function viewDesk(refresh = true){
+  if(refresh){
+    try{
+      const d = await GET('/api/next/hub');
+      S.firms = d.firms || [];
+      if(d.prefs && typeof d.prefs.notes === 'string') S.notes = d.prefs.notes;
+    }catch(e){}
+  }
+  if(!S.firms.length) return go('#/');
+
+  const firms = byFloor(S.firms).reverse();       // top floor first, like the stack
+  const waiting = [];
+  const flight = [];
+  for(const f of firms){
+    for(const d of (f.decisions || [])) waiting.push({f, d});
+    for(const r of (f.in_flight || [])) flight.push({f, r});
+  }
+
+  // Signals — the same real numbers as the cards, read across every floor.
+  const sig = [];
+  for(const f of firms){
+    if(f.stale_runs) sig.push(`${f.name} has ${plural(f.stale_runs, 'stale run')} — a spawn likely died. Walk the floor.`);
+    if(!f.last_run_at){ sig.push(`${f.name} has never run. Pulse it once to see it move.`); continue; }
+    const days = Math.floor((Date.now() - new Date(f.last_run_at).getTime()) / 86400000);
+    if(days >= 3) sig.push(`${f.name} has been quiet for ${plural(days, 'day')}.`);
+  }
+  const big = [...firms].sort((a, b) => (b.spend_usd || 0) - (a.spend_usd || 0))[0];
+  if(big && big.spend_usd) sig.push(`${big.name} carries the largest payroll to date — $${big.spend_usd.toFixed(2)}.`);
+
+  const {needs, running, week} = deskNumbers(firms);
+
+  const payroll = firms.reduce((n, f) => n + (f.spend_usd || 0), 0);
+  const grouped = firms.filter(f => (f.decisions || []).length);
+
+  // One compact row per firm — the whole portfolio's state at a glance,
+  // with the operational verbs (pulse / summon / deploy / boot) in-row.
+  const frow = (f) => {
+    const liveN = Math.max(0, (f.running || 0) - (f.stale_runs || 0));
+    const needsN = (f.decisions || []).length;
+    return `
+    <div class="frow" role="link" tabindex="0" data-walk="/f/${esc(f.id)}/">
+      <span class="pip${liveN ? ' live' : needsN ? ' attn' : ''}"><span class="dot"></span></span>
+      <div class="fmain">
+        <b>${esc(f.name)}</b>
+        <span class="fstats">${needsN ? `<span class="sw">${needsN} waiting</span> · ` : ''}${liveN ? `<span class="sr">${liveN} running</span> · ` : ''}${f.shipped_this_week || 0} shipped/wk · ${esc(ago(f.last_run_at))}</span>
+      </div>
+      <span class="facts">
+        <button class="act" data-pulse="${esc(f.id)}" title="Pulse — wake whatever is due">⟳</button>
+        <button class="act" data-summon="${esc(f.id)}" title="Open a Co-Board terminal — blank session">▶</button>
+        <button class="act" data-deploy="${esc(f.id)}" title="Pick gates and escalations, then open a targeted session">☰</button>
+        <button class="act" data-copyboot="${esc(f.id)}" title="Copy a boot prompt for an open session">⧉</button>
+      </span>
+    </div>`;
+  };
+
+  mount(`
+    ${chrome('The desk')}
+    <div class="step console">
+      <div class="kpis">
+        <div class="kpi${needs ? ' hot' : ''}"><div class="kv">${needs}</div><div class="kl">${needs === 1 ? 'decision waits' : 'decisions wait'} on you</div></div>
+        <div class="kpi${running ? ' live' : ''}"><div class="kv">${running}</div><div class="kl">working right now</div></div>
+        <div class="kpi"><div class="kv">${week}</div><div class="kl">shipped this week</div></div>
+        <div class="kpi"><div class="kv">$${payroll.toFixed(2)}</div><div class="kl">payroll to date</div></div>
+      </div>
+
+      <div class="deskcols">
+        <div class="deskmain">
+          <div class="rack">
+            <div class="rack-head"><h3>Waiting on you</h3>
+              <span class="count">${waiting.length ? plural(waiting.length, 'decision') : 'clear'}</span></div>
+            ${grouped.length ? grouped.map(f => `
+              <div class="dgroup">
+                <div class="dgroup-head" role="link" tabindex="0" data-walk="/f/${esc(f.id)}/">
+                  <b>${esc(f.name)}</b>
+                  <span class="count">${plural(f.decisions.length, 'decision')}</span>
+                  <span class="goto">walk the floor →</span>
+                </div>
+                ${f.decisions.map(d => `
+                  <div class="deskrow ${sevClass(d)}" role="link" tabindex="0" data-walk="/f/${esc(f.id)}/">
+                    <span class="kchip ${sevClass(d)}">${d.kind === 'gate' ? 'gate' : esc(d.severity || 'blocked')}</span>
+                    <span class="grow"><b>${esc(d.who)}</b> ${d.kind === 'gate' ? 'needs a decision' : 'is blocked'}: ${esc(d.ask)}</span>
+                    <button class="copychip" data-copydec="${esc(f.id)}|${d.kind}|${esc(d.id)}"
+                      title="Copy this ${d.kind} for an open Co-Board session">⧉</button>
+                  </div>`).join('')}
+              </div>`).join('')
+            : `<p class="hint">No gates, no escalations. The floors are handling it.</p>`}
+          </div>
+
+          ${flight.length ? `
+          <div class="rack">
+            <div class="rack-head"><h3>On the floors</h3>
+              <span class="count">${plural(flight.length, 'member')} working</span></div>
+            ${flight.map(({f, r}) => `
+              <div class="deskrow live" role="link" tabindex="0" data-walk="/f/${esc(f.id)}/">
+                <span class="pip live"><span class="dot"></span></span>
+                <span class="fname">${esc(f.id)}</span>
+                <span class="grow"><b>${esc(r.who)}</b> is on ${esc(r.on)}.</span>
+              </div>`).join('')}
+          </div>` : ''}
+
+          <div class="rack">
+            <div class="rack-head"><h3>The desk pad</h3>
+              <span class="count" id="padsaved"></span></div>
+            <textarea class="voice" id="deskpad" style="min-height:140px"
+              placeholder="Notes to yourself. They stay on this desk — every device, every session.">${esc(S.notes || '')}</textarea>
+          </div>
+        </div>
+
+        <aside class="deskside">
+          <div class="rack">
+            <div class="rack-head"><h3>The floors</h3>
+              <span class="count">${plural(firms.length, 'firm')}</span></div>
+            ${firms.map(frow).join('')}
+            <button class="tick" onclick="go('#/found')" style="margin-top:var(--s3)">＋ Found a firm</button>
+          </div>
+
+          <div class="rack">
+            <div class="rack-head"><h3>Signals</h3></div>
+            ${sig.length ? sig.slice(0, 6).map(s => `
+              <div class="check"><span class="box">·</span><span class="what">${esc(s)}</span></div>`).join('')
+            : `<p class="hint">Nothing unusual on any floor.</p>`}
+          </div>
+        </aside>
+      </div>
+
+      <div class="stage-foot">
+        <span class="tally"></span>
+        <button class="btn quiet" onclick="go('#/')">Back to the boardroom</button>
+      </div>
+    </div>
+    ${S.deploy ? deploySheet() : ''}
+  `);
+
+  if(S.deploy) wireDeploySheet();
+  for(const b of document.querySelectorAll('[data-pulse]')){
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      b.disabled = true; b.textContent = '…';
+      let r;
+      try{ r = await POST('/f/' + b.dataset.pulse + '/api/action/pulse/firm', {}); }
+      catch(err){ r = {ok: false}; }
+      b.textContent = r.ok ? '✓' : '✕';
+      if(r.ok) b.classList.add('on'); else { b.title = 'Could not wake it'; b.disabled = false; }
+    };
+  }
+  const pad = document.getElementById('deskpad');
+  pad.oninput = () => {
+    S.notes = pad.value;
+    clearTimeout(S.notesTimer);
+    S.notesTimer = setTimeout(async () => {
+      try{
+        await POST('/api/next/prefs', {notes: S.notes});
+        const el = document.getElementById('padsaved');
+        if(el){
+          el.textContent = 'saved';
+          setTimeout(() => { if(el.textContent === 'saved') el.textContent = ''; }, 1800);
+        }
+      }catch(e){}
+    }, 900);
+  };
+}
+
+function viewHollow(){
+  mount(`
+    ${chrome('')}
+    <div class="hollow">
+      <h1>The building is empty.</h1>
+      <p>Every floor is yours. You just haven't hired anyone yet.</p>
+      <button class="btn primary" onclick="go('#/found')">Found a firm</button>
+    </div>
+  `);
+}
+
+/* ---------------------------------------------------------------- founding */
+function viewAsk(){
+  mount(`
+    ${chrome('Founding a firm')}
+    <div class="narrow step">
+      <div class="ask-head">
+        <h1>What does this company do?</h1>
+        <p>Write it the way you'd explain it to someone you just hired. A paragraph is plenty —
+           what the business is, what has to happen for it to move, and what you want out of it.</p>
+      </div>
+      ${S.error ? `<div class="oops">${esc(S.error)}</div>` : ''}
+      ${(S.tips || []).length ? `
+        <div class="tips" style="margin-bottom:var(--s4)">
+          <div class="eyebrow">What it had to guess at last time</div>
+          ${S.tips.map(t => `<div class="tip"><span class="tick">·</span><span>${esc(t)}</span></div>`).join('')}
+        </div>` : ''}
+      <textarea class="paragraph" id="brief" autofocus spellcheck="true"
+        placeholder="We publish a weekly newsletter for solo operators…">${esc(S.paragraph || '')}</textarea>
+      <div class="ask-foot">
+        <span class="hint">⌘↵ to send</span>
+        <div style="display:flex;gap:var(--s2)">
+          <button class="btn quiet" onclick="go('#/')">Back</button>
+          <button class="btn primary" id="send">Design the org</button>
+        </div>
+      </div>
+    </div>
+  `);
+  S.error = null;
+  const box = document.getElementById('brief');
+  const send = document.getElementById('send');
+  box.oninput = () => { S.paragraph = box.value; };
+  const fire = async () => {
+    const brief = box.value.trim();
+    if(brief.length < 20){ S.error = 'Tell me a little more about the business.'; return viewAsk(); }
+    S.paragraph = brief;
+    send.disabled = true;
+    const r = await POST('/api/next/found', {brief});
+    if(!r.ok){ S.error = r.error || 'Could not reach the founding agent.'; return viewAsk(); }
+    S.job = r.job_id; S.cursor = 0; S.thoughts = []; S.reworking = false;
+    go('#/found/thinking');
+  };
+  send.onclick = fire;
+  box.onkeydown = (e) => { if((e.metaKey || e.ctrlKey) && e.key === 'Enter') fire(); };
+  box.focus();
+}
+
+function viewThinking(){
+  mount(`
+    ${chrome('Founding a firm')}
+    <div class="narrow step thinking">
+      <h2>${S.reworking ? 'Reworking the org.' : 'Designing the org.'}</h2>
+      <div class="pulsebar"><i></i></div>
+      <div class="stage-meta">
+        <span>This usually takes a few minutes — it's doing real work.</span>
+        <span class="clock" id="elapsed">0:00</span>
+      </div>
+      <div class="thoughts" id="thoughts" aria-live="polite"></div>
+      <div style="margin-top:var(--s6)">
+        <button class="btn quiet" id="stop">Stop</button>
+      </div>
+    </div>
+  `);
+  document.getElementById('stop').onclick = async () => {
+    stageStop();
+    if(S.job) await POST('/api/next/cancel', {job_id: S.job});
+    S.job = null; go('#/found');
+  };
+  stageStart(S.reworking ? 'rework' : 'found');
+  poll();
+}
+
+/* --- the deliberation stage ----------------------------------------------
+   The agent reads for a minute before it says a word — dead air that feels
+   broken, then a dump. So the STAGE owns the pacing, not the network:
+   scripted beats (generic, true, the same every run) start at second zero
+   and cover the whole silent stretch; at most REAL_MAX genuine agent lines
+   are spliced in as flavor; and the finale beat ALWAYS plays in full, even
+   when the run finished early — the ending is a beat, not a page load. */
+const REAL_MAX = 3;
+const FINALE_MS = 10000;
+
+const CHOREO = {
+  found: {
+    beats: [
+      [0,  'Reading the directive.'],
+      [4,  'Sizing the business — what has to move, and how often.'],
+      [9,  'Determining the north star.'],
+      [15, 'Studying the org-design playbook.'],
+      [22, 'Drafting the org shape — operations first, then desks.'],
+      [30, 'Hiring the lead.'],
+      [39, 'The lead is recruiting the team.'],
+      [49, 'Writing role charters — who owns what.'],
+      [60, 'Setting trust levels — what needs your sign-off.'],
+      [72, 'Chaining reporting lines.'],
+      [85, 'Stress-testing the slate against the directive.'],
+    ],
+    holds: ['Weighing one more candidate.', 'Still negotiating a contract.',
+            'Rebalancing workloads.'],
+    finale: 'Finalizing the roster.',
+  },
+  rework: {
+    beats: [
+      [0,  'Reading your notes.'],
+      [4,  'Marking what stays — you only lose what you objected to.'],
+      [10, 'Reworking the org around your objections.'],
+      [18, 'Re-negotiating the affected contracts.'],
+      [28, 'Checking the new shape against the directive.'],
+      [40, 'Re-chaining reporting lines.'],
+    ],
+    holds: ['Still reworking.', 'Rebalancing the roster.'],
+    finale: 'Finalizing the roster.',
+  },
+  wiring: {
+    beats: [
+      [0,  'Reading the roster — who was hired to do what.'],
+      [4,  'Opening the armory — everything you put on the table.'],
+      [10, 'Matching tools to desks.'],
+      [18, 'Assigning skills and commands, member by member.'],
+      [28, 'Attaching knowledge to the people who need it.'],
+      [40, 'Withholding everything else — the loadout is the law.'],
+      [54, 'Auditing for gaps — what this team still cannot do.'],
+      [70, 'Classifying the gaps by what they cost.'],
+    ],
+    holds: ['Still auditing gaps.', 'Double-checking a loadout.'],
+    finale: 'Sealing the loadouts.',
+  },
+  brief: {
+    beats: [
+      [0,  'Pulling the charter.'],
+      [5,  'Reading the roster — names, desks, trust levels.'],
+      [12, 'Learning the cadence — when this floor wakes.'],
+      [20, 'Noting the gaps it should watch for.'],
+      [30, 'Writing the brief in its own words.'],
+      [44, 'Reading it back against the firm.'],
+    ],
+    holds: ['Still writing the brief.'],
+    finale: 'Committing this firm to memory.',
+  },
+};
+
+let STAGE = null;
+
+function stageStart(key){
+  stageStop();
+  STAGE = {key, t0: Date.now(), idx: 0, real: [], realUsed: 0,
+           holdIdx: 0, lastAt: -99, timer: null};
+  S.thoughts = [];
+  paintThoughts();
+  stageTick();
+}
+
+function stageTick(){
+  const st = STAGE;
+  if(!st) return;
+  if(!document.getElementById('thoughts')) return stageStop();   // navigated away
+  const cfg = CHOREO[st.key];
+  const t = (Date.now() - st.t0) / 1000;
+  const since = t - st.lastAt;
+
+  const clock = document.getElementById('elapsed');
+  if(clock){
+    const s = Math.floor(t);
+    clock.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  if(st.idx < cfg.beats.length && t >= cfg.beats[st.idx][0]){
+    S.thoughts.push(cfg.beats[st.idx][1]);
+    st.idx++; st.lastAt = t;
+    paintThoughts();
+  } else if(st.real.length && st.realUsed < REAL_MAX && st.idx >= 2 && since >= 5){
+    // a genuine agent thought, spliced between beats — flavor, not transcript
+    S.thoughts.push(st.real.shift());
+    st.realUsed++; st.lastAt = t;
+    paintThoughts();
+  } else if(st.idx >= cfg.beats.length && since >= 16){
+    S.thoughts.push(cfg.holds[st.holdIdx++ % cfg.holds.length]);
+    st.lastAt = t;
+    paintThoughts();
+  }
+  st.timer = setTimeout(stageTick, 400);
+}
+
+/* Real narration from the run lands in the reservoir; the stage decides
+   when (and whether) each line gets air time. */
+function stageReal(lines){
+  if(STAGE) STAGE.real.push(...lines);
+}
+
+/* The run is done. Play the finale beat in full, THEN move — the wait is
+   the experience sealing itself, not the user waiting. If the Board leaves
+   mid-finale (Stop, back), the delayed hop is abandoned, never forced. */
+function stageFinale(then){
+  const st = STAGE;
+  if(!st) return then();
+  clearTimeout(st.timer);
+  STAGE = null;
+  S.thoughts.push(CHOREO[st.key].finale);
+  paintThoughts();
+  const here = location.hash;
+  setTimeout(() => { if(location.hash === here) then(); }, FINALE_MS);
+}
+
+function stageStop(){
+  if(STAGE && STAGE.timer) clearTimeout(STAGE.timer);
+  STAGE = null;
+}
+
+function paintThoughts(){
+  const box = document.getElementById('thoughts');
+  if(!box) return;
+  const recent = S.thoughts.slice(-5);
+  box.innerHTML = recent.map((t, i) => `
+    <div class="thought${i < recent.length - 3 ? ' fade' : ''}">
+      <span class="tick">·</span><span>${esc(t)}</span>
+    </div>`).join('') || `<div class="thought fade"><span class="tick">·</span><span>Thinking…</span></div>`;
+}
+
+async function poll(){
+  if(!S.job || location.hash !== '#/found/thinking') return;
+  let r;
+  try{ r = await GET('/api/next/found/' + S.job + '?cursor=' + S.cursor); }
+  catch(e){ setTimeout(poll, 1500); return; }
+
+  if(r.narration && r.narration.length){
+    stageReal(r.narration);
+    S.cursor = r.cursor;
+  }
+  if(r.status === 'ready'){
+    S.proposal = r.proposal; S.cut = new Set(); S.job = null;
+    return stageFinale(() => go('#/found/roster'));
+  }
+  if(r.status === 'failed' || !r.ok){
+    S.error = r.error || 'The founding agent could not finish.';
+    S.job = null; stageStop();
+    return go('#/found');
+  }
+  setTimeout(poll, 600);
+}
+
+function candidateRow(m, i){
+  const cut = S.cut.has(m.name);
+  const gates = (m.gates || []).slice(0, 3);
+  return `
+  <div class="candidate${cut ? ' cut' : ''}">
+    <div class="plate">
+      <div class="who">
+        <span class="name" contenteditable="true" spellcheck="false" title="Click to rename"
+              data-i="${i}" onkeydown="nameKey(event)" onblur="saveName(this)">${esc(m.name)}</span>
+        <button class="dice" onclick="rollName(${i})" title="Roll a new name">⚄</button>
+        <span class="role">${esc(m.role)}</span>
+        ${m.leads ? '<span class="tag lead">Leads</span>' : ''}
+        <span class="tag trust">Probationary</span>
+        ${modelPick(m, i)}
+      </div>
+      <div class="owns">${esc(m.owns)}</div>
+      ${gates.length ? `<div class="needs">
+        ${gates.map(g => `<span class="chip gate">Asks you: ${esc(g)}</span>`).join('')}
+        ${(m.skills || []).slice(0, 3).map(s => `<span class="chip">${esc(s)}</span>`).join('')}
+      </div>` : ''}
+    </div>
+    <button class="btn quiet${cut ? '' : ' danger'}" onclick="toggleCut(${i})">
+      ${cut ? 'Bring back' : 'Cut'}
+    </button>
+  </div>`;
+}
+
+window.toggleCut = (i) => {
+  const m = S.proposal.members[i];
+  if(S.cut.has(m.name)) S.cut.delete(m.name); else S.cut.add(m.name);
+  viewRoster();
+};
+
+/* The model is the cost lever — the founding agent proposes a tier per role,
+   the Board can overrule it here, and commit writes it into the contract
+   (pulse_config.model). Aliases, not pinned ids: the firm upgrades with the
+   account. Without a pick, every Member inherits the session default — Opus,
+   at Opus prices (the Cooper run: 30 minutes, $13.99). */
+const MODELS = [
+  {id: 'opus',   name: 'Opus',   hint: 'Deepest judgment, priciest seat. For roles that are pure strategy.'},
+  {id: 'sonnet', name: 'Sonnet', hint: 'The working default — strong reasoning at a fraction of the cost.'},
+  {id: 'haiku',  name: 'Haiku',  hint: 'Fast and cheap. Right for mechanical, high-volume work.'},
+];
+const modelOf = (m) => MODELS.some(t => t.id === m.model) ? m.model : 'sonnet';
+
+function modelPick(m, i){
+  const cur = modelOf(m);
+  const open = S.modelMenu === i;
+  return `
+  <span class="modelwrap">
+    <button class="modelpill${open ? ' open' : ''}" onclick="toggleModelMenu(event, ${i})"
+            aria-haspopup="menu" aria-expanded="${open}"
+            title="The model this Member runs on — every run bills at this tier">
+      ${esc(MODELS.find(t => t.id === cur).name)} <span class="caret">▾</span>
+    </button>
+    <div class="modelmenu" role="menu" ${open ? '' : 'hidden'}>
+      ${MODELS.map(t => `
+        <button class="modelopt${t.id === cur ? ' on' : ''}" role="menuitemradio"
+                aria-checked="${t.id === cur}" onclick="setModel(event, ${i}, '${t.id}')">
+          <b>${t.name}</b><span class="mhint">${t.hint}</span>
+        </button>`).join('')}
+    </div>
+  </span>`;
+}
+
+window.toggleModelMenu = (e, i) => {
+  e.stopPropagation();
+  S.modelMenu = S.modelMenu === i ? null : i;
+  viewRoster();
+};
+window.setModel = (e, i, v) => {
+  e.stopPropagation();
+  S.proposal.members[i].model = v;
+  S.modelMenu = null;
+  viewRoster();
+};
+
+/* Names are the Board's to change — click one, type, done. */
+window.nameKey = (e) => {
+  if(e.key === 'Enter'){ e.preventDefault(); e.target.blur(); }
+  if(e.key === 'Escape'){
+    const el = e.target;
+    el.textContent = el.dataset.i !== undefined
+      ? S.proposal.members[+el.dataset.i].name
+      : S.proposal.name;
+    el.blur();
+  }
+};
+window.saveName = (el) => {
+  const m = S.proposal.members[+el.dataset.i];
+  const v = el.textContent.trim();
+  if(!v || v === m.name){ el.textContent = m.name; return; }
+  if(S.cut.has(m.name)){ S.cut.delete(m.name); S.cut.add(v); }  // a cut stays cut, renamed
+  // first_units point at members BY NAME — a rename must follow, or the
+  // unit's assignment silently drops at commit and pulses skip it.
+  for(const u of (S.proposal.first_units || [])) if(u.member === m.name) u.member = v;
+  m.name = v;
+  el.textContent = v;
+};
+window.saveFirmName = (el) => {
+  const v = el.textContent.trim();
+  if(!v){ el.textContent = S.proposal.name; return; }
+  S.proposal.name = v;
+  el.textContent = v;
+};
+
+/* The name pool — one word, no surnames needed, themed like the firms that
+   already exist. The die pulls a name nobody on this roster is wearing. */
+const NAME_POOL = [
+  // steel & noir
+  'Thorne','Vale','Sterling','Rennick','Mercer','Locke','Graves','Crane',
+  'Ashford','Hale','Marlow','Kade','Voss','Draven','Stroud','Bellamy',
+  'Corvin','Ellison','Fenwick','Garrick','Holloway','Ives','Lachlan',
+  'Nyx','Pierce','Quinlan','Rourke','Slade','Trent','Whitlock','Winslow',
+  // machine & signal
+  'Echo','Vector','Cipher','Relay','Beacon','Raster','Pixel','Quanta',
+  'Vertex','Axiom','Tensor','Socket','Kernel','Baud','Flux','Prism',
+  'Signal','Static','Volt','Arc','Chrome','Diode','Ohm','Pico','Servo',
+  'Sonar','Strobe','Turing','Vox','Zenith',
+  // botanical & wild
+  'Sage','Wren','Rowan','Aspen','Briar','Cedar','Fern','Hazel','Ivy',
+  'Juniper','Laurel','Moss','Reed','Sorrel','Thistle','Willow','Yarrow',
+  'Clover','Alder','Birch','Dahlia','Elm','Heath','Linden','Maple',
+  'Nettle','Olive','Perennial','Tamsin','Verbena',
+  // gems & metals
+  'Onyx','Jasper','Opal','Flint','Slate','Cobalt','Mica','Garnet',
+  'Beryl','Jet','Amber','Coral','Pyrite','Zinc','Argent','Bronze',
+  'Citrine','Ingot','Lazuli','Obsidian','Quartz','Rhodium','Tungsten',
+  // the back office
+  'Paperclip','Ledger','Docket','Memo','Carbon','Blotter','Margin',
+  'Folio','Quill','Vellum','Index','Ditto','Stencil','Ribbon','Carbonara',
+  'Binder','Caption','Draft','Errata','Footnote','Gloss','Rolodex',
+  // frontier
+  'Colt','Weston','Boone','Marshall','Tully','Harlan','Cassidy','Dalton',
+  'Ridge','Sawyer','Tanner','Wilder','Abilene','Bandera','Cheyenne',
+  'Dusty','Ezra','Jericho','Laredo','Maverick','Shiloh','Wystan',
+  // classical
+  'Cato','Livia','Ovid','Remus','Titus','Aurelia','Decima','Felix',
+  'Lucian','Portia','Silvius','Cassian','Octavia','Petra','Seneca',
+  'Tacita','Varro','Cordelia','Horatio','Minerva',
+  // arcane
+  'Orin','Caius','Selene','Isolde','Alaric','Rowena','Elara','Fenris',
+  'Gideon','Hesper','Imogen','Kestrel','Lyra','Morrigan','Nimue',
+  'Oberon','Peregrine','Ronan','Sable','Tamsyn','Ursa','Vesper','Wraith',
+];
+
+window.rollName = (i) => {
+  const m = S.proposal.members[i];
+  const taken = new Set(S.proposal.members.map(x => x.name));
+  const free = NAME_POOL.filter(n => !taken.has(n));
+  if(!free.length) return;
+  const v = free[Math.floor(Math.random() * free.length)];
+  if(S.cut.has(m.name)){ S.cut.delete(m.name); S.cut.add(v); }  // a cut stays cut, renamed
+  for(const u of (S.proposal.first_units || [])) if(u.member === m.name) u.member = v;
+  m.name = v;
+  viewRoster();
+};
+
+function viewRoster(){
+  const p = S.proposal;
+  if(!p) return go('#/found');
+  const kept = p.members.filter(m => !S.cut.has(m.name));
+
+  const depts = p.operations.map(op => {
+    const crew = p.members
+      .map((m, i) => ({m, i}))
+      .filter(({m}) => m.operation === op.name);
+    if(!crew.length) return '';
+    return `
+    <div class="dept">
+      <div class="dept-name">
+        <h3>${esc(op.name)}</h3>
+        <span class="purpose">${esc(op.purpose)}</span>
+      </div>
+      <div class="candidates">${crew.map(({m, i}) => candidateRow(m, i)).join('')}</div>
+    </div>`;
+  }).join('');
+
+  const leadKept = kept.some(m => m.leads);
+
+  mount(`
+    ${chrome('Founding a firm')}
+    <div class="step">
+      <div class="slate-head">
+        <h1 contenteditable="true" spellcheck="false" title="Click to rename"
+            onkeydown="nameKey(event)" onblur="saveFirmName(this)">${esc(p.name)}</h1>
+        <p class="premise">${esc(p.premise)}</p>
+        <p class="hint" style="margin-top:var(--s2)">The firm's name and every member's name are yours — click one to change it.</p>
+      </div>
+      ${S.error ? `<div class="oops">${esc(S.error)}</div>` : ''}
+      ${depts}
+      ${p.pushback ? `
+        <div class="oops" style="border-color:color-mix(in srgb,var(--gold) 45%,transparent)">
+          <b>I did what you asked. For the record:</b>
+          <div class="why">${esc(p.pushback)}</div>
+        </div>` : ''}
+
+      <div class="slate-foot">
+        <span class="tally">
+          Hiring <b>${plural(kept.length, 'member')}</b> across
+          <b>${plural(p.operations.length, 'department')}</b>.
+          ${!leadKept ? '<span style="color:var(--gold)"> Someone has to lead.</span>' : ''}
+        </span>
+        <div style="display:flex;gap:var(--s2)">
+          <button class="btn quiet" onclick="openReroll()">Reroll</button>
+          <button class="btn" onclick="openReshuffle()">Reshuffle</button>
+          <button class="btn primary" id="hire" ${!kept.length || !leadKept ? 'disabled' : ''}>
+            Hire ${kept.length ? plural(kept.length, 'member') : ''}
+          </button>
+        </div>
+      </div>
+    </div>
+    ${S.sheet === 'reshuffle' ? reshuffleSheet() : ''}
+    ${S.sheet === 'reroll' ? rerollSheet(p) : ''}
+  `);
+  S.error = null;
+
+  const rs = document.getElementById('reshuffle-note');
+  if(rs) rs.focus();
+
+  const hire = document.getElementById('hire');
+  if(hire) hire.onclick = async () => {
+    hire.disabled = true;
+    hire.textContent = 'Signing contracts…';
+    const proposal = Object.assign({}, p, {members: kept});
+    const r = await POST('/api/next/commit', {proposal});
+    if(!r.ok){
+      S.error = r.error || 'The firm could not be founded.';
+      return viewRoster();
+    }
+    // The founding agent's loadout picks ride into Equip/Train preselected —
+    // the Board reviews a recommendation instead of scrolling the catalog.
+    const lo = p.loadout || {};
+    S.reco = ((lo.mcp || []).length || (lo.skills || []).length ||
+              (lo.commands || []).length) ? lo : null;
+    S.recoFor = r.firm_id; S.recoApplied = {};
+    S.founded = r; S.proposal = null; S.readiness = null;
+    go('#/found/hired/' + r.firm_id);   // the ceremony beat — then Equip
+  };
+}
+
+/* --- contracts signed — the nameplates go up ----------------------------- */
+function viewHired(fid){
+  const f = S.founded;
+  if(!f || f.firm_id !== fid) return go('#/found/equip/' + fid);   // refresh-safe
+  const hired = f.hired || [];
+  const landed = 500 + hired.length * 420;
+  mount(`
+    ${chrome('Founding a firm')}
+    <div class="narrow arrived">
+      <div class="step-of" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)">
+        Contracts signed</div>
+      <h1 class="rise-1">${esc(f.name)} has a staff.</h1>
+      <div class="nameplates" style="width:100%;max-width:440px">
+        ${hired.map((m, i) => `
+          <div class="nameplate" style="animation-delay:${500 + i * 420}ms">
+            <span class="name">${esc(m.name)}</span>
+            <span class="role">${esc(m.role)}</span>
+          </div>`).join('')}
+      </div>
+      <p class="sub" style="animation:rise 520ms var(--ease) ${landed + 300}ms both">
+        The floor is yours. Now outfit it.</p>
+      <button class="btn primary" id="onward"
+              style="animation:rise 520ms var(--ease) ${landed + 550}ms both">
+        Hand them their tools</button>
+    </div>
+  `);
+  document.getElementById('onward').onclick = () => go('#/found/equip/' + fid);
+}
+
+/* --- arguing with the draft --------------------------------------------- */
+
+function reshuffleSheet(){
+  return `
+  <div class="scrim" onclick="if(event.target===this) closeSheet()">
+    <div class="sheet" role="dialog" aria-label="Reshuffle the roster">
+      <header><span class="here" style="direction:ltr;font-family:var(--ui);font-size:15px;font-weight:600;color:var(--ink)">
+        What would you change?</span></header>
+      <div class="body" style="padding:var(--s5)">
+        <textarea class="voice" id="reshuffle-note" style="min-height:150px"
+          placeholder="Too many people. Merge the writer and the docs role. And I don't want anyone touching video — I'll cut clips myself."></textarea>
+        <p class="hint" style="margin-top:var(--s2)">
+          It keeps everything you didn't object to, including the names. If it thinks
+          you're wrong, it'll say so and do it anyway.
+        </p>
+      </div>
+      <footer>
+        <button class="btn quiet" onclick="closeSheet()">Cancel</button>
+        <button class="btn primary" onclick="doReshuffle()">Rework it</button>
+      </footer>
+    </div>
+  </div>`;
+}
+
+function rerollSheet(p){
+  const tips = p.reroll_tips || [];
+  return `
+  <div class="scrim" onclick="if(event.target===this) closeSheet()">
+    <div class="sheet" role="dialog" aria-label="Reroll the roster">
+      <header><span class="here" style="direction:ltr;font-family:var(--ui);font-size:15px;font-weight:600;color:var(--ink)">
+        Throw this org away?</span></header>
+      <div class="body" style="padding:var(--s5)">
+        <p style="color:var(--ink-2);line-height:1.6">
+          Rerolling discards <b style="color:var(--ink)">${esc(p.name)}</b> entirely — the
+          roster, the departments, the names — and designs a new one from scratch.
+          Nothing has been written to disk yet, so nothing is lost but the draft.
+        </p>
+        ${tips.length ? `
+          <div class="tips">
+            <div class="eyebrow">Before you do — here's what it had to guess at</div>
+            ${tips.map(t => `<div class="tip"><span class="tick">·</span><span>${esc(t)}</span></div>`).join('')}
+            <p class="hint" style="margin-top:var(--s3)">
+              You'll land back on your paragraph. Answer these and the next org will be sharper.
+            </p>
+          </div>` : ''}
+      </div>
+      <footer>
+        <button class="btn quiet" onclick="closeSheet()">Keep this one</button>
+        <button class="btn danger" onclick="doReroll()">Reroll</button>
+      </footer>
+    </div>
+  </div>`;
+}
+
+window.openReshuffle = () => { S.sheet = 'reshuffle'; viewRoster(); };
+window.openReroll = () => { S.sheet = 'reroll'; viewRoster(); };
+window.closeSheet = () => { S.sheet = null; viewRoster(); };
+
+window.doReshuffle = async () => {
+  const note = document.getElementById('reshuffle-note').value.trim();
+  if(note.length < 5) return;
+  S.sheet = null;
+  const r = await POST('/api/next/reshuffle', {proposal: S.proposal, note});
+  if(!r.ok){ S.error = r.error || 'Could not rework the org.'; return viewRoster(); }
+  S.job = r.job_id; S.cursor = 0; S.thoughts = [];
+  S.reworking = true;
+  go('#/found/thinking');
+};
+
+window.doReroll = () => {
+  // The paragraph survives; the org does not. They land back on their own words,
+  // with the tips in front of them — that's the whole point of holding them back.
+  S.sheet = null;
+  S.tips = (S.proposal && S.proposal.reroll_tips) || [];
+  S.proposal = null;
+  S.cut = new Set();
+  go('#/found');
+};
+
+/* ------------------------------------------------------------------ equip */
+
+/* The people you just hired — kept in frame while you outfit them, so the
+   racks stay "tools for Mara and Roan", never a settings form. */
+async function crew(fid){
+  if(S.founded && S.founded.firm_id === fid) return S.founded.hired || [];
+  if(S.crewFor === fid) return S.crew;
+  try{
+    const rd = await GET('/api/next/readiness/' + fid);
+    S.crew = rd.hired || []; S.crewFor = fid;
+  }catch(e){ S.crew = []; S.crewFor = fid; }
+  return S.crew;
+}
+function crewLine(members, verb){
+  if(!members.length) return '';
+  const names = members.map(m => m.name);
+  const shown = names.slice(0, 3).join(', ');
+  const more = names.length - 3;
+  return `<p class="crewline">${verb} <b>${esc(shown)}${more > 0 ? ` and ${more} more` : ''}</b>.</p>`;
+}
+
+function trophyCard(b){
+  if(!b.present){
+    return `
+    <div class="trophy absent">
+      <div class="trophy-head">
+        <h2>BASE is not installed.</h2>
+      </div>
+      <p class="tagline">BASE carries the knowledge graph, the hooks, and the extension
+         registry your Members draw their CLI tools from. A firm runs without it — but every
+         tool you'd hand a Member has to be wired by hand instead.</p>
+    </div>`;
+  }
+  return `
+  <div class="trophy">
+    <div class="trophy-head">
+      <h2>BASE</h2>
+      <span class="ver">${esc(b.version || 'installed')}</span>
+    </div>
+    <p class="tagline">Your Members inherit every BASE extension as a CLI tool they can
+       be handed — ${esc(String(b.extensions.length))} installed and ready to assign.</p>
+    <div class="exts">
+      ${b.extensions.map(e => `
+        <div class="ext" title="${esc(e.description)}">
+          <span class="n">${esc(e.name)}</span>
+          <span class="v">${esc(e.version)}</span>
+        </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+async function viewEquip(fid){
+  fid = fid || (S.founded && S.founded.firm_id);
+  if(!fid) return go('#/');
+
+  let sv = S.survey;
+  if(!sv || S.surveyFor !== fid){
+    mount(`${chrome('Equipping')}<div class="loading">Looking at what you already have…</div>`);
+    try{
+      sv = S.survey = await GET('/api/next/survey/' + fid);
+      S.surveyFor = fid;
+    }catch(e){ return go('#/'); }
+  }
+
+  const mcp = sv.mcp.servers || [];
+  const exMcp = new Set((sv.exclusions && sv.exclusions.mcp) || []);
+  const offerable = mcp.filter(s => s.available && !exMcp.has(s.name));
+  const exiled = mcp.filter(s => s.available && exMcp.has(s.name));
+  const blocked = mcp.filter(s => !s.available);
+  const cli = sv.cli || [];
+  const chosen = S.picked;
+  const hired = await crew(fid);
+
+  // The founding agent's picks — preselected exactly once; unchecking sticks.
+  const reco = (S.recoFor === fid && S.reco) ? S.reco : null;
+  const recoMcp = reco
+    ? (reco.mcp || []).filter(r => offerable.some(s => s.name === r.name)) : [];
+  if(recoMcp.length && !S.recoApplied.equip){
+    for(const r of recoMcp){
+      if(!offerable.find(x => x.name === r.name).equipped) S.picked.add(r.name);
+    }
+    S.recoApplied.equip = true;
+  }
+  const restMcp = offerable.filter(s => !recoMcp.some(r => r.name === s.name));
+
+  mount(`
+    ${chrome('Equipping the firm')}
+    <div class="step">
+      <div class="stage-head">
+        <div class="step-of">Step 2 of 5 · Equip</div>
+        <h1>Hand them their tools.</h1>
+        <p>Everything below is already on your machine. Pick what this firm is allowed to
+           reach for — the armory is shared by every Member, so give it only what the work needs.</p>
+        ${crewLine(hired, 'Outfitting')}
+      </div>
+
+      ${trophyCard(sv.base)}
+
+      ${recoMcp.length ? `
+      <div class="rack">
+        <div class="rack-head">
+          <h3>Recommended for this firm</h3>
+          <span class="count">picked by the founding agent — review, change, approve</span>
+        </div>
+        <div class="picks">
+          ${recoMcp.map(r => { const s = offerable.find(x => x.name === r.name); return `
+            <button class="pick${s.equipped ? ' have' : ''}${chosen.has(r.name) ? ' on' : ''}"
+                    onclick="togglePick('${esc(r.name)}')">
+              <span class="box">${s.equipped || chosen.has(r.name) ? '✓' : ''}</span>
+              <span class="n">${esc(r.name)}</span>
+              <span class="grow"></span>
+              ${s.needs_keys.length
+                ? `<span class="keyneed">needs ${esc(s.needs_keys.join(', '))}</span>` : ''}
+              <span class="desc" title="${esc(r.why)}">${esc(r.why)}</span>
+            </button>`; }).join('')}
+        </div>
+      </div>` : ''}
+
+      <div class="rack">
+        <div class="rack-head">
+          <h3>${recoMcp.length ? 'Every other MCP server you have' : 'MCP servers'}</h3>
+          <span class="count">${chosen.size} of ${offerable.length} available</span>
+        </div>
+        <div class="picks">
+          ${restMcp.map(s => `
+            <button class="pick${s.equipped ? ' have' : ''}${chosen.has(s.name) ? ' on' : ''}"
+                    onclick="togglePick('${esc(s.name)}')">
+              <span class="box">${s.equipped || chosen.has(s.name) ? '✓' : ''}</span>
+              <span class="n">${esc(s.name)}</span>
+              <span class="grow"></span>
+              ${s.needs_keys.length
+                ? `<span class="keyneed">needs ${esc(s.needs_keys.join(', '))}</span>` : ''}
+              <span class="src">${esc(s.equipped ? 'equipped' : s.source)}</span>
+              <span class="exx" onclick="event.stopPropagation();toggleExclude('mcp','${esc(s.name)}',true)"
+                title="Exclude globally — hidden from every founding until you bring it back">✕</span>
+            </button>`).join('') || `<div class="loading">No MCP servers this firm can take.</div>`}
+        </div>
+        ${exiled.length ? `
+          <details style="margin-top:var(--s3)">
+            <summary class="hint" style="cursor:pointer">
+              ${exiled.length} excluded globally — your cadre-ignore list
+            </summary>
+            <p class="hint" style="margin:var(--s2) 0 var(--s3)">
+              Hidden from every founding, every recommendation, every agent — until
+              you bring one back. Click to include.
+            </p>
+            <div class="cli-row">
+              ${exiled.map(s => `
+                <button class="cli off" onclick="toggleExclude('mcp','${esc(s.name)}',false)"
+                  title="Remove from the global exclusion list">＋ ${esc(s.name)}</button>`).join('')}
+            </div>
+          </details>` : ''}
+        ${blocked.length ? `
+          <details style="margin-top:var(--s3)">
+            <summary class="hint" style="cursor:pointer">
+              ${blocked.length} more you have, that a firm can't be given
+            </summary>
+            <p class="hint" style="margin:var(--s2) 0 var(--s3)">
+              ${esc(blocked[0].why_not)}
+            </p>
+            <div class="cli-row">
+              ${blocked.map(s => `<span class="cli off">${esc(s.name)}</span>`).join('')}
+            </div>
+          </details>` : ''}
+      </div>
+
+      <div class="rack">
+        <div class="rack-head">
+          <h3>Command line</h3>
+          <span class="count">${cli.filter(c => c.live === true).length} live ·
+            ${cli.filter(c => c.present).length} of ${cli.length} on PATH</span>
+        </div>
+        <p class="hint" style="margin-bottom:var(--s3)">Probed just now. LIVE means installed
+          and signed in — these are capabilities the firm already owns, no setup needed.
+          The wiring agent hands them to the Members whose work needs them.</p>
+        <div class="cli-row">
+          ${cli.map(c => {
+            const cls = !c.present ? 'off' : c.live === true ? 'live' : c.live === false ? 'warn' : 'on';
+            const mark = !c.present ? '·' : c.live === false ? '△' : '✓';
+            const who = c.live === true && c.detail ? ` — ${c.detail}` : c.live === false ? ' — not signed in' : '';
+            return `
+            <span class="cli ${cls}" title="${esc(c.what)}">
+              ${mark} ${esc(c.name)}${esc(who)}
+            </span>`;}).join('')}
+        </div>
+      </div>
+
+      <div class="rack">
+        <div class="rack-head">
+          <h3>Anything else you have</h3>
+        </div>
+        <textarea class="voice" id="voice"
+          placeholder="The survey can't see everything. An ElevenLabs key, a Meta ads account, a rendering box, a licence for something — tell me what else this team could use.">${esc(S.voiceTools)}</textarea>
+      </div>
+
+      <div class="stage-foot">
+        <span class="tally">A shared armory. Who carries what gets decided after they're trained.</span>
+        <div style="display:flex;gap:var(--s2)">
+          <button class="btn quiet" onclick="go('#/')">Later</button>
+          <button class="btn primary" id="next">Next — what they know</button>
+        </div>
+      </div>
+    </div>
+  `);
+
+  const box = document.getElementById('voice');
+  if(box) box.oninput = () => { S.voiceTools = box.value; };
+
+  document.getElementById('next').onclick = () => {
+    if(box) S.voiceTools = box.value;
+    go('#/found/train/' + fid);
+  };
+}
+
+window.togglePick = (name) => {
+  const box = document.getElementById('voice');
+  if(box) S.voiceTools = box.value;
+  if(S.picked.has(name)) S.picked.delete(name); else S.picked.add(name);
+  viewEquip(S.surveyFor);
+};
+
+/* ------------------------------------------------------------------ train */
+
+async function viewTrain(fid){
+  fid = fid || S.surveyFor;
+  if(!fid) return go('#/');
+
+  let sv = S.survey;
+  if(!sv || S.surveyFor !== fid){
+    mount(`${chrome('Training')}<div class="loading">Reading your skills and commands…</div>`);
+    try{ sv = S.survey = await GET('/api/next/survey/' + fid); S.surveyFor = fid; }
+    catch(e){ return go('#/'); }
+  }
+
+  const q = (S.filter || '').toLowerCase();
+  const wired = !!sv.wired;
+  const hired = await crew(fid);
+
+  // The founding agent's picks — the Board approves a recommendation instead
+  // of scrolling 150 commands for the three that matter. Preselected once.
+  const reco = (S.recoFor === fid && S.reco) ? S.reco : null;
+  const recoSkills = reco
+    ? (reco.skills || []).filter(r => sv.knowledge.skills.some(s => s.name === r.name)) : [];
+  const recoCmds = reco
+    ? (reco.commands || []).filter(r => sv.knowledge.commands.some(c => c.name === r.name)) : [];
+  if((recoSkills.length || recoCmds.length) && !S.recoApplied.train){
+    recoSkills.forEach(r => S.skills.add(r.name));
+    recoCmds.forEach(r => S.cmds.add(r.name));
+    S.recoApplied.train = true;
+  }
+  const exSkills = new Set((sv.exclusions && sv.exclusions.skills) || []);
+  const exCmds = new Set((sv.exclusions && sv.exclusions.commands) || []);
+  const skills = sv.knowledge.skills
+    .filter(s => !recoSkills.some(r => r.name === s.name))
+    .filter(s => !exSkills.has(s.name));
+  const exiledSkills = sv.knowledge.skills.filter(s => exSkills.has(s.name));
+  const cmds = sv.knowledge.commands
+    .filter(c => !recoCmds.some(r => r.name === c.name))
+    .filter(c => !exCmds.has(c.name))
+    .filter(c => !q || c.name.toLowerCase().includes(q));
+  const exiledCmds = sv.knowledge.commands.filter(c => exCmds.has(c.name));
+
+  mount(`
+    ${chrome('Training the firm')}
+    <div class="step">
+      <div class="stage-head">
+        <div class="step-of">Step 3 of 5 · Train</div>
+        <h1>Give them what they need to know.</h1>
+        <p>Skills, commands, and any body of expertise you keep on disk. You pick what's on
+           the table — who ends up carrying what gets decided next, and a Member can only ever
+           use what they were given.</p>
+        ${crewLine(hired, 'Training')}
+      </div>
+
+      ${(recoSkills.length || recoCmds.length) ? `
+      <div class="rack">
+        <div class="rack-head">
+          <h3>Recommended for this firm</h3>
+          <span class="count">picked by the founding agent — review, change, approve</span>
+        </div>
+        <div class="picks">
+          ${recoSkills.map(r => `
+            <button class="pick${S.skills.has(r.name) ? ' on' : ''}" data-skill="${esc(r.name)}"
+                    onclick="toggleSkill('${esc(r.name)}')">
+              <span class="box">${S.skills.has(r.name) ? '✓' : ''}</span>
+              <span class="n">${esc(r.name)}</span>
+              <span class="grow"></span>
+              <span class="desc" title="${esc(r.why)}">${esc(r.why)}</span>
+            </button>`).join('')}
+          ${recoCmds.map(r => `
+            <button class="pick${S.cmds.has(r.name) ? ' on' : ''}" data-cmd="${esc(r.name)}"
+                    onclick="toggleCmd('${esc(r.name)}')">
+              <span class="box">${S.cmds.has(r.name) ? '✓' : ''}</span>
+              <span class="n mono">${esc(r.name)}</span>
+              <span class="grow"></span>
+              <span class="desc" title="${esc(r.why)}">${esc(r.why)}</span>
+            </button>`).join('')}
+        </div>
+      </div>` : ''}
+
+      <div class="rack">
+        <div class="rack-head">
+          <h3>${recoSkills.length ? 'Every other skill' : 'Skills'}</h3>
+          <span class="count" id="skill-count">${S.skills.size} of ${sv.knowledge.skills.length} selected</span>
+        </div>
+        <div class="picks" id="skill-picks">${skillRows(skills)}</div>
+        ${exiledSkills.length ? `
+          <details style="margin-top:var(--s3)">
+            <summary class="hint" style="cursor:pointer">
+              ${exiledSkills.length} excluded globally — click one to bring it back
+            </summary>
+            <div class="cli-row" style="margin-top:var(--s2)">
+              ${exiledSkills.map(s => `
+                <button class="cli off" onclick="toggleExclude('skills','${esc(s.name)}',false)"
+                  title="Remove from the global exclusion list">＋ ${esc(s.name)}</button>`).join('')}
+            </div>
+          </details>` : ''}
+      </div>
+
+      <div class="rack">
+        <div class="rack-head">
+          <h3>${recoCmds.length ? 'Every other command' : 'Commands'}</h3>
+          <span class="count" id="cmd-count">${S.cmds.size} of ${sv.knowledge.commands.length} selected</span>
+        </div>
+        <div class="filterbar">
+          <span class="mag" aria-hidden="true">⌕</span>
+          <input id="filter" type="search" autocomplete="off" spellcheck="false"
+                 placeholder="Filter ${sv.knowledge.commands.length} commands…"
+                 value="${esc(S.filter || '')}">
+        </div>
+        <div class="picks scrollpicks" id="cmd-picks">${cmdRows(cmds)}</div>
+        ${exiledCmds.length ? `
+          <details style="margin-top:var(--s3)">
+            <summary class="hint" style="cursor:pointer">
+              ${exiledCmds.length} excluded globally — click one to bring it back
+            </summary>
+            <div class="cli-row" style="margin-top:var(--s2)">
+              ${exiledCmds.map(c => `
+                <button class="cli off" onclick="toggleExclude('commands','${esc(c.name)}',false)"
+                  title="Remove from the global exclusion list">＋ ${esc(c.name)}</button>`).join('')}
+            </div>
+          </details>` : ''}
+      </div>
+
+      <div class="rack">
+        <div class="rack-head">
+          <h3>Expertise on disk</h3>
+          <span class="count">${S.folders.length ? plural(S.folders.length, 'folder') : ''}</span>
+        </div>
+        <div class="folders">
+          ${S.folders.map((f, i) => `
+            <div class="folder">
+              <span class="grow">${esc(f)}</span>
+              <button class="btn quiet icon danger" onclick="dropFolder(${i})" title="Remove">×</button>
+            </div>`).join('')}
+        </div>
+        <button class="btn" onclick="openBrowse()">＋ Attach a folder</button>
+        <textarea class="voice" id="voice" style="margin-top:var(--s3)"
+          placeholder="A style system, a methodology, a domain your team has to actually understand — point me at the folder above, and tell me here who it's for and what it teaches them.">${esc(S.voiceKnow)}</textarea>
+      </div>
+
+      <div class="stage-foot">
+        <span class="tally">
+          <b id="train-tally">${S.skills.size + S.cmds.size + S.folders.length}</b> things on the table.
+        </span>
+        <div style="display:flex;gap:var(--s2)">
+          <button class="btn quiet" onclick="go('#/found/equip/' + '${esc(fid)}')">Back</button>
+          <button class="btn primary" id="wire">
+            ${wired ? 'Reroll the loadout' : 'Put it in their hands'}
+          </button>
+        </div>
+      </div>
+    </div>
+    ${S.browse ? browseSheet() : ''}
+    ${S.sheet === 'rewire' ? rewireSheet() : ''}
+  `);
+
+  // Patch the list in place. Re-mounting the whole view on every keystroke kills
+  // the input node, drops focus, and throws the page to the top — one letter per
+  // re-click. Never re-render an ancestor of the thing the user is typing into.
+  const f = document.getElementById('filter');
+  if(f) f.oninput = () => {
+    S.filter = f.value;
+    const q = f.value.toLowerCase();
+    const hits = sv.knowledge.commands
+      .filter(c => !recoCmds.some(r => r.name === c.name))   // no dup rows
+      .filter(c => !exCmds.has(c.name))
+      .filter(c => !q || c.name.toLowerCase().includes(q));
+    document.getElementById('cmd-picks').innerHTML = cmdRows(hits);
+  };
+  const box = document.getElementById('voice');
+  if(box) box.oninput = () => { S.voiceKnow = box.value; };
+
+  document.getElementById('wire').onclick = () => {
+    if(box) S.voiceKnow = box.value;
+    // Coming back to this screen on a firm that's already wired is NOT a step back in
+    // a survey — pressing the button re-runs the agent and replaces the loadouts and
+    // the charter. That's a reroll, so it has to be named and confirmed like one.
+    if(wired){ S.sheet = 'rewire'; return viewTrain(fid); }
+    doWire(fid);
+  };
+}
+
+function rewireSheet(){
+  return `
+  <div class="scrim" onclick="if(event.target===this) closeTrainSheet()">
+    <div class="sheet" role="dialog" aria-label="Reroll the loadout">
+      <header><span class="here" style="direction:ltr;font-family:var(--ui);font-size:15px;font-weight:600;color:var(--ink)">
+        Reroll the loadout?</span></header>
+      <div class="body" style="padding:var(--s5)">
+        <p style="color:var(--ink-2);line-height:1.6">
+          This firm is already wired. Rerolling runs the agent again from scratch and
+          <b style="color:var(--ink)">replaces</b> every Member's loadout, the armory, and
+          the charter with whatever it decides this time.
+        </p>
+        <p style="color:var(--ink-2);line-height:1.6;margin-top:var(--s3)">
+          It is not a step back through a form. Once you press it, the current loadout is gone.
+        </p>
+      </div>
+      <footer>
+        <button class="btn quiet" onclick="closeTrainSheet()">Keep what they have</button>
+        <button class="btn danger" onclick="closeTrainSheet(); doWire('${esc(S.surveyFor)}')">
+          Reroll it
+        </button>
+      </footer>
+    </div>
+  </div>`;
+}
+
+window.closeTrainSheet = () => { S.sheet = null; viewTrain(S.surveyFor); };
+
+window.doWire = async (fid) => {
+  const r = await POST('/api/next/wire', {
+    firm_id: fid,
+    mcp: [...S.picked],
+    folders: S.folders,
+    voice: [S.voiceTools, S.voiceKnow].filter(Boolean).join('\n\n'),
+  });
+  if(!r.ok) return;
+  S.wireJob = r.job_id; S.wireCursor = 0; S.thoughts = [];
+  go('#/found/wiring/' + fid);
+};
+
+/* Row renderers — used for the first paint and every in-place patch after it,
+   so a toggle can never disagree with a re-render. */
+function skillRows(skills){
+  return skills.map(s => `
+    <button class="pick${S.skills.has(s.name) ? ' on' : ''}" data-skill="${esc(s.name)}"
+            onclick="toggleSkill('${esc(s.name)}')">
+      <span class="box">${S.skills.has(s.name) ? '✓' : ''}</span>
+      <span class="n">${esc(s.name)}</span>
+      <span class="grow"></span>
+      <span class="desc">${esc((s.description || '').slice(0, 58))}</span>
+      <span class="exx" onclick="event.stopPropagation();toggleExclude('skills','${esc(s.name)}',true)"
+        title="Exclude globally — hidden from every founding until you bring it back">✕</span>
+    </button>`).join('');
+}
+function cmdRows(cmds){
+  if(!cmds.length) return `<div class="loading">Nothing matches.</div>`;
+  return cmds.map(c => `
+    <button class="pick${S.cmds.has(c.name) ? ' on' : ''}" data-cmd="${esc(c.name)}"
+            onclick="toggleCmd('${esc(c.name)}')">
+      <span class="box">${S.cmds.has(c.name) ? '✓' : ''}</span>
+      <span class="n mono">${esc(c.name)}</span>
+      <span class="grow"></span>
+      <span class="exx" onclick="event.stopPropagation();toggleExclude('commands','${esc(c.name)}',true)"
+        title="Exclude globally — hidden from every founding until you bring it back">✕</span>
+    </button>`).join('');
+}
+
+/* Toggles patch ONE row and ONE counter. No remount, so scroll and focus survive. */
+function flipRow(el, on, countId, size, total, word){
+  if(el){
+    el.classList.toggle('on', on);
+    el.querySelector('.box').textContent = on ? '✓' : '';
+  }
+  const c = document.getElementById(countId);
+  if(c) c.textContent = `${size} of ${total} selected`;
+}
+
+window.toggleSkill = (n) => {
+  const on = !S.skills.has(n);
+  on ? S.skills.add(n) : S.skills.delete(n);
+  const total = (S.survey.knowledge.skills || []).length;
+  flipRow(document.querySelector(`[data-skill="${CSS.escape(n)}"]`), on,
+          'skill-count', S.skills.size, total);
+  updateTally();
+};
+window.toggleCmd = (n) => {
+  const on = !S.cmds.has(n);
+  on ? S.cmds.add(n) : S.cmds.delete(n);
+  const total = (S.survey.knowledge.commands || []).length;
+  flipRow(document.querySelector(`[data-cmd="${CSS.escape(n)}"]`), on,
+          'cmd-count', S.cmds.size, total);
+  updateTally();
+};
+function updateTally(){
+  const t = document.getElementById('train-tally');
+  if(t) t.textContent = String(S.skills.size + S.cmds.size + S.folders.length);
+}
+window.dropFolder = (i) => { S.folders.splice(i, 1); viewTrain(S.surveyFor); };
+
+/* Global exclusions — reversible in place, persisted machine-wide. */
+window.toggleExclude = async (kind, name, excluded) => {
+  let r;
+  try{ r = await POST('/api/next/exclude', {kind, name, excluded}); }
+  catch(e){ r = {ok: false}; }
+  if(!r.ok) return;
+  if(S.survey) S.survey.exclusions = r.exclusions;
+  if(excluded){ S.picked.delete(name); S.skills.delete(name); S.cmds.delete(name); }
+  const h = location.hash || '';
+  if(h.startsWith('#/found/equip')) viewEquip(h.split('/')[3]);
+  else if(h.startsWith('#/found/train')) viewTrain(h.split('/')[3]);
+};
+
+/* --- the wiring run ----------------------------------------------------- */
+function viewWiring(fid){
+  mount(`
+    ${chrome('Wiring the firm')}
+    <div class="narrow step thinking">
+      <h2>Putting the tools in the right hands.</h2>
+      <div class="pulsebar"><i></i></div>
+      <div class="stage-meta">
+        <span>This usually takes a few minutes — it's doing real work.</span>
+        <span class="clock" id="elapsed">0:00</span>
+      </div>
+      <div class="thoughts" id="thoughts" aria-live="polite"></div>
+    </div>
+  `);
+  stageStart('wiring');
+  pollWire(fid);
+}
+
+async function pollWire(fid){
+  if(!S.wireJob || !location.hash.startsWith('#/found/wiring')) return;
+  let r;
+  try{ r = await GET('/api/next/wire/' + S.wireJob + '?cursor=' + S.wireCursor); }
+  catch(e){ setTimeout(() => pollWire(fid), 1500); return; }
+
+  if(r.narration && r.narration.length){
+    stageReal(r.narration);
+    S.wireCursor = r.cursor;
+  }
+  if(r.status === 'ready'){
+    S.plan = r.plan; S.wireJob = null;
+    S.lastGaps = r.plan.gaps || [];   // the Co-Board brief needs to know the weak points
+    return stageFinale(() => go('#/found/loadout/' + fid));
+  }
+  if(r.status === 'failed' || !r.ok){
+    S.error = r.error || 'The wiring agent could not finish.';
+    S.wireJob = null; stageStop();
+    return go('#/found/train/' + fid);
+  }
+  setTimeout(() => pollWire(fid), 600);
+}
+
+/* --- the loadout review — the law, before it binds ---------------------- */
+/* The Board's pen on the law — anything on the table can be handed to anyone,
+   anything assigned can be taken away, right here before it's signed. */
+function addLoadRow(m, mi){
+  const pool = [
+    ...[...S.skills].filter(n => !m.skills.includes(n)).map(n => ({kind: 'skills', n})),
+    ...[...S.cmds].filter(n => !m.commands.includes(n)).map(n => ({kind: 'commands', n})),
+    ...[...S.picked].filter(n => !m.mcp.includes(n)).map(n => ({kind: 'mcp', n})),
+  ];
+  if(!pool.length) return '';
+  return `
+  <details class="addload">
+    <summary class="hint" style="cursor:pointer;margin-top:var(--s2)">＋ hand them something else</summary>
+    <div class="needs" style="margin-top:var(--s2)">
+      ${pool.map(it => `<button class="cli" onclick="addLoad(${mi},'${it.kind}','${esc(it.n)}')">＋ ${esc(it.n)}</button>`).join('')}
+    </div>
+  </details>`;
+}
+window.dropLoad = (mi, kind, i) => {
+  S.plan.members[mi][kind].splice(i, 1);
+  viewLoadout(S.surveyFor);
+};
+window.addLoad = (mi, kind, name) => {
+  const m = S.plan.members[mi];
+  if(kind === 'knowledge') return;
+  if(!m[kind].includes(name)) m[kind].push(name);
+  viewLoadout(S.surveyFor);
+};
+
+async function viewLoadout(fid){
+  const p = S.plan;
+  if(!p) return go('#/found/train/' + fid);
+
+  const keys = p.keys_needed || [];
+
+  mount(`
+    ${chrome('The loadout')}
+    <div class="step">
+      <div class="stage-head">
+        <div class="step-of">Step 3 of 5 · Train</div>
+        <h1>Who carries what.</h1>
+        <p>This is the law. A Member can use what's listed under their name and nothing else —
+           not because they're told to behave, but because it's all they're given.</p>
+      </div>
+
+      ${S.error ? `<div class="oops">${esc(S.error)}</div>` : ''}
+
+      ${p.members.map((m, mi) => `
+        <div class="dept">
+          <div class="dept-name">
+            <h3>${esc(m.name)}</h3>
+            <span class="purpose">${esc(m.note)}</span>
+          </div>
+          <div class="candidate" style="display:block">
+            <div class="plate">
+              ${m.skills.length ? `<div class="needs" style="margin-top:0">
+                ${m.skills.map((s, i) => `<span class="chip">${esc(s)}
+                  <span class="chipx" onclick="dropLoad(${mi},'skills',${i})" title="Take it off them">✕</span></span>`).join('')}</div>` : ''}
+              ${m.commands.length ? `<div class="needs">
+                ${m.commands.map((c, i) => `<span class="chip" style="font-family:var(--mono)">${esc(c)}
+                  <span class="chipx" onclick="dropLoad(${mi},'commands',${i})" title="Take it off them">✕</span></span>`).join('')}</div>` : ''}
+              ${m.mcp.length ? `<div class="needs">
+                ${m.mcp.map((s, i) => `<span class="chip gate">${esc(s)}
+                  <span class="chipx" onclick="dropLoad(${mi},'mcp',${i})" title="Take it off them">✕</span></span>`).join('')}</div>` : ''}
+              ${(m.knowledge || []).map((k, i) => `
+                <div class="owns" style="margin-top:var(--s2)">
+                  <b style="color:var(--ink)">${esc(k.path.split('/').pop())}</b> — ${esc(k.teaches)}
+                  <span class="chipx" onclick="dropLoad(${mi},'knowledge',${i})" title="Take it off them">✕</span>
+                </div>`).join('')}
+              ${!m.skills.length && !m.commands.length && !m.mcp.length && !(m.knowledge||[]).length
+                ? `<div class="owns" style="margin-top:0;color:var(--ink-3)">Carries nothing beyond the firm's standing tools.</div>` : ''}
+              ${addLoadRow(m, mi)}
+            </div>
+          </div>
+        </div>`).join('')}
+
+      ${(p.gaps || []).length ? `
+        <div class="rack">
+          <div class="rack-head">
+            <h3>What they'll raise on day one</h3>
+            <span class="count">${plural(p.gaps.length, 'escalation')}</span>
+          </div>
+          <p class="hint" style="margin-bottom:var(--s3)">
+            None of these stop the firm. Each becomes an escalation on the floor, raised by
+            the Member who has the gap — you'll see them in the boardroom and decide there.
+          </p>
+          ${p.gaps.map(g => `
+            <div class="gap sev-${esc(g.severity || 'limiting')}">
+              <div class="gap-head">
+                <b>${esc(g.member)}</b>
+                <span class="sev">${esc(g.severity || 'limiting')}</span>
+              </div>
+              <div class="gap-what">${esc(g.missing)}</div>
+              <div class="why">${esc(g.recommend)} — ${esc(g.why)}</div>
+            </div>`).join('')}
+        </div>` : ''}
+
+      ${keys.length ? `
+        <div class="rack">
+          <div class="rack-head">
+            <h3>Keys the armory needs</h3>
+            <span class="count">stored in the firm vault, never in a file</span>
+          </div>
+          ${keys.map(k => `
+            <div style="margin-bottom:var(--s2)">
+              <input class="voice" type="password" id="key-${esc(k)}"
+                     style="font-family:var(--mono);font-size:13px"
+                     placeholder="${esc(k)}">
+            </div>`).join('')}
+          <p class="hint">Leave blank to supply later — the servers that need them won't start until you do.</p>
+        </div>` : ''}
+
+      <div class="stage-foot">
+        <span class="tally">Signing this writes the loadouts, the armory, and the charter.</span>
+        <div style="display:flex;gap:var(--s2)">
+          <button class="btn quiet" onclick="go('#/found/train/' + '${esc(fid)}')">Back</button>
+          <button class="btn primary" id="sign">Make it law</button>
+        </div>
+      </div>
+    </div>
+  `);
+  S.error = null;
+
+  document.getElementById('sign').onclick = async () => {
+    const btn = document.getElementById('sign');
+    btn.disabled = true; btn.textContent = 'Writing…';
+    const keyvals = {};
+    for(const k of keys){
+      const el = document.getElementById('key-' + k);
+      if(el && el.value) keyvals[k] = el.value;
+    }
+    const r = await POST('/api/next/wire-commit', {firm_id: fid, plan: p, keys: keyvals});
+    if(!r.ok){
+      S.error = r.error || 'Could not wire the firm.';
+      return viewLoadout(fid);
+    }
+    S.readiness = null; S.plan = null;
+    go('#/found/live/' + fid);
+  };
+}
+
+/* --- folder attach ------------------------------------------------------ */
+function browseSheet(){
+  const b = S.browse;
+  return `
+  <div class="scrim" onclick="if(event.target===this) closeBrowse()">
+    <div class="sheet" role="dialog" aria-label="Attach a folder">
+      <header>
+        <button class="btn quiet icon" ${b.parent ? '' : 'disabled'}
+                onclick="browseTo(${b.parent ? `'${esc(b.parent)}'` : 'null'})"
+                title="Up one level">↑</button>
+        <span class="here">${esc(b.path)}</span>
+      </header>
+      <div class="body">
+        ${b.dirs.map(d => `
+          <button class="dirrow" onclick="browseTo('${esc(d.path)}')">
+            <span>▸</span>
+            <span class="grow">${esc(d.name)}</span>
+            ${d.docs ? `<span class="docs">${d.docs} docs</span>` : ''}
+          </button>`).join('')}
+        ${(b.files || []).map(f => `
+          <div class="dirrow">
+            <span>▪</span>
+            <span class="grow">${esc(f.name)}</span>
+            <button class="cli" onclick="attachFile('${esc(f.path)}')"
+              title="Attach just this document">attach</button>
+          </div>`).join('')}
+        ${!b.dirs.length && !(b.files || []).length
+          ? `<div class="loading">Nothing to open here.</div>` : ''}
+      </div>
+      <footer>
+        <button class="btn quiet" onclick="closeBrowse()">Cancel</button>
+        <button class="btn primary" onclick="attachHere()">
+          Attach this folder${b.docs_here ? ` (${b.docs_here} docs)` : ''}
+        </button>
+      </footer>
+    </div>
+  </div>`;
+}
+
+window.openBrowse = async () => {
+  const box = document.getElementById('voice');
+  if(box) S.voiceKnow = box.value;
+  try{ S.browse = await GET('/api/next/browse'); }catch(e){ return; }
+  viewTrain(S.surveyFor);
+};
+window.browseTo = async (path) => {
+  try{ S.browse = await GET('/api/next/browse' + (path ? '?path=' + encodeURIComponent(path) : '')); }
+  catch(e){ return; }
+  viewTrain(S.surveyFor);
+};
+window.closeBrowse = () => { S.browse = null; viewTrain(S.surveyFor); };
+window.attachHere = () => {
+  const p = S.browse.path;
+  if(!S.folders.includes(p)) S.folders.push(p);
+  S.browse = null;
+  viewTrain(S.surveyFor);
+};
+window.attachFile = (p) => {
+  if(!S.folders.includes(p)) S.folders.push(p);   // a single doc attaches like a folder
+  S.browse = null;
+  viewTrain(S.surveyFor);
+};
+
+const INTERVALS = ['10m', '30m', '1h', '4h', '1d'];
+
+async function viewLive(fid){
+  // Reachable two ways: straight out of a commit (S.founded), or by firm id from
+  // the boardroom — a firm that isn't ready stays unready until someone outfits it.
+  fid = fid || (S.founded && S.founded.firm_id);
+  if(!fid) return go('#/');
+
+  let rd = S.readiness;
+  if(!rd || rd.firm_id !== fid){
+    try{ rd = S.readiness = await GET('/api/next/readiness/' + fid); }
+    catch(e){ return go('#/'); }
+  }
+  if(S.notifyPresets == null){
+    try{ S.notifyPresets = (await GET('/api/next/notify-presets')).presets || []; }
+    catch(e){ S.notifyPresets = []; }
+  }
+  const f = S.founded && S.founded.firm_id === fid
+    ? S.founded
+    : {firm_id: fid, name: rd.name, workspace: rd.workspace, hired: rd.hired || []};
+
+  const missing = (rd.checks || []).filter(c => !c.ok && c.blocking);
+  const ready = !!rd.ready;
+
+  let briefed = false;
+  try{
+    const known = S.coboard || (S.coboard = await GET('/api/next/coboard'));
+    briefed = (known.briefed || []).includes(fid);
+  }catch(e){}
+
+  mount(`
+    ${chrome(esc(f.name))}
+    <div class="step">
+      <div class="stage-head">
+        <div class="step-of">Step 4 of 5 · The Board's Manifest</div>
+        <h1>How will you run the floor?</h1>
+        <p>${esc(f.name)} is hired, equipped, and trained. What's left is you — how you want
+           to be reached, and whether the firm works while you're gone.</p>
+      </div>
+
+      ${S.error ? `<div class="oops">${esc(S.error)}
+        <div class="why">Nothing was lost — the firm is on disk. Try again.</div></div>` : ''}
+
+      <div class="ready">
+        <div class="eyebrow">${ready ? 'The firm' : 'Before it can live'}</div>
+        ${(rd.checks || []).map(c => `
+          <div class="check${c.ok ? ' done' : ''}${!c.ok && !c.blocking ? ' soft' : ''}">
+            <span class="box">${c.ok ? '✓' : (c.blocking ? '!' : '–')}</span>
+            <span class="what">${esc(c.label)}</span>
+            ${c.detail ? `<span class="det">${esc(c.detail)}</span>` : ''}
+            ${!c.ok && c.blocking ? `<span class="stage">${esc(c.fix)}</span>` : ''}
+          </div>`).join('')}
+        ${!ready ? `
+          <p class="hint" style="margin-top:var(--s3)">
+            <button class="btn quiet" onclick="go('#/found/train/' + '${esc(fid)}')">
+              Go back and write its law</button>
+          </p>` : ''}
+      </div>
+
+      <div class="rack">
+        <div class="rack-head"><h3>Always available</h3></div>
+        <button class="pick have" style="cursor:default">
+          <span class="box">✓</span>
+          <span class="n">Pulse it yourself</span>
+          <span class="grow"></span>
+          <span class="src">default</span>
+        </button>
+        <p class="hint" style="margin-top:var(--s2)">
+          You can always wake the firm by hand — from the boardroom, or with
+          <code style="font-family:var(--mono)">cadre pulse</code>. Nothing to configure.
+          This never turns off.
+        </p>
+      </div>
+
+      <div class="rack">
+        <div class="rack-head">
+          <h3>Let it run without you</h3>
+          <span class="count">${S.autoPulse ? 'every ' + esc(S.interval) : 'off'}</span>
+        </div>
+        <button class="pick${S.autoPulse ? ' on' : ''}" onclick="toggleAuto()">
+          <span class="box">${S.autoPulse ? '✓' : ''}</span>
+          <span class="n">Wake on a schedule</span>
+          <span class="grow"></span>
+          <span class="src">systemd</span>
+        </button>
+        ${S.autoPulse ? `
+          <div class="cadence" style="margin-top:var(--s3)">
+            <span class="hint">Every</span>
+            ${INTERVALS.map(i => `
+              <button class="tick${S.interval === i ? ' on' : ''}"
+                onclick="pickInterval('${i}')">${i}</button>`).join('')}
+          </div>
+          <p class="hint" style="margin-top:var(--s2)">
+            Rest ${esc(S.interval)} between shifts. A tick that finds nothing due costs nothing.
+          </p>` : ''}
+      </div>
+
+      <div class="rack">
+        <div class="rack-head">
+          <h3>Trust posture</h3>
+          <span class="count">${S.leanMode ? 'full load' : 'lean'}</span>
+        </div>
+        <div class="picks">
+          <button class="pick${S.leanMode ? '' : ' on'}" onclick="setLean(false)">
+            <span class="box">${S.leanMode ? '' : '✓'}</span>
+            <span class="n">Lean mode</span>
+            <span class="grow"></span>
+            <span class="src" style="border:none;text-transform:none;letter-spacing:0;font-family:var(--ui);font-size:12px">Members touch only what you granted — the loadout is the law. Lean for a reason.</span>
+          </button>
+          <button class="pick${S.leanMode ? ' on' : ''}" onclick="setLean(true)">
+            <span class="box">${S.leanMode ? '✓' : ''}</span>
+            <span class="n">Full load</span>
+            <span class="grow"></span>
+            <span class="src" style="border:none;text-transform:none;letter-spacing:0;font-family:var(--ui);font-size:12px">Members inherit everything your own session can reach — slightly slower boot per run</span>
+          </button>
+        </div>
+        ${S.leanMode ? `
+        <p class="hint" style="margin-top:var(--s2)">
+          Full load trades the lean armory for your full reach: bigger prompts, slower
+          boots, and the loadout stops being enforceable — a Member can touch anything
+          you can. Right for a personal desk. Wrong for anything you'd license or let spend.
+        </p>` : ''}
+      </div>
+
+      <div class="rack">
+        <div class="rack-head">
+          <h3>How it reaches you</h3>
+          <span class="count">${S.channel === 'none' ? 'not at all' : esc(S.channel)}</span>
+        </div>
+        <div class="picks">
+          ${[['none', 'Don\'t contact me', 'I\'ll check the boardroom'],
+             ['telegram', 'Telegram', 'A gate or an escalation lands on your phone'],
+             ['slack', 'Slack', 'A gate or an escalation lands in your DMs']
+            ].map(([id, label, why]) => `
+            <button class="pick${S.channel === id ? ' on' : ''}" onclick="pickChannel('${id}')">
+              <span class="box">${S.channel === id ? '✓' : ''}</span>
+              <span class="n">${esc(label)}</span>
+              <span class="grow"></span>
+              <span class="src" style="border:none;text-transform:none;letter-spacing:0;font-family:var(--ui);font-size:12px">${esc(why)}</span>
+            </button>`).join('')}
+        </div>
+        ${S.channel !== 'none' ? `
+          <div style="margin-top:var(--s3);display:flex;flex-direction:column;gap:var(--s2)">
+            ${(S.notifyPresets || []).filter(p => p.channel === S.channel).length ? `
+            <div class="picks">
+              ${(S.notifyPresets || []).map((p, i) => p.channel !== S.channel ? '' : `
+                <button class="pick${S.chPreset === i ? ' on' : ''}" onclick="pickNotifyPreset(${i})">
+                  <span class="box">${S.chPreset === i ? '✓' : ''}</span>
+                  <span class="n">${esc(p.label)}</span>
+                  <span class="grow"></span>
+                  ${p.target ? `<span class="desc">${esc(p.target)}</span>` : ''}
+                  <span class="src">${esc(p.source.kind === 'firm' ? 'one click' : p.token_env)}</span>
+                </button>`).join('')}
+            </div>
+            <p class="hint">Found on this machine — one click reuses it (the token is copied
+              server-side, it never touches the browser). Or type new tokens below to
+              override with a fresh workspace/app.</p>` : ''}
+            <input class="voice" type="password" id="ch-token" value="${esc(S.chToken)}"
+              style="font-family:var(--mono);font-size:13px"
+              placeholder="${S.chPreset != null ? 'Using the preset token — type here to override'
+                : S.channel === 'telegram' ? 'Bot token from @BotFather' : 'Slack bot token (xoxb-…)'}">
+            <input class="voice" id="ch-target" value="${esc(S.chTarget)}"
+              style="font-family:var(--mono);font-size:13px"
+              placeholder="${S.channel === 'telegram' ? 'Your Telegram chat id' : 'Your Slack user id (U…)'}">
+            <p class="hint">The token goes to the firm vault, never a file. Messages are
+              deterministic — they reach you even when every session is dead.</p>
+          </div>` : ''}
+      </div>
+
+      <div class="stage-foot">
+        <span class="tally">${!ready
+          ? 'Locked until the firm has its law.'
+          : briefed
+            ? 'Your Co-Board already knows this firm.'
+            : 'Last thing: your Co-Board has to learn this firm.'}</span>
+        <div style="display:flex;gap:var(--s2)">
+          <button class="btn quiet" onclick="go('#/')">Later</button>
+          ${briefed
+            ? `<button class="btn quiet" id="tobrief">Re-brief it</button>
+               <button class="btn primary" onclick="go('#/found/alive/' + '${esc(fid)}')">
+                 See the firm
+               </button>`
+            : `<button class="btn primary" id="tobrief" ${ready ? '' : 'disabled'}>
+                 Next — brief your Co-Board
+               </button>`}
+        </div>
+      </div>
+    </div>
+  `);
+
+  S.error = null;   // shown once, above — never let a failure vanish silently again
+
+  // Every toggle on this screen re-renders it. Without these, picking a cadence
+  // after typing your bot token silently ate the token.
+  const tok = document.getElementById('ch-token');
+  const tgt = document.getElementById('ch-target');
+  if(tok) tok.oninput = () => { S.chToken = tok.value; if(tok.value) S.chPreset = null; };
+  if(tgt) tgt.oninput = () => { S.chTarget = tgt.value; };
+
+  const nxt = document.getElementById('tobrief');
+  if(nxt) nxt.onclick = async () => {
+    nxt.disabled = true;
+    S.manifest = {cadence: S.autoPulse ? S.interval : null, full: S.leanMode};
+    if(S.channel !== 'none'){
+      const preset = S.chPreset != null ? (S.notifyPresets || [])[S.chPreset] : null;
+      S.manifest.notify = {
+        channel: S.channel,
+        token: (document.getElementById('ch-token') || {}).value || '',
+        target: (document.getElementById('ch-target') || {}).value
+                || (preset && preset.target) || '',
+      };
+      if(preset) S.manifest.notify.preset = preset;
+    }
+    const r = await POST('/api/next/brief', {
+      firm_id: f.firm_id,
+      cadence: S.manifest.cadence,
+      channel: S.channel === 'none' ? null : S.channel,
+      voice: [S.voiceTools, S.voiceKnow].filter(Boolean).join('\n\n'),
+      gaps: (S.lastGaps || []),
+    });
+    if(!r.ok){ nxt.disabled = false; return; }
+    S.briefJob = r.job_id; S.briefCursor = 0; S.thoughts = [];
+    go('#/found/briefing/' + f.firm_id);
+  };
+}
+
+/* --- the Co-Board learns the firm --------------------------------------- */
+function viewBriefing(fid){
+  mount(`
+    ${chrome('Briefing the Co-Board')}
+    <div class="narrow step thinking">
+      <h2>Teaching your Co-Board this firm.</h2>
+      <div class="pulsebar"><i></i></div>
+      <div class="stage-meta">
+        <span>This usually takes a few minutes — it's doing real work.</span>
+        <span class="clock" id="elapsed">0:00</span>
+      </div>
+      <div class="thoughts" id="thoughts" aria-live="polite"></div>
+    </div>
+  `);
+  stageStart('brief');
+  pollBrief(fid);
+}
+
+async function pollBrief(fid){
+  if(!S.briefJob || !location.hash.startsWith('#/found/briefing')) return;
+  let r;
+  try{ r = await GET('/api/next/brief/' + S.briefJob + '?cursor=' + S.briefCursor); }
+  catch(e){ setTimeout(() => pollBrief(fid), 1500); return; }
+
+  if(r.narration && r.narration.length){
+    stageReal(r.narration);
+    S.briefCursor = r.cursor;
+  }
+  if(r.status === 'ready'){
+    S.brief = r.brief; S.briefJob = null;
+    return stageFinale(() => go('#/found/coboard/' + fid));
+  }
+  if(r.status === 'failed' || !r.ok){
+    S.error = r.error || 'The briefing could not be written.';
+    S.briefJob = null; stageStop();
+    return go('#/found/live/' + fid);
+  }
+  setTimeout(() => pollBrief(fid), 600);
+}
+
+/* --- the level-up ------------------------------------------------------- */
+async function viewCoboard(fid){
+  const f = S.founded && S.founded.firm_id === fid
+    ? S.founded
+    : {firm_id: fid, name: (S.readiness && S.readiness.name) || fid,
+       hired: (S.readiness && S.readiness.hired) || []};
+  if(!S.brief) return go('#/found/alive/' + fid);   // already briefed — nothing to sit through
+
+  let known = S.coboard;
+  if(!known){
+    try{ known = S.coboard = await GET('/api/next/coboard'); }
+    catch(e){ known = {briefed: []}; }
+  }
+  const already = known.briefed.filter(b => b !== fid).length;
+  const after = already + 1;
+
+  // The whole building, not just the briefed part — the Board owns more firms
+  // than the Co-Board has met, and the card must not undercount his company.
+  // Always refetch: a list cached before this founding is one firm short.
+  try{ S.firms = (await GET('/api/next/hub')).firms || []; }catch(e){}
+  const total = Math.max(S.firms.length, after);
+  const unmet = total - after;
+
+  // What it gained — every line a real fact about THIS firm, never a point.
+  const hired = f.hired || [];
+  const caps = [`Run ${f.name}'s floor — gates, escalations, and spend, by name`];
+  if(hired.length) caps.push(
+    `Speak for ${hired.slice(0, 2).map(m => m.name).join(' and ')}` +
+    `${hired.length > 2 ? ` and ${hired.length - 2} more` : ''} — it knows who owns what`);
+  if((S.lastGaps || []).length) caps.push(
+    `Watch the ${plural(S.lastGaps.length, 'gap')} it knows this firm has — no surprises on day one`);
+  if(S.manifest && S.manifest.cadence) caps.push(
+    `Expect the floor to wake every ${S.manifest.cadence}, whether or not you're there`);
+
+  mount(`
+    ${chrome('Your Co-Board')}
+    <div class="step">
+      <div class="stage-head">
+        <div class="step-of">Step 5 of 5 · The Co-Board</div>
+        <h1>Your Co-Board just learned to run ${esc(f.name)}.</h1>
+        <p>It already knew how to govern a Cadre firm — gates, escalations, forensics, spend.
+           What it didn't know was <em>this</em> one. Now it does, and it keeps this brief
+           current alongside you.</p>
+      </div>
+
+      <div class="levelup">
+        <div class="lvl-row">
+          <span class="lvl-was">${plural(already, 'firm')}</span>
+          <span class="lvl-arrow">→</span>
+          <span class="lvl-now">${after} of ${plural(total, 'firm')}</span>
+        </div>
+        <p class="hint">Firms your Co-Board can run the floor of${unmet > 0
+          ? ` — ${unmet} more in the building it hasn't met yet` : ''}.</p>
+      </div>
+
+      ${S.error ? `<div class="oops">${esc(S.error)}</div>` : ''}
+
+      <div class="ready" style="margin:0 0 var(--s4)">
+        <div class="eyebrow">It can now</div>
+        ${caps.map(c => `
+          <div class="check done">
+            <span class="box">✓</span>
+            <span class="what">${esc(c)}</span>
+          </div>`).join('')}
+      </div>
+
+      <div class="rack">
+        <div class="rack-head">
+          <h3>What it learned</h3>
+          <span class="count">.firm/boardroom/BRIEF.md</span>
+        </div>
+        <div class="briefdoc" id="briefdoc" contenteditable="true"
+             spellcheck="false">${esc(S.brief)}</div>
+        <p class="hint" style="margin-top:var(--s2)">
+          Edit anything that's wrong. This is the document your Co-Board reads before it
+          says a word about ${esc(f.name)}.
+        </p>
+      </div>
+
+      <div class="golive armed">
+        <div class="golive-head">
+          <div>
+            <h3>Bring it to life</h3>
+            <p class="hint">Signs the manifest, teaches the Co-Board, and
+              ${S.manifest && S.manifest.cadence
+                ? 'starts the pulse.' : 'hands you the keys.'}</p>
+          </div>
+        </div>
+        <div class="cadence">
+          <span class="grow"></span>
+          <button class="btn primary" id="golive">Bring it to life</button>
+        </div>
+        <div id="pulse-said"></div>
+      </div>
+    </div>
+  `);
+  S.error = null;
+
+  document.getElementById('golive').onclick = async () => {
+    const btn = document.getElementById('golive');
+    btn.disabled = true; btn.textContent = 'Signing…';
+    const said = document.getElementById('pulse-said');
+
+    const edited = document.getElementById('briefdoc').innerText;
+    const b = await POST('/api/next/brief-commit', {firm_id: fid, brief: edited});
+    if(!b.ok){
+      said.innerHTML = `<div class="oops">Could not teach the Co-Board.
+        <div class="why">${esc(b.error || '')}</div></div>`;
+      btn.disabled = false; btn.textContent = 'Bring it to life';
+      return;
+    }
+    const r = await POST('/api/next/manifest',
+      {firm_id: fid, manifest: S.manifest || {}});
+    if(!r.ok){
+      said.innerHTML = `<div class="oops">The brief is saved, but the manifest didn't take.
+        <div class="why">${esc(r.error || '')}</div></div>`;
+      btn.disabled = false; btn.textContent = 'Bring it to life';
+      return;
+    }
+    S.alive = r;
+    S.coboardCount = already;   // the crest shows what it becomes, not what it was
+    S.coboard = null;
+    go('#/found/alive/' + fid);
+  };
+}
+
+async function viewAlive(fid){
+  // A refresh used to land on #/found/coboard with no brief in memory and bounce the
+  // Board back into the briefing they'd already sat through. The alive state is a real
+  // place now: it has a URL and it reads itself off disk.
+  let f = S.founded && S.founded.firm_id === fid ? S.founded : null;
+  if(!f){
+    try{
+      const rd = await GET('/api/next/readiness/' + fid);
+      f = {firm_id: fid, name: rd.name, hired: rd.hired || []};
+    }catch(e){ return go('#/'); }
+  }
+  if(!S.coboardCount){
+    try{
+      const known = await GET('/api/next/coboard');
+      S.coboardCount = Math.max(0, (known.briefed || []).length - 1);
+    }catch(e){}
+  }
+  // The building — for this floor's number and its live telemetry.
+  try{ S.firms = (await GET('/api/next/hub')).firms || []; }catch(e){}
+  const tele = S.firms.find(x => x.id === fid) || null;
+  const floorNo = tele && tele.floor ? pad2(tele.floor) : null;
+  const running = tele ? Math.max(0, tele.running - tele.stale_runs) : 0;
+
+  // The cadence is read from the systemd timer, not session memory — a
+  // refreshed page shows the truth and can change it right here.
+  let ps = {enabled: false, interval: null};
+  try{ ps = await GET('/api/next/pulse-state/' + fid); }catch(e){}
+  const cadence = ps.enabled ? ps.interval : null;
+  const after = ((S.coboardCount || 0) + 1);
+
+  mount(`
+    ${chrome(esc(f.name))}
+    <div class="narrow arrived">
+      <div class="crest">
+        <div class="crest-ring"></div>
+        <div class="crest-core">${after}</div>
+      </div>
+
+      <h1 class="rise-1">${esc(f.name)} is alive.</h1>
+      <p class="sub rise-2">${cadence
+        ? `It wakes every ${esc(cadence)} and works whether or not you're watching.`
+        : `It's yours to wake. Pulse it whenever you want it to work.`}
+         Your Co-Board runs ${plural(after, 'firm')} now, and it knows this one by name.</p>
+
+      <div class="nameplates rise-3">
+        ${(f.hired || []).map((m, i) => `
+          <div class="nameplate" style="animation-delay:${600 + i * 90}ms">
+            <span class="name">${esc(m.name)}</span>
+            <span class="role">${esc(m.role)}</span>
+          </div>`).join('')}
+      </div>
+
+      <div class="firmcard rise-4${running ? ' live' : ''}" id="firmcard">
+        <div class="fc-head">
+          <div>
+            <h3>${esc(f.name)}</h3>
+            <div class="slug">${floorNo ? `Floor ${floorNo} · ` : ''}${esc(fid)}</div>
+          </div>
+          <span class="pip${running ? ' live' : ''}" id="fc-pip">
+            <span class="dot"></span><span id="fc-pip-t">${running ? plural(running, 'run') : 'Quiet'}</span>
+          </span>
+        </div>
+        ${tele ? `
+        <div class="meta">
+          <span>${tele.members_active}/${tele.members_total} on staff</span>
+          <span>${cadence ? 'wakes every ' + esc(cadence) : 'manual pulse'}</span>
+          <span>$${(tele.spend_usd || 0).toFixed(2)} payroll</span>
+        </div>` : ''}
+        <div class="cadence" style="margin-top:var(--s3)">
+          <button class="tick${!cadence ? ' on' : ''}" data-cad=""
+            title="No timer — the firm works only when pulsed by hand">Manual</button>
+          ${INTERVALS.map(i => `
+            <button class="tick${cadence === i ? ' on' : ''}" data-cad="${i}"
+              title="Wake the firm every ${i}">${i}</button>`).join('')}
+        </div>
+        <div class="fc-actions">
+          <button class="btn primary" id="fc-pulse">Pulse the firm</button>
+          <button class="btn" onclick="location.href='/f/${esc(fid)}/'">Walk the floor</button>
+        </div>
+        <div id="fc-said"></div>
+      </div>
+
+      <button class="btn quiet rise-4" style="margin-top:var(--s3)" onclick="go('#/')">
+        Back to the boardroom</button>
+    </div>
+  `);
+
+  for(const b of document.querySelectorAll('[data-cad]')){
+    b.onclick = async () => {
+      b.disabled = true; b.textContent = '…';
+      const iv = b.dataset.cad;
+      let r;
+      try{ r = await POST('/api/next/pulse', {firm_id: fid, interval: iv || '30m', enable: !!iv}); }
+      catch(e){ r = {ok: false}; }
+      if(!r.ok){
+        b.disabled = false; b.textContent = iv || 'Manual';
+        b.title = r.error || 'could not change the pulse';
+        return;
+      }
+      viewAlive(fid);
+    };
+  }
+
+  document.getElementById('fc-pulse').onclick = async () => {
+    const btn = document.getElementById('fc-pulse');
+    btn.disabled = true; btn.textContent = 'Waking the floor…';
+    const said = document.getElementById('fc-said');
+    // Remember the last pulse report BEFORE firing, so we only trust a newer one.
+    let before = 0;
+    try{ const ps = await GET('/f/' + fid + '/api/pulse-status'); before = ps.mtime || 0; }catch(e){}
+    let r;
+    try{ r = await POST('/f/' + fid + '/api/action/pulse/firm', {}); }
+    catch(e){ r = {ok: false, error: 'Could not reach the firm.'}; }
+    if(!r.ok){
+      said.innerHTML = `<div class="oops" style="margin:var(--s3) 0 0">${esc(r.error || 'The pulse did not fire.')}</div>`;
+      btn.disabled = false; btn.textContent = 'Pulse the firm';
+      return;
+    }
+    // No green until the floor actually answers. The FAST signal is a run row
+    // appearing (seconds); the pulse report only lands after every member
+    // finishes (minutes, the pulse is synchronous) — watch runs first, keep
+    // the report as the 0-ran fallback.
+    said.innerHTML = `<div class="hint" style="margin-top:var(--s4)">Pulse sent — waiting for the floor to answer…</div>`;
+    let sum = null, live = 0;
+    for(let i = 0; i < 15; i++){
+      await new Promise(res => setTimeout(res, 3000));
+      try{
+        const firms = (await GET('/api/next/hub')).firms || [];
+        const me = firms.find(x => x.id === fid);
+        live = me ? Math.max(0, me.running - me.stale_runs) : 0;
+        if(live > 0) break;
+      }catch(e){}
+      try{
+        const ps = await GET('/f/' + fid + '/api/pulse-status');
+        if(ps.available && (ps.mtime || 0) > before && ps.summary){ sum = ps.summary; break; }
+      }catch(e){}
+    }
+    if(live > 0 || (sum && sum.ran > 0)){
+      document.getElementById('firmcard').classList.add('live');
+      document.getElementById('fc-pip').classList.add('live');
+      document.getElementById('fc-pip-t').textContent = 'Waking';
+      said.innerHTML = `<div class="alive" style="margin-top:var(--s4)">
+        ${plural(live || sum.ran, 'member')} took the floor. Walk it to watch, or let it work.</div>`;
+      btn.textContent = 'Pulse sent';
+      watchFloor(fid);
+    } else if(sum){
+      const reasons = Object.entries(sum.skip_reasons || {})
+        .map(([k, v]) => `${k} ×${v}`).join(' · ') || 'no reason reported';
+      said.innerHTML = `<div class="oops" style="margin:var(--s3) 0 0">
+        The pulse fired but nobody worked — ${esc(reasons)}.</div>`;
+      btn.disabled = false; btn.textContent = 'Pulse the firm';
+    } else {
+      said.innerHTML = `<div class="hint" style="margin-top:var(--s4)">
+        The pulse was dispatched but hasn't reported back yet — walk the floor to see it live.</div>`;
+      btn.disabled = false; btn.textContent = 'Pulse the firm';
+    }
+  };
+  if(running) watchFloor(fid);
+}
+
+/* Keep the card honest while the Board is looking at it — real runs, never a
+   spinner. Stops the moment they leave the page. */
+async function watchFloor(fid){
+  if(S.watching === fid) return;
+  S.watching = fid;
+  const here = '#/found/alive/' + fid;
+  let sawRun = false;
+  for(let i = 0; i < 36 && location.hash === here; i++){
+    await new Promise(res => setTimeout(res, 5000));
+    if(location.hash !== here) break;
+    let firms;
+    try{ firms = (await GET('/api/next/hub')).firms || []; }catch(e){ continue; }
+    const f = firms.find(x => x.id === fid);
+    const card = document.getElementById('firmcard');
+    const pip = document.getElementById('fc-pip');
+    const t = document.getElementById('fc-pip-t');
+    if(!f || !card || !pip || !t) break;
+    const running = Math.max(0, f.running - f.stale_runs);
+    if(running > 0){
+      sawRun = true;
+      card.classList.add('live'); pip.classList.add('live');
+      t.textContent = plural(running, 'run');
+    } else if(sawRun){
+      // It worked and finished while they watched — say so, honestly.
+      card.classList.remove('live'); pip.classList.remove('live');
+      t.textContent = 'Shift done';
+      break;
+    }
+  }
+  S.watching = null;
+}
+
+window.pickInterval = (i) => { S.interval = i; viewLive(S.readiness && S.readiness.firm_id); };
+window.toggleAuto = () => { S.autoPulse = !S.autoPulse; viewLive(S.readiness && S.readiness.firm_id); };
+window.pickChannel = (c) => { S.channel = c; viewLive(S.readiness && S.readiness.firm_id); };
+window.setLean = (v) => { S.leanMode = v; viewLive(S.readiness && S.readiness.firm_id); };
+window.pickNotifyPreset = (i) => {
+  S.chPreset = S.chPreset === i ? null : i;
+  S.chToken = '';   // the preset carries the token; typing again overrides
+  viewLive(S.readiness && S.readiness.firm_id);
+};
+
+/* ------------------------------------------------------------------ router */
+window.go = (hash) => {
+  if(location.hash === hash) route(); else location.hash = hash;
+};
+
+async function route(){
+  const h = location.hash || '#/';
+  // The window is only there when you're at the top of the building.
+  document.body.classList.toggle('vista', !h.startsWith('#/found'));
+  if(h === '#/desk')           return viewDesk();
+  if(h === '#/found')          return viewAsk();
+  if(h === '#/found/thinking') return S.job ? viewThinking() : go('#/found');
+  if(h === '#/found/roster')   return viewRoster();
+  if(h.startsWith('#/found/hired'))   return viewHired(h.split('/')[3]);
+  if(h.startsWith('#/found/equip'))   return viewEquip(h.split('/')[3]);
+  if(h.startsWith('#/found/train'))   return viewTrain(h.split('/')[3]);
+  if(h.startsWith('#/found/wiring'))  return S.wireJob ? viewWiring(h.split('/')[3])
+                                                       : go('#/found/train/' + h.split('/')[3]);
+  if(h.startsWith('#/found/loadout')) return viewLoadout(h.split('/')[3]);
+  if(h.startsWith('#/found/live'))    return viewLive(h.split('/')[3]);
+  if(h.startsWith('#/found/briefing'))return S.briefJob ? viewBriefing(h.split('/')[3])
+                                                        : go('#/found/live/' + h.split('/')[3]);
+  if(h.startsWith('#/found/coboard')) return viewCoboard(h.split('/')[3]);
+  if(h.startsWith('#/found/alive'))   return viewAlive(h.split('/')[3]);
+
+  try{
+    const data = await GET('/api/next/hub');
+    S.firms = data.firms || [];
+    if(data.prefs && typeof data.prefs.notes === 'string') S.notes = data.prefs.notes;
+  }catch(e){
+    S.firms = [];
+  }
+  viewBoardroom();
+}
+
+addEventListener('hashchange', route);
+route();
+
+/* Clicking anywhere outside the runs menu puts it away. */
+document.addEventListener('click', (e) => {
+  if(!S.runsOpen || e.target.closest('.runswrap')) return;
+  S.runsOpen = false;
+  const m = document.getElementById('runsmenu');
+  if(m) m.hidden = true;
+  const p = document.getElementById('runspill');
+  if(p){ p.classList.remove('open'); p.setAttribute('aria-expanded', 'false'); }
+});
+
+/* Same for a model menu — closed in the DOM directly, no re-render, so a
+   click that lands on Hire is never wiped mid-commit by a roster repaint. */
+document.addEventListener('click', (e) => {
+  if(S.modelMenu == null || e.target.closest('.modelwrap')) return;
+  S.modelMenu = null;
+  document.querySelectorAll('.modelmenu').forEach(el => el.hidden = true);
+  document.querySelectorAll('.modelpill.open').forEach(el => {
+    el.classList.remove('open');
+    el.setAttribute('aria-expanded', 'false');
+  });
+});
+
+/* The boardroom keeps itself current — but never mid-thought, mid-drag,
+   or while a deploy agenda is being picked. */
+setInterval(() => {
+  if((location.hash || '#/') === '#/' && !S.dragging && !S.deploy) route();
+}, 20000);
+</script>
+</body>
+</html>
