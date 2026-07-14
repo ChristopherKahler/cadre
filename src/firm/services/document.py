@@ -158,16 +158,24 @@ def update_document(
     conn: sqlite3.Connection,
     document_id: str,
     data: dict[str, Any],
+    actor: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Update a document with status transition logging and version auto-increment.
 
     If content_path changes, version is auto-incremented.
     If status changes, a status_transition Records entry is logged.
 
+    Args:
+        actor: Who is making the change, e.g. {"type": "member", "id": "MEM-004"}.
+               Defaults to the Board. A Member revising its own deliverable must
+               pass itself — Records has to carry who actually moved the version,
+               not whoever the default happens to be.
+
     Raises:
         ValueError: If document not found or invalid status.
     """
     existing = require_exists(conn, "document", document_id)
+    actor = actor or {"type": "board", "id": None}
 
     # Validate status if changing
     if "status" in data:
@@ -193,7 +201,7 @@ def update_document(
             conn,
             firm_id=existing["firm_id"],
             event_type="document.status_transition",
-            actor={"type": "board", "id": None},
+            actor=actor,
             target_ref={"type": "document", "id": document_id},
             details={"from": old_status, "to": new_status},
         )
@@ -204,7 +212,7 @@ def update_document(
             conn,
             firm_id=existing["firm_id"],
             event_type="document.updated",
-            actor={"type": "board", "id": None},
+            actor=actor,
             target_ref={"type": "document", "id": document_id},
             details={"content_path": data["content_path"], "version": data["version"]},
         )

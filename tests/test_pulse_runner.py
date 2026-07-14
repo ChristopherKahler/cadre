@@ -471,6 +471,37 @@ def test_register_deliverables_creates_document(tmp_path):
     assert len(find(conn, "document", firm_id="chrisai")) == 1
 
 
+def test_register_deliverables_bumps_existing_version(tmp_path):
+    conn = _conn_with_unit()
+    cfg = {"validators": [{"name": "file_exists", "require_written": True}]}
+    unit = get(conn, "unit", "UNIT-001")
+
+    v1 = tmp_path / "triage-rules.md"
+    v1.write_text("v1")
+    _register_deliverables(
+        conn, "chrisai", unit, "MEM-001",
+        {"tool_calls": [{"name": "Write", "input": {"file_path": str(v1)}}]},
+        cfg, str(tmp_path),
+    )
+    doc_id = find(conn, "document", firm_id="chrisai")[0]["id"]
+
+    # The revision writes a new -v2 file beside the original (never-overwrite).
+    v2 = tmp_path / "triage-rules-v2.md"
+    v2.write_text("v2")
+    _register_deliverables(
+        conn, "chrisai", unit, "MEM-001",
+        {"tool_calls": [{"name": "Write", "input": {"file_path": str(v2)}}]},
+        cfg, str(tmp_path),
+    )
+
+    docs = find(conn, "document", firm_id="chrisai")
+    assert len(docs) == 1, "a -v2 revision must bump the document, not fork a sibling row"
+    assert docs[0]["id"] == doc_id
+    assert docs[0]["version"] == 2
+    assert docs[0]["content_path"] == "triage-rules-v2.md"
+    assert v1.exists(), "never-overwrite: the prior version stays on disk"
+
+
 def test_register_deliverables_skips_without_optin(tmp_path):
     conn = _conn_with_unit()
     f = tmp_path / "scratch.md"

@@ -509,6 +509,33 @@ def firm_create_document(name: str, doc_type: str, content_path: str, parent_ent
     return json.dumps(result, default=str)
 
 
+@mcp.tool()
+def firm_update_document(document_id: str, member_id: str, content_path: str = "", name: str = "", status: str = "") -> str:
+    """Register a revised deliverable as a new version of an existing document (e.g. DOC-001).
+
+    Pass content_path pointing at the NEW file — never the old one. The never-overwrite
+    rule holds: write the revision to a new -vN path, leave the prior file untouched, then
+    call this. The version field auto-increments and Records logs the bump under member_id.
+    status: 'active', 'archived', or 'deprecated'.
+    """
+    data: dict[str, Any] = {}
+    if content_path:
+        data["content_path"] = content_path
+    if name:
+        data["name"] = name
+    if status:
+        data["status"] = status
+    if not data:
+        return json.dumps({"error": "nothing to update — pass content_path, name, or status"})
+    result = _safe(
+        document_svc.update_document,
+        document_id,
+        data,
+        actor={"type": "member", "id": member_id},
+    )
+    return json.dumps(result, default=str)
+
+
 # ---------------------------------------------------------------------------
 # Contract tools
 # ---------------------------------------------------------------------------

@@ -210,6 +210,35 @@ def test_update_document_version_bump() -> None:
     assert len(update_records) == 1
 
 
+def test_update_document_records_the_member_who_revised() -> None:
+    conn = _fresh_conn()
+    create_member(conn, "chrisai", {"name": "Cooper", "role": "Operations Engineer"})
+    doc = create_document(
+        conn,
+        "chrisai",
+        {
+            "name": "Triage Rules",
+            "type": "spec",
+            "content_path": "deliverables/rules.md",
+            "parent_entity_type": "firm",
+            "parent_entity_id": "chrisai",
+        },
+    )
+
+    update_document(
+        conn,
+        doc["id"],
+        {"content_path": "deliverables/rules-v2.md"},
+        actor={"type": "member", "id": "MEM-001"},
+    )
+
+    records = find(conn, "records", firm_id="chrisai")
+    updated = [r for r in records if r["event_type"] == "document.updated"]
+    assert len(updated) == 1
+    assert updated[0]["actor_type"] == "member"
+    assert updated[0]["actor_id"] == "MEM-001"
+
+
 def test_update_document_invalid_status() -> None:
     conn = _fresh_conn()
     doc = create_document(
