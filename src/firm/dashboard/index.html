@@ -537,7 +537,16 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
 tr.flash td{animation:rowflash 2.2s ease-out}
 
 /* ---- live run activation ---- */
-.runstrip{display:none;align-items:center;gap:9px;margin-left:auto;cursor:pointer;
+/* Framework extensions (board-level add-ons) — generic icon links in the
+   topbar, rendered only for what's registered with the hub. Core names no
+   addon; an install with none registered shows nothing. */
+.extlinks{display:flex;align-items:center;gap:4px;margin-left:auto}
+.extlink{width:30px;height:30px;display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--brand-border);border-radius:8px;text-decoration:none;font-size:14px;
+  color:var(--brand-text-secondary);background:var(--brand-surface)}
+.extlink:hover{color:var(--brand-text);border-color:var(--brand-text-dim);background:var(--brand-hover-bg)}
+.extlink.nt{font-size:12px}
+.runstrip{display:none;align-items:center;gap:9px;cursor:pointer;
   border:1px solid rgba(var(--brand-primary-rgb),.45);background:rgba(var(--brand-primary-rgb),.08);
   border-radius:9999px;padding:6px 14px;font:600 11.5px var(--font-mono);letter-spacing:.08em;
   color:var(--brand-primary);animation:stripglow 2.2s ease-in-out infinite;white-space:nowrap;max-width:46vw;overflow:hidden;text-overflow:ellipsis}
@@ -961,6 +970,7 @@ tr.flash td{animation:rowflash 2.2s ease-out}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
       </button>
       <div class="crumbs"><span>Boardroom</span><span class="sep">/</span><span class="here" id="crumbHere">Dashboard</span></div>
+      <div class="extlinks" id="extLinks"></div>
       <button class="runstrip" id="runStrip" onclick="openRunPanel()" aria-live="polite">
         <span class="rdot"></span><span id="runStripText">RUN ACTIVE</span>
       </button>
@@ -3810,6 +3820,36 @@ document.getElementById('pulseBtn').addEventListener('click', async () => {
 
 initCustomViews();
 initCustomBlocks();
+
+/* Framework extensions in the topbar — the same registry the hub reads.
+   Each entry gets a pair: the icon opens it in this tab, ↗ in a new one.
+   Generic by construction: core knows an {id, title, icon, url} and nothing
+   more. A standalone single-firm dashboard (no hub) renders none. Nodes are
+   built with textContent — no markup interpolation, nothing to escape. */
+(async () => {
+  const box = document.getElementById('extLinks');
+  if(!box) return;
+  let list = [];
+  try{
+    const r = await (await fetch('/api/next/hub-extensions')).json();
+    list = (r && r.extensions) || [];
+  }catch(e){ return; }
+  for(const x of list){
+    const open = document.createElement('a');
+    open.className = 'extlink';
+    open.href = x.url;
+    open.title = `${x.title} — framework extension`;
+    open.textContent = x.icon || '▣';
+    const nt = document.createElement('a');
+    nt.className = 'extlink nt';
+    nt.href = x.url;
+    nt.target = '_blank';
+    nt.rel = 'noopener';
+    nt.title = `${x.title} in a new tab`;
+    nt.textContent = '↗';
+    box.append(open, nt);
+  }
+})();
 
 </script>
 </body>
