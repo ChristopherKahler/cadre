@@ -7,11 +7,19 @@ quoting — so every script is also run through ``bash -n``.
 
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from firm.dashboard import launch
+
+
+@pytest.fixture(autouse=True)
+def _linux_branch(monkeypatch):
+    """summon() dispatches by OS — pin the Linux/WSL branch these tests were
+    written against; the macOS branch has its own test at the bottom."""
+    monkeypatch.setattr(sys, "platform", "linux")
 
 # launch shares the global subprocess module — patching its Popen patches
 # everyone's, including the bash -n check below. Keep the real one.
@@ -88,3 +96,15 @@ def test_deploy_rides_the_agenda_in_shell_safely(spawn, tmp_path):
     assert cmd == "/fake/claude"
     assert flag == "--dangerously-skip-permissions"
     assert prompt == f"/boardroom chrisai\n\nAgenda:\n{agenda}"
+
+
+def test_macos_branch_opens_a_command_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(launch, "_which_claude", lambda: "/fake/claude")
+    calls = {}
+    monkeypatch.setattr(launch.subprocess, "Popen",
+                        lambda argv, **kw: calls.setdefault("argv", argv))
+    r = launch.summon(str(tmp_path), "chrisai")
+    assert r["ok"] is True
+    assert calls["argv"][0] == "open"
+    assert calls["argv"][1].endswith(".command")

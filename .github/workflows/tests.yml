@@ -28,6 +28,9 @@ jobs:
         run: python -m pytest tests -q
         env:
           PYTHONPATH: src
+          # The spawn layer refuses to run without a wired claude runtime —
+          # a real guard in production, a stub in CI (every spawn is mocked).
+          CADRE_CLAUDE_BIN: /bin/echo
       - name: Portable core (Windows)
         if: runner.os == 'Windows'
         run: >
