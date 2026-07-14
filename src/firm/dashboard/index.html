@@ -911,11 +911,6 @@ tr.flash td{animation:rowflash 2.2s ease-out}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
           <span>Deliverables</span>
         </button>
-        <button class="navitem" id="chatNav" style="display:none"
-                title="Co-Board chat — opens in this tab; ↗ for a new tab">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          <span>Co-Board Chat</span><span id="chatNavNew" title="Open chat in a new tab" style="margin-left:auto;opacity:.65">↗</span>
-        </button>
       </div>
       <div class="navgroup">
         <div class="navlabel">Ledger</div>
@@ -3816,24 +3811,6 @@ document.getElementById('pulseBtn').addEventListener('click', async () => {
 initCustomViews();
 initCustomBlocks();
 
-/* Co-Board chat in the sidebar — appears when a chat rail is configured.
-   Main click replaces this window; the ↗ opens a new tab. */
-(async () => {
-  try{
-    const r = await (await fetch('/api/next/rail')).json();
-    if(!(r && r.chat && r.chat.configured)) return;
-    const url = r.chat.link_url || r.chat.url;
-    const btn = document.getElementById('chatNav');
-    if(!btn) return;
-    btn.style.display = '';
-    btn.addEventListener('click', () => { window.location.href = url; });
-    const nt = document.getElementById('chatNavNew');
-    if(nt) nt.addEventListener('click', (e) => {
-      e.stopPropagation();
-      window.open(url, '_blank', 'noopener');
-    });
-  }catch(e){}
-})();
 </script>
 </body>
 </html>

@@ -1206,12 +1206,11 @@ function chrome(where){
     </div>
     <div class="tools">
       ${runsIndicator()}
-      <a class="btn icon quiet" id="chatlink"
-         title="Co-Board chat — the boardroom in a conversation" aria-label="Co-Board chat"
-         style="display:none">💬</a>
-      <a class="btn icon quiet" id="chatnew" target="_blank" rel="noopener"
-         title="Co-Board chat in a new tab" aria-label="Co-Board chat in a new tab"
-         style="display:none">↗</a>
+      ${(S.hubExts || []).map(x => `
+      <a class="btn icon quiet" href="${esc(x.url)}"
+         title="${esc(x.title)} — framework extension" aria-label="${esc(x.title)}">${esc(x.icon || '▣')}</a>
+      <a class="btn icon quiet" href="${esc(x.url)}" target="_blank" rel="noopener"
+         title="${esc(x.title)} in a new tab" aria-label="${esc(x.title)} in a new tab">↗</a>`).join('')}
       <button class="btn icon quiet" id="theme" title="Switch theme" aria-label="Switch theme">◐</button>
     </div>
   </div>`;
@@ -1221,10 +1220,6 @@ function mount(html){
   app.innerHTML = html;
   const t = document.getElementById('theme');
   if(t) t.onclick = () => theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
-  for(const id of ['chatlink', 'chatnew']){
-    const a = document.getElementById(id);
-    if(a && S.chatUrl){ a.href = S.chatUrl; a.style.display = ''; }
-  }
   const rp = document.getElementById('runspill');
   if(rp) rp.onclick = (e) => {
     e.stopPropagation();
@@ -1616,6 +1611,66 @@ async function commitFloors(stack){
   catch(e){ /* the next hub fetch restores the saved truth */ }
 }
 
+/* ------------------------------------------------- framework extensions ---
+   Board-level surfaces (a chat rail, future rails) — installed ONCE for the
+   whole portfolio, rendered generically. Distinct from firm plugins, which
+   install onto one firm's floor. Core never names an addon: an entry is
+   data ({id, title, icon, url}) and the hub just links it. */
+function extensionsRack(){
+  const list = S.hubExts || [];
+  return `
+  <div class="rack" id="extrack">
+    <div class="rack-head"><h3>Framework extensions</h3>
+      <span class="count">${list.length ? plural(list.length, 'installed') : 'none'}</span></div>
+    ${list.length ? list.map(x => `
+      <div class="check">
+        <span class="box">${esc(x.icon || '▣')}</span>
+        <span class="what"><a href="${esc(x.url)}" style="color:inherit">${esc(x.title)}</a></span>
+        <button class="copychip" data-extrm="${esc(x.id)}" title="Remove ${esc(x.title)} from the hub">✕</button>
+      </div>`).join('')
+    : `<p class="hint">Board-level add-ons — a chat rail, a boardroom surface —
+        install here for the whole portfolio. Firm plugins are a different door:
+        those install onto one firm's floor (Install extension, in the firm sidebar).</p>`}
+    <button class="tick" id="extadd" style="margin-top:var(--s3)">＋ Install framework extension</button>
+    <input type="file" id="extfile" accept=".json,application/json" hidden>
+    <p class="hint" id="extmsg" style="margin-top:var(--s2)"></p>
+  </div>`;
+}
+
+function wireExtensionsRack(){
+  const add = document.getElementById('extadd');
+  const file = document.getElementById('extfile');
+  const msg = document.getElementById('extmsg');
+  if(!add || !file) return;
+  add.onclick = () => file.click();
+  file.onchange = async () => {
+    const f = file.files && file.files[0];
+    if(!f) return;
+    msg.textContent = 'reading…';
+    let pkg;
+    try{ pkg = JSON.parse(await f.text()); }
+    catch(e){ msg.textContent = 'that file is not valid JSON'; return; }
+    try{
+      const r = await POST('/api/next/hub-extensions', {package: pkg});
+      S.hubExts = r.extensions || [];
+      msg.textContent = `installed ${r.installed.title}`;
+      viewDesk(false);
+    }catch(e){
+      msg.textContent = String(e.message || e).slice(0, 160) || 'install failed';
+    }finally{ file.value = ''; }
+  };
+  for(const b of document.querySelectorAll('[data-extrm]')){
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      try{
+        const r = await POST('/api/next/hub-extensions', {remove: b.dataset.extrm});
+        S.hubExts = r.extensions || [];
+        viewDesk(false);
+      }catch(err){ if(msg) msg.textContent = 'could not remove it'; }
+    };
+  }
+}
+
 /* ------------------------------------------------------------------- desk */
 async function viewDesk(refresh = true){
   if(refresh){
@@ -1739,6 +1794,8 @@ async function viewDesk(refresh = true){
               <div class="check"><span class="box">·</span><span class="what">${esc(s)}</span></div>`).join('')
             : `<p class="hint">Nothing unusual on any floor.</p>`}
           </div>
+
+          ${extensionsRack()}
         </aside>
       </div>
 
@@ -1762,6 +1819,7 @@ async function viewDesk(refresh = true){
       if(r.ok) b.classList.add('on'); else { b.title = 'Could not wake it'; b.disabled = false; }
     };
   }
+  wireExtensionsRack();
   const pad = document.getElementById('deskpad');
   pad.oninput = () => {
     S.notes = pad.value;
@@ -3791,18 +3849,13 @@ async function route(){
   viewBoardroom();
 }
 
-// The chat rail's front door, when one is configured — lights the 💬 in the
-// chrome on every view. Absent rail = the link just never appears.
+// Framework extensions load once at boot — the chrome and the desk rack both
+// read S.hubExts. An empty registry simply renders nothing but the panel.
 (async () => {
   try{
-    const r = await GET('/api/next/rail');
-    if(r && r.chat && r.chat.configured){
-      S.chatUrl = r.chat.link_url || r.chat.url;
-      for(const id of ['chatlink', 'chatnew']){
-        const a = document.getElementById(id);
-        if(a){ a.href = S.chatUrl; a.style.display = ''; }
-      }
-    }
+    const r = await GET('/api/next/hub-extensions');
+    S.hubExts = r.extensions || [];
+    if(S.hubExts.length) route();   // repaint so the chrome picks them up
   }catch(e){}
 })();
 

@@ -321,172 +321,23 @@ def _build_parser() -> argparse.ArgumentParser:
         "status", help="List installed heartbeat timers with liveness and last pulse.",
     )
 
-    # ---- slack rail subparser ----
+    # ---- rail subparsers (Cadre OS addons — lazy delegates) ----
+    # The rails (Slack, Co-Board Chat) ship with Cadre OS, not the
+    # open-source framework. `cadre slack …` / `cadre chat …` forward
+    # verbatim to the addon CLIs when installed; without them the stubs
+    # say exactly what's missing. add_help=False so --help forwards too.
     slack_parser = subparsers.add_parser(
         "slack",
-        help="The Slack rail — a board channel that opens headless Co-Board "
-             "sessions; every thread is a conversation with the boardroom.",
+        help="Slack Rail — the boardroom in a Slack channel (Cadre OS addon).",
+        add_help=False,
     )
-    slack_sub = slack_parser.add_subparsers(dest="slack_command", metavar="<slack-command>")
-
-    slack_sub.add_parser(
-        "manifest",
-        help="Print the Slack app manifest (paste at api.slack.com/apps → From a manifest).",
-    )
-    slack_setup = slack_sub.add_parser(
-        "setup",
-        help="Wizard: tokens → vault (global tier), pick the board channel, "
-             "pair the operator, choose the permission mode.",
-    )
-    slack_setup.add_argument(
-        "--firms-root", dest="firms_root", type=Path,
-        default=Path.home() / "firms",
-        help="The Co-Board's boot directory — headless sessions run here "
-             "(default ~/firms).",
-    )
-    slack_sub.add_parser(
-        "serve",
-        help="Run the rail daemon in the foreground (Socket Mode — no public URL).",
-    )
-    slack_sub.add_parser(
-        "enable",
-        help="Install and start the rail as a systemd user service "
-             "(its own unit — hub restarts never drop a board turn).",
-    )
-    slack_sub.add_parser("disable", help="Stop and remove the rail service.")
-    slack_mode = slack_sub.add_parser(
-        "mode",
-        help="Show or set the permission posture (approve = 👍/👎 gates every "
-             "action; skip = full trust). Restarts the service when changed.",
-    )
-    slack_mode.add_argument(
-        "value", nargs="?", choices=["approve", "skip"], default=None,
-        help="Omit to show the current mode.",
-    )
-    slack_model = slack_sub.add_parser(
-        "model",
-        help="Show or set the model board turns run on (opus, opus[1m], "
-             "sonnet, or a full id; 'default' clears the override).",
-    )
-    slack_model.add_argument(
-        "value", nargs="?", default=None,
-        help="Omit to show the current model.",
-    )
-    slack_updates = slack_sub.add_parser(
-        "updates",
-        help="Show or toggle in-turn proactive thread updates (on = narrate "
-             "load-bearing moments via `slack say`; off = quiet, one answer per turn).",
-    )
-    slack_updates.add_argument(
-        "value", nargs="?", choices=["on", "off"], default=None,
-        help="Omit to show the current setting.",
-    )
-    slack_sub.add_parser(
-        "status",
-        help="Service state, config summary, thread-map size, last activity.",
-    )
-    slack_sub.add_parser(
-        "test",
-        help="Post a wiring-test message into the configured board channel.",
-    )
-    slack_say = slack_sub.add_parser(
-        "say",
-        help="Post a message into the board channel/thread — used by running "
-             "boardroom sessions to answer mid-turn (thread comes from env).",
-    )
-    slack_say.add_argument("text", help="Message text to post.")
-    slack_say.add_argument(
-        "--thread", default=None,
-        help="Thread ts (defaults to $CADRE_RAIL_THREAD_TS from the spawn env).",
-    )
-
-    # ---- chat rail subparser ----
+    slack_parser.add_argument("slack_args", nargs=argparse.REMAINDER)
     chat_parser = subparsers.add_parser(
         "chat",
-        help="The chat rail — cadre's own boardroom chat in the browser; "
-             "every conversation is a headless Co-Board session. No Slack, "
-             "no tokens, localhost only.",
+        help="Co-Board Chat — the boardroom as a conversation (Cadre OS addon).",
+        add_help=False,
     )
-    chat_sub = chat_parser.add_subparsers(dest="chat_command", metavar="<chat-command>")
-
-    chat_setup = chat_sub.add_parser(
-        "setup",
-        help="Wizard: firms root + port + permission mode — no external app.",
-    )
-    chat_setup.add_argument(
-        "--firms-root", dest="firms_root", type=Path,
-        default=Path.home() / "firms",
-        help="The Co-Board's boot directory — headless sessions run here "
-             "(default ~/firms).",
-    )
-    chat_sub.add_parser(
-        "serve",
-        help="Run the rail daemon in the foreground (UI + API on localhost).",
-    )
-    chat_sub.add_parser(
-        "open",
-        help="Print the chat UI URL and try to open it in a browser.",
-    )
-    chat_sub.add_parser(
-        "enable",
-        help="Install and start the rail as a systemd user service "
-             "(its own unit — hub restarts never drop a board turn).",
-    )
-    chat_sub.add_parser("disable", help="Stop and remove the rail service.")
-    chat_mode = chat_sub.add_parser(
-        "mode",
-        help="Show or set the permission posture (approve = Allow/Deny card "
-             "per action; skip = full trust). Restarts the service when changed.",
-    )
-    chat_mode.add_argument(
-        "value", nargs="?", choices=["approve", "skip"], default=None,
-        help="Omit to show the current mode.",
-    )
-    chat_model = chat_sub.add_parser(
-        "model",
-        help="Show or set the model board turns run on (opus, opus[1m], "
-             "sonnet, or a full id; 'default' clears the override).",
-    )
-    chat_model.add_argument(
-        "value", nargs="?", default=None,
-        help="Omit to show the current model.",
-    )
-    chat_host = chat_sub.add_parser(
-        "host",
-        help="Show or set the bind address: local (127.0.0.1, default), "
-             "tailscale (this machine's tailnet IP — phone access), or an IPv4.",
-    )
-    chat_host.add_argument(
-        "value", nargs="?", default=None,
-        help="Omit to show the current bind.",
-    )
-    chat_updates = chat_sub.add_parser(
-        "updates",
-        help="Show or toggle in-turn proactive updates (on = narrate "
-             "load-bearing moments via `chat say`; off = quiet, one answer per turn).",
-    )
-    chat_updates.add_argument(
-        "value", nargs="?", choices=["on", "off"], default=None,
-        help="Omit to show the current setting.",
-    )
-    chat_sub.add_parser(
-        "status",
-        help="Service state, config summary, conversation count, last activity.",
-    )
-    chat_sub.add_parser(
-        "test",
-        help="Round-trip the daemon's state endpoint — wiring check.",
-    )
-    chat_say = chat_sub.add_parser(
-        "say",
-        help="Post a message into a conversation — used by running boardroom "
-             "sessions to answer mid-turn (routing comes from env).",
-    )
-    chat_say.add_argument("text", help="Message text to post.")
-    chat_say.add_argument(
-        "--conversation", default=None,
-        help="Conversation id (defaults to $CADRE_RAIL_THREAD_TS from the spawn env).",
-    )
+    chat_parser.add_argument("chat_args", nargs=argparse.REMAINDER)
 
     # ---- dashboard subparser ----
     dash_parser = subparsers.add_parser(
@@ -856,62 +707,24 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "slack":
-        from firm.cli import rail_slack
-
-        if args.slack_command == "manifest":
-            return rail_slack.run_manifest()
-        if args.slack_command == "setup":
-            return rail_slack.run_setup(args.firms_root)
-        if args.slack_command == "serve":
-            return rail_slack.run_serve()
-        if args.slack_command == "enable":
-            return rail_slack.run_enable()
-        if args.slack_command == "disable":
-            return rail_slack.run_disable()
-        if args.slack_command == "mode":
-            return rail_slack.run_mode(args.value)
-        if args.slack_command == "model":
-            return rail_slack.run_model(args.value)
-        if args.slack_command == "updates":
-            return rail_slack.run_updates(args.value)
-        if args.slack_command == "status":
-            return rail_slack.run_status()
-        if args.slack_command == "test":
-            return rail_slack.run_test()
-        if args.slack_command == "say":
-            return rail_slack.run_say(args.text, args.thread)
-        parser.parse_args(["slack", "--help"])
-        return 0
+        try:
+            from cadre_slack.__main__ import main as slack_main
+        except ImportError:
+            print("The Slack Rail is a Cadre OS addon — this install doesn't "
+                  "have it.\nIt ships with Cadre OS; once installed: "
+                  "cadre-slack setup", file=sys.stderr)
+            return 1
+        return slack_main(args.slack_args)
 
     if args.command == "chat":
-        from firm.cli import rail_chat
-
-        if args.chat_command == "setup":
-            return rail_chat.run_setup(args.firms_root)
-        if args.chat_command == "serve":
-            return rail_chat.run_serve()
-        if args.chat_command == "open":
-            return rail_chat.run_open()
-        if args.chat_command == "enable":
-            return rail_chat.run_enable()
-        if args.chat_command == "disable":
-            return rail_chat.run_disable()
-        if args.chat_command == "mode":
-            return rail_chat.run_mode(args.value)
-        if args.chat_command == "model":
-            return rail_chat.run_model(args.value)
-        if args.chat_command == "host":
-            return rail_chat.run_host(args.value)
-        if args.chat_command == "updates":
-            return rail_chat.run_updates(args.value)
-        if args.chat_command == "status":
-            return rail_chat.run_status()
-        if args.chat_command == "test":
-            return rail_chat.run_test()
-        if args.chat_command == "say":
-            return rail_chat.run_say(args.text, args.conversation)
-        parser.parse_args(["chat", "--help"])
-        return 0
+        try:
+            from cadre_chat.__main__ import main as chat_main
+        except ImportError:
+            print("Co-Board Chat is a Cadre OS addon — this install doesn't "
+                  "have it.\nIt ships with Cadre OS; once installed: "
+                  "cadre-chat setup", file=sys.stderr)
+            return 1
+        return chat_main(args.chat_args)
 
     if args.command == "dashboard":
         from firm.dashboard.server import run_dashboard

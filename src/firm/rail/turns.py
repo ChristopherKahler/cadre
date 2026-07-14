@@ -204,25 +204,6 @@ def activity_line(event: dict[str, Any]) -> str | None:
     return None
 
 
-def write_turn_mcp_config(path: Path, *, env: dict[str, str]) -> str:
-    """The approve-mode ``--mcp-config``: exactly one server, the 👍/👎 tool.
-
-    Only routing lives in *env* — no secret ever touches this file; anything
-    sensitive is inherited from the daemon's process env through claude.
-    """
-    config = {
-        "mcpServers": {
-            "cadre-rail": {
-                "command": sys.executable,
-                "args": ["-m", "firm.rail.approve_mcp"],
-                "env": env,
-            }
-        }
-    }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(config, indent=2), encoding="utf-8")
-    return str(path)
-
 
 @dataclasses.dataclass
 class TurnResult:

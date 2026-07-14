@@ -31,11 +31,6 @@ dependencies = [
   # Vault encryption (Fernet). Imported lazily — every non-vault surface
   # works without it, but installs get it so the vault works out of the box.
   "cryptography>=42",
-  # Slack rail (firm.rail.slack). Only its builtin SocketModeClient is used —
-  # pure Python, no aiohttp/websocket-client — because a correct stdlib
-  # WebSocket client is ~500 lines of frame protocol slack-sdk already
-  # maintains. Imported lazily inside `cadre slack serve`.
-  "slack-sdk>=3.27",
 ]
 
 [project.optional-dependencies]
@@ -54,7 +49,7 @@ Homepage = "https://github.com/ChristopherKahler/cadre"
 where = ["src"]
 
 [tool.setuptools.package-data]
-firm = ["migrations/*.sql", "dashboard/*.html", "dashboard/next/*.html", "templates/**/*", "rail/*.json", "rail/*.html"]
+firm = ["migrations/*.sql", "dashboard/*.html", "dashboard/next/*.html", "templates/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

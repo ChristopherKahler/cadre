@@ -1,11 +1,8 @@
-"""Rail — chat rails from the Board's messaging apps into headless Co-Board sessions.
+"""Rail — the shared state store every rail provider rides on.
 
-A rail turns a messaging surface (Slack today, Telegram next) into the
-boardroom: a top-level message in the Board's channel opens a headless
-``/boardroom`` session at the firms root, every reply in that thread resumes
-the same session (``--resume``), and each answer lands back in the thread.
-The daemon is the only inbound path, and the allowlist is structural — a
-non-allowlisted user's messages are dropped in code, never left to prompts.
+A rail turns a surface (Slack, Co-Board Chat — both Cadre OS addons) into
+the boardroom. The addons ship the daemons; this module owns only the
+per-provider state they all share.
 
 Operator-level state lives under ``~/.cadre/rail/<provider>/`` (``CADRE_HOME``
 aware, same root as the vault):
@@ -16,9 +13,6 @@ aware, same root as the vault):
 * ``threads.json`` — thread ⇄ session map, plain JSON so the operator can
   read what the rail believes.
 
-Slack Web API calls here are form-encoded on purpose: Slack's GET-style
-methods (``conversations.info``, ``reactions.get``) silently drop JSON
-bodies — a lesson already paid for once in the operator's slack bridge.
 """
 
 from __future__ import annotations
@@ -26,15 +20,11 @@ from __future__ import annotations
 import json
 import os
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import Any
 
 from firm.secrets.vault import cadre_home
 
-_HTTP_TIMEOUT_SEC = 30
 THREAD_MAX_AGE_DAYS = 30
 
 CONFIG_DEFAULTS: dict[str, Any] = {
@@ -123,48 +113,4 @@ def prune_threads(
     }
 
 
-def slack_call(method: str, token: str, **params: Any) -> dict[str, Any]:
-    """One Slack Web API call, form-encoded. Never raises — transport
-    failures come back as ``{"ok": False, "error": ...}`` so callers handle
-    Slack errors and network errors through one shape."""
-    encoded: dict[str, str] = {}
-    for key, value in params.items():
-        if value is None:
-            continue
-        if isinstance(value, (dict, list)):
-            encoded[key] = json.dumps(value)
-        else:
-            encoded[key] = str(value)
-    req = urllib.request.Request(
-        f"https://slack.com/api/{method}",
-        data=urllib.parse.urlencode(encoded).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_SEC) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-        result = json.loads(body)
-        return result if isinstance(result, dict) else {"ok": False, "error": "non-object response"}
-    except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError) as exc:
-        return {"ok": False, "error": f"transport: {exc}"}
 
-
-def chunk_text(text: str, limit: int = 3800) -> list[str]:
-    """Split *text* for Slack messages, preferring newline boundaries."""
-    text = text.strip()
-    if not text:
-        return []
-    chunks: list[str] = []
-    while len(text) > limit:
-        cut = text.rfind("\n", 0, limit)
-        if cut < limit // 2:
-            cut = limit
-        chunks.append(text[:cut].rstrip())
-        text = text[cut:].lstrip()
-    if text:
-        chunks.append(text)
-    return chunks

@@ -2618,13 +2618,26 @@ def make_hub_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 _http_send(self, 200, {"ok": True,
                                        "presets": discovery.notify_presets(root)})
                 return
-            if path == "/api/next/rail":
-                # The rails' read seam (status_payload) — the System card
-                # renders both rails with zero rail knowledge of its own.
-                from firm.cli import rail_chat, rail_slack
+            if path == "/api/next/hub-extensions":
+                # Board-level (framework) extensions — links the hub renders
+                # generically. Firm plugins are a different door (views.json).
+                from firm.dashboard import hub_extensions
                 _http_send(self, 200, {"ok": True,
-                                       "chat": rail_chat.status_payload(),
-                                       "slack": rail_slack.status_payload()})
+                                       "extensions": hub_extensions.load_all()})
+                return
+            if path == "/api/next/rail":
+                # The rails' read seam (status_payload). The rails are Cadre
+                # OS addons — an absent addon reports configured: False and
+                # every rail-aware UI element self-hides.
+                payload: dict[str, Any] = {"ok": True}
+                for key, module in (("chat", "cadre_chat.cli"),
+                                    ("slack", "cadre_slack.cli")):
+                    try:
+                        import importlib
+                        payload[key] = importlib.import_module(module).status_payload()
+                    except ImportError:
+                        payload[key] = {"ok": True, "configured": False}
+                _http_send(self, 200, payload)
                 return
             if path.startswith("/api/next/pulse-state/"):
                 from firm.dashboard import founding
@@ -2721,15 +2734,39 @@ def make_hub_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                         _http_send(self, 400, {"ok": False, "error": "nothing to save"})
                         return
                     _http_send(self, 200, {"ok": True, "prefs": save_prefs(root, patch)})
+                elif verb == "hub-extensions":
+                    from firm.dashboard import hub_extensions
+                    if body.get("remove"):
+                        removed = hub_extensions.remove(str(body["remove"]))
+                        _http_send(self, 200 if removed else 404,
+                                   {"ok": removed,
+                                    "extensions": hub_extensions.load_all()}
+                                   if removed else
+                                   {"ok": False, "error": "not installed"})
+                        return
+                    entry, why = hub_extensions.validate(body.get("package"))
+                    if entry is None:
+                        _http_send(self, 400, {"ok": False, "error": why})
+                        return
+                    hub_extensions.save(entry)
+                    _http_send(self, 200, {"ok": True, "installed": entry,
+                                           "extensions": hub_extensions.load_all()})
                 elif verb == "rail":
                     # The rails' write seam (apply_setting) — one option per
                     # call, service bounced by the seam itself.
-                    from firm.cli import rail_chat, rail_slack
-                    mod = {"chat": rail_chat, "slack": rail_slack}.get(
+                    modname = {"chat": "cadre_chat.cli",
+                               "slack": "cadre_slack.cli"}.get(
                         str(body.get("rail") or ""))
-                    if mod is None:
+                    if modname is None:
                         _http_send(self, 400,
                                    {"ok": False, "error": "rail must be chat or slack"})
+                        return
+                    try:
+                        import importlib
+                        mod = importlib.import_module(modname)
+                    except ImportError:
+                        _http_send(self, 400, {"ok": False,
+                                   "error": "that rail addon is not installed"})
                         return
                     _http_send(self, 200, mod.apply_setting(
                         str(body.get("key") or ""), body.get("value")))
