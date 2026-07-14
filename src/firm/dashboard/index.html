@@ -800,15 +800,16 @@ tr.flash td{animation:rowflash 2.2s ease-out}
         <div class="listcard" id="pulseCadence" style="padding:12px 14px">Loading…</div>
         <div class="seclabel">Member models — <span class="mono" style="font-size:11px">pulse_config.model → claude --model</span>; blank inherits your account default</div>
         <div class="listcard"><div class="tablewrap"><table id="settingsTable"></table></div></div>
-        <div class="seclabel">Training — <span class="mono" style="font-size:11px">re-decides loadouts, enforced NEVERs, and the charter under the current framework</span></div>
+        <div class="seclabel">Training — <span class="mono" style="font-size:11px">re-wire under the current framework</span></div>
         <div class="listcard" id="retrainCard" style="padding:12px 14px">
-          <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-            <div style="flex:1;min-width:260px;line-height:1.55">
-              <b>Re-Train this firm.</b> The wiring agent re-surveys the machine — live CLIs, servers,
-              skills — and re-decides who carries what. You review the plan before anything commits.
-              Keeps goals, models, units, Records, and cadence; regenerates the charter; re-decides
-              loadouts and deny rules. Run <span class="mono" style="font-size:11px">firm doctor</span>
-              first if you want the drift report card.
+          <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+            <div style="flex:1;min-width:260px;line-height:1.6;font-size:12.5px;color:var(--brand-text-secondary)">
+              <b style="color:var(--brand-text)">Re-Train this firm.</b> The wiring agent re-surveys
+              the machine — live CLIs, servers, skills — and re-decides who carries what; you review
+              the plan before anything commits.<br>
+              <span style="color:var(--brand-text-dim)">Keeps goals, models, units, Records, cadence
+              &nbsp;·&nbsp; regenerates the charter &nbsp;·&nbsp; re-decides loadouts and enforced
+              NEVERs &nbsp;·&nbsp; <span class="mono">firm doctor</span> shows the drift first</span>
             </div>
             <a class="btn primary sm" id="retrainBtn" href="#" style="text-decoration:none;flex:none">Open Train →</a>
           </div>
