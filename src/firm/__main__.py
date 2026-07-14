@@ -201,6 +201,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Workspace containing .firm/firm.db (defaults to current directory).",
     )
 
+    # ---- doctor subparser ----
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="Framework-drift report card for a firm; --fix repairs the "
+             "mechanical findings (migrations, policy gate, ghosts). "
+             "Judgment stays with Train; authority stays with the Board.",
+    )
+    doctor_parser.add_argument(
+        "--fix", action="store_true",
+        help="Apply mechanical fixes (never touches loadouts, models, or goals).")
+    doctor_parser.add_argument(
+        "--json", action="store_true", dest="as_json",
+        help="Emit the report card as JSON.")
+    doctor_parser.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. Defaults to the firm this workspace's db holds.")
+    doctor_parser.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
+
     # ---- pulse subparser ----
     pulse_parser = subparsers.add_parser(
         "pulse",
@@ -776,6 +797,17 @@ def main(argv: list[str] | None = None) -> int:
             )
         parser.parse_args(["goal", "--help"])
         return 0
+
+    if args.command == "doctor":
+        from firm.cli.doctor import run_doctor
+
+        workspace = args.workspace if args.workspace is not None else Path.cwd()
+        return run_doctor(
+            workspace,
+            firm_id=args.firm_id,
+            apply_fixes=args.fix,
+            as_json=args.as_json,
+        )
 
     if args.command == "pulse":
         from firm.cli.pulse import run_pulse
