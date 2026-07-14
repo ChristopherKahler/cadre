@@ -579,6 +579,20 @@ textarea.paragraph:focus{outline:none;border-color:var(--green);box-shadow:var(-
 .modelopt.on b{color:var(--green)}
 .modelopt .mhint{display:block;font-size:12px;line-height:1.5;margin-top:2px}
 
+/* the number — one goal, Board-owned, hire-blocking. Gold because it is the
+   one thing on this screen the Board must actually read before signing. */
+.northstar{
+  margin-top:var(--s4);max-width:64ch;margin-inline:auto;text-align:left;
+  padding:var(--s3) var(--s4);
+  border:1px solid color-mix(in srgb,var(--gold) 28%,transparent);
+  border-radius:var(--r);
+}
+.ns-label{font-family:var(--mono);font-size:9px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--gold)}
+.ns-target{font-size:15px;line-height:1.5;color:var(--ink);margin-top:4px;cursor:text}
+.ns-target.empty{color:var(--ink-3);font-style:italic}
+.ns-why{font-size:12px;color:var(--ink-3);margin-top:4px}
+
 .slate-foot{
   position:sticky;bottom:0;margin-top:var(--s7);
   display:flex;align-items:center;justify-content:space-between;gap:var(--s4);
@@ -2084,11 +2098,25 @@ window.nameKey = (e) => {
   if(e.key === 'Enter'){ e.preventDefault(); e.target.blur(); }
   if(e.key === 'Escape'){
     const el = e.target;
-    el.textContent = el.dataset.i !== undefined
-      ? S.proposal.members[+el.dataset.i].name
-      : S.proposal.name;
+    el.textContent = el.dataset.ns !== undefined
+      ? ((S.proposal.north_star || {}).target || '')
+      : el.dataset.i !== undefined
+        ? S.proposal.members[+el.dataset.i].name
+        : S.proposal.name;
     el.blur();
   }
+};
+
+/* The number is the Board's to write — and required. Hiring without a goal
+   founds a firm that cannot fail, only be busy; commit refuses it too. */
+window.saveNorthStar = (el) => {
+  const v = el.textContent.trim();
+  if(!v || v.startsWith('Write the number')){
+    S.proposal.north_star = null;
+  } else {
+    S.proposal.north_star = Object.assign({}, S.proposal.north_star || {}, {target: v});
+  }
+  viewRoster();
 };
 window.saveName = (el) => {
   const m = S.proposal.members[+el.dataset.i];
@@ -2189,7 +2217,16 @@ function viewRoster(){
         <h1 contenteditable="true" spellcheck="false" title="Click to rename"
             onkeydown="nameKey(event)" onblur="saveFirmName(this)">${esc(p.name)}</h1>
         <p class="premise">${esc(p.premise)}</p>
-        <p class="hint" style="margin-top:var(--s2)">The firm's name and every member's name are yours — click one to change it.</p>
+        <div class="northstar">
+          <span class="ns-label">The goal — if this is true at quarter's end, the firm worked</span>
+          <p class="ns-target${(p.north_star && p.north_star.target) ? '' : ' empty'}"
+             contenteditable="true" spellcheck="false" data-ns="1"
+             title="Click to edit — the firm's one goal, a sentence with a number in it"
+             onkeydown="nameKey(event)" onblur="saveNorthStar(this)"
+          >${esc((p.north_star && p.north_star.target) || 'Write the number this firm answers to — one goal, one number.')}</p>
+          ${p.north_star && p.north_star.why ? `<p class="ns-why">${esc(p.north_star.why)}</p>` : ''}
+        </div>
+        <p class="hint" style="margin-top:var(--s2)">The firm's name, the goal, and every member's name are yours — click one to change it.</p>
       </div>
       ${S.error ? `<div class="oops">${esc(S.error)}</div>` : ''}
       ${depts}
@@ -2204,11 +2241,12 @@ function viewRoster(){
           Hiring <b>${plural(kept.length, 'member')}</b> across
           <b>${plural(p.operations.length, 'department')}</b>.
           ${!leadKept ? '<span style="color:var(--gold)"> Someone has to lead.</span>' : ''}
+          ${!(p.north_star && p.north_star.target) ? '<span style="color:var(--gold)"> The firm needs its number.</span>' : ''}
         </span>
         <div style="display:flex;gap:var(--s2)">
           <button class="btn quiet" onclick="openReroll()">Reroll</button>
           <button class="btn" onclick="openReshuffle()">Reshuffle</button>
-          <button class="btn primary" id="hire" ${!kept.length || !leadKept ? 'disabled' : ''}>
+          <button class="btn primary" id="hire" ${!kept.length || !leadKept || !(p.north_star && p.north_star.target) ? 'disabled' : ''}>
             Hire ${kept.length ? plural(kept.length, 'member') : ''}
           </button>
         </div>

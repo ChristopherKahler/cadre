@@ -160,6 +160,10 @@ __INVENTORY__
   role whose whole job is judgment — usually the lead, sometimes nobody. Use
   "haiku" for mechanical, high-frequency work. A four-Member firm running
   all-Opus bills like a law firm.
+- The firm gets ONE goal, not a list. Pick the single measurable outcome
+  that, if true at the end of a quarter, means this firm worked. A firm with
+  no number cannot fail — it can only be busy, which is worse. Give the Board
+  a number to argue with, not prose to admire.
 
 ## Output
 
@@ -169,6 +173,12 @@ Return ONLY a JSON object, no prose before or after, no code fence:
   "firm_id": "kebab-case-slug, max 32 chars, letters/digits/hyphens, starts with a letter",
   "name": "The firm's display name, title case",
   "premise": "One sentence: what this company exists to do. The Board's words, sharpened.",
+  "north_star": {{
+    "target": "The firm's ONE goal — a sentence with a number in it. If it is true at the end of the quarter, the firm worked.",
+    "metric_value": 5,
+    "metric_unit": "what the number counts, e.g. pages/week — '' if the target has no clean unit",
+    "why": "One line: why THIS number proves the premise."
+  }},
   "operations": [
     {{"name": "Department name", "purpose": "One line — what this department is accountable for."}}
   ],
@@ -307,10 +317,26 @@ def _validate(proposal: dict[str, Any],
             m["leads"] = False
         members[0]["leads"] = True
 
+    # The firm's ONE goal. Coerced to shape here, REQUIRED at commit — a firm
+    # with no number cannot fail, only be busy, and the Board must see and
+    # own the number before the hire. None (agent omitted it) is survivable
+    # on the roster screen, where the Board writes one; not past it.
+    ns = proposal.get("north_star")
+    north_star = None
+    if isinstance(ns, dict) and str(ns.get("target") or "").strip():
+        mv = ns.get("metric_value")
+        north_star = {
+            "target": str(ns["target"]).strip()[:300],
+            "metric_value": mv if isinstance(mv, (int, float)) else None,
+            "metric_unit": str(ns.get("metric_unit") or "").strip()[:60],
+            "why": str(ns.get("why") or "").strip()[:300],
+        }
+
     return {
         "firm_id": fid,
         "name": str(proposal.get("name") or fid).strip(),
         "premise": str(proposal.get("premise") or "").strip(),
+        "north_star": north_star,
         "operations": ops,
         "members": members,
         "loadout": {"mcp": _loadout("mcp"), "skills": _loadout("skills"),
@@ -586,8 +612,8 @@ disagree in `pushback`. They are the Board. But an org architect who never says
 "that will cost you" is not worth having.
 
 Return ONLY the same JSON object shape you returned before — `firm_id`, `name`,
-`premise`, `operations`, `members`, `first_units`, `reroll_tips` — patched. Plus
-one extra key:
+`premise`, `north_star`, `operations`, `members`, `first_units`, `reroll_tips` —
+patched. Plus one extra key:
 
   "pushback": "One or two sentences, or empty string if you agree with them."
 
@@ -1019,6 +1045,15 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
     fid = proposal["firm_id"]
+    # A firm cannot finish founding without its goal (fork 003: four firms
+    # shipped with goal-count zero and north_star null — unfalsifiable by
+    # construction). The roster screen guarantees one is present; a commit
+    # without one is a bug or a bypass, and both should stop here.
+    ns = proposal.get("north_star")
+    if not (isinstance(ns, dict) and str(ns.get("target") or "").strip()):
+        return {"ok": False, "error": "the firm has no goal — write the north "
+                                      "star before hiring; a firm with no "
+                                      "number cannot fail, only be busy"}
     root = root.resolve()
     workspace = (root / fid).resolve()
     if workspace.parent != root:   # a firm_id with slashes must not escape the root
@@ -1037,6 +1072,25 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
             "id": fid,
             "name": proposal["name"],
             "description": proposal["premise"],
+            "north_star": ns["target"],
+        })
+
+        # The number, as a Goal row — the denominator every drift verdict,
+        # brief, and goal-health banner divides by. Board-authored: the Board
+        # read and could edit it on the roster screen, so committing IS the
+        # approval. Members propose theirs later via firm_propose_goal.
+        from firm.services import goal as goal_svc
+        metric: dict[str, Any] = {}
+        if ns.get("metric_value") is not None:
+            metric["value"] = ns["metric_value"]
+        if ns.get("metric_unit"):
+            metric["unit"] = ns["metric_unit"]
+        goal_svc.create_goal(conn, fid, {
+            "target": ns["target"],
+            "parent_entity_type": "firm",
+            "parent_entity_id": fid,
+            "level": "firm",
+            **({"metric": metric} if metric else {}),
         })
 
         # Members before Operations: an Operation names its owner, not the reverse.

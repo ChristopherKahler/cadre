@@ -69,6 +69,8 @@ _CHARTER = """\
 
 **Premise.** {premise}
 
+**The goal.** {north_star}
+
 This file is loaded into every Member's run. It is the firm's law. A Member may
 not do what this charter forbids, and may not reach for what their loadout does
 not carry.
@@ -102,6 +104,11 @@ role in a company and you are accountable for an outcome.
 - **Evidence over assertion.** If you claim it works, show the command and the output.
 - **Escalate honestly.** A blocked Unit raised early costs the firm nothing. A blocked
   Unit hidden until the pulse ends costs it a cycle.
+- **Know your number.** The firm's goal is above; yours rolls up into it. If no
+  approved Goal is attached to you, your first act on your first run is to propose
+  one with `firm_propose_goal` — the metric that proves the outcome you own, with
+  your reasoning. It binds once the Board approves. You never author your own
+  success criteria; you argue for them.
 
 ## §3 — The roster
 
@@ -579,6 +586,8 @@ def _render_charter(firm: dict[str, Any], members: list[dict[str, Any]],
     return _CHARTER.format(
         name=firm.get("name") or plan["firm_id"],
         premise=firm.get("description") or "",
+        north_star=firm.get("north_star")
+        or "(not set — the Board owes this firm a number)",
         roster=_roster_lines(members),
         loadouts="\n\n".join(loadouts),
         armory=armory,
