@@ -212,16 +212,16 @@ def test_pulse_action_dispatches_detached(hub_server: str, monkeypatch):
 
     calls: dict = {}
 
-    class FakeProc:
-        returncode = 0
-        stderr = ""
-        stdout = ""
+    class FakeSched:
+        name = "fake"
+        def spawn_detached(self, argv, *, workdir, env, unit=None):
+            calls["argv"] = argv
+            calls["env"] = env
+            calls["unit"] = unit
+            return {"via": "systemd-run", "unit": unit}
 
-    def fake_run(cmd, **kw):
-        calls["cmd"] = cmd
-        return FakeProc()
-
-    monkeypatch.setattr(srv.subprocess, "run", fake_run)
+    import firm.sched as sched_mod
+    monkeypatch.setattr(sched_mod, "resolve_scheduler", lambda: FakeSched())
     req = urllib.request.Request(
         hub_server + "/f/alpha/api/action/pulse/now",
         data=b"{}", method="POST",
@@ -231,12 +231,13 @@ def test_pulse_action_dispatches_detached(hub_server: str, monkeypatch):
         out = json.loads(resp.read())
     assert out["ok"] is True
     assert out["result"]["unit"].startswith("pulse-alpha-")
-    cmd = calls["cmd"]
-    assert cmd[0] == "systemd-run"          # detached — never in-request
-    joined = " ".join(cmd)
-    assert "--workspace" in joined
-    assert "--firm-id alpha" in joined
-    assert "last-pulse.json" in joined      # outcome lands for /api/pulse-status
+    # detached through the scheduler — never in-request
+    assert calls["unit"].startswith("pulse-alpha-")
+    wrapper = " ".join(calls["argv"])
+    assert "--workspace" in wrapper
+    assert "--firm-id" in wrapper and "alpha" in wrapper
+    assert "last-pulse.json" in wrapper     # outcome lands for /api/pulse-status
+    assert calls["env"].get("FIRM_ID") == "alpha"
 
 
 def test_commission_creates_unit_and_dispatches(hub_server: str, firms_root: Path, monkeypatch):
@@ -258,13 +259,14 @@ def test_commission_creates_unit_and_dispatches(hub_server: str, firms_root: Pat
 
     calls: dict = {}
 
-    class FakeProc:
-        returncode = 0
-        stderr = ""
-        stdout = ""
+    class FakeSched:
+        name = "fake"
+        def spawn_detached(self, argv, *, workdir, env, unit=None):
+            calls["argv"] = argv
+            return {"via": "systemd-run", "unit": unit}
 
-    monkeypatch.setattr(srv.subprocess, "run",
-                        lambda cmd, **kw: calls.setdefault("cmd", cmd) and FakeProc() or FakeProc())
+    import firm.sched as sched_mod
+    monkeypatch.setattr(sched_mod, "resolve_scheduler", lambda: FakeSched())
 
     req = urllib.request.Request(
         hub_server + "/f/alpha/api/action/member-commission/MEM-001",
@@ -279,7 +281,7 @@ def test_commission_creates_unit_and_dispatches(hub_server: str, firms_root: Pat
     assert unit["assignee_member_id"] == "MEM-001"
 
     # Dispatch was member-targeted.
-    assert "--only MEM-001" in " ".join(calls["cmd"])
+    assert "--only" in " ".join(calls["argv"]) and "MEM-001" in " ".join(calls["argv"])
 
     # The unit is claimed and the commission is on the record.
     conn = sqlite3.connect(db)

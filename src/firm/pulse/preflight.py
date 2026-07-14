@@ -17,10 +17,20 @@ still run; blindness is per-surface, not firm-wide.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sqlite3
 from typing import Any
 
 from firm.core import repo
+
+
+def _absent_reason(name: str) -> str:
+    """Resolution failures name the PATH they failed against. "not installed"
+    once sent the Board hunting a missing binary that sat in ~/.local/bin the
+    whole time (fork 014) — the lie was the environment, not the machine."""
+    return (f"`{name}` did not resolve on this process's PATH — searched: "
+            + (os.environ.get("PATH") or "(empty PATH)"))
 
 
 def _loadout_clis(contract: dict[str, Any] | None) -> list[str]:
@@ -62,8 +72,17 @@ def dead_tools(conn: sqlite3.Connection, firm_id: str) -> dict[str, str]:
     dead: dict[str, str] = {}
     for name in sorted(named):
         c = surveyed.get(name)
-        if c is None or not c["present"]:
-            dead[name] = "not installed on this machine"
+        if c is None:
+            # Not in the probe catalog — an operator wrapper, a custom CLI
+            # (fork 014: gws-acct, the governed door of fork 013). Unknown is
+            # NOT absent: we cannot verify its account, but we can answer the
+            # one question the preflight may honestly ask about it — does it
+            # resolve on PATH? Fail closed only on genuine absence.
+            if shutil.which(name) is None:
+                dead[name] = _absent_reason(name)
+            continue
+        if not c["present"]:
+            dead[name] = _absent_reason(name)
         elif c["live"] is False:
             dead[name] = "installed but not signed in — the identity probe failed"
     return dead

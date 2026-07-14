@@ -52,6 +52,38 @@ def connect(db_path: Path) -> Any:
     return conn
 
 
+def resolve_firm_id(conn: Any, explicit: str | None = None) -> str:
+    """Resolve which firm this connection is scoped to. NEVER guesses a name.
+
+    Precedence: *explicit* (a CLI flag / tool argument) wins; otherwise the
+    single ``firm`` row in this database is the authority — the workspace you
+    are standing in knows which firm it holds. ``$FIRM_ID`` is consulted only
+    when the database is ambiguous (zero rows, or a shared multiplayer DB
+    holding several firms).
+
+    Raises ValueError when nothing can decide. The old hardcoded default
+    ("chrisai") made a wrong scope indistinguishable from a healthy one:
+    a pulse in any other workspace queried an empty firm and reported
+    ``{"ok": true, "ran": 0}``, and an MCP write tagged rows with a foreign
+    firm_id its own firm could never see (field failure 2026-07-12).
+    """
+    if explicit:
+        return explicit
+    rows = [r[0] for r in conn.execute("SELECT id FROM firm").fetchall()]
+    if len(rows) == 1:
+        return rows[0]
+    env = os.environ.get("FIRM_ID")
+    if env:
+        return env
+    if not rows:
+        raise ValueError(
+            "no firm exists in this database and no --firm-id/$FIRM_ID given "
+            "— refusing to guess a firm scope")
+    raise ValueError(
+        f"this database holds {len(rows)} firms ({', '.join(sorted(rows))}) "
+        "— pass --firm-id or set $FIRM_ID")
+
+
 def bump_rev(conn: Any) -> None:
     """Increment the firm's write counter (joins the caller's transaction).
 

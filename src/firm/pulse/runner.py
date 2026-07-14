@@ -321,21 +321,44 @@ def _deps_met(conn: sqlite3.Connection, unit: dict[str, Any]) -> bool:
     return True
 
 
+_PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+
+def _claim_sort_key(u: dict[str, Any]) -> tuple[int, float]:
+    """Claim order: priority (high > medium > low), then rank ascending
+    (None ranks last). Ties keep insertion order via stable sort."""
+    priority = _PRIORITY_ORDER.get(str(u.get("priority") or "medium").lower(), 1)
+    rank = u.get("rank")
+    return (priority, float(rank) if isinstance(rank, (int, float)) else float("inf"))
+
+
 def _find_member_unit(
     conn: sqlite3.Connection, member_id: str,
 ) -> dict[str, Any] | None:
     """Runnable unit for this member: claimed first, else atomically claim
-    the next assigned, dependency-clear, pending unit.
+    the highest-priority assigned, dependency-clear, pending unit.
 
     Without the assigned-unit fallback a completed dependency chain stalls
     forever — downstream units carry assignee_member_id but nothing ever
     claims them. The claim is a single guarded UPDATE (no race window).
+
+    A pre-claimed unit (``claimed_by``) always wins over the scan — that is
+    the Board's explicit unit-targeting lever; do not break it. The scan
+    itself orders by priority, then rank, then insertion — before this it
+    ran in bare insertion order and the Board's "adjust Unit priorities"
+    charter power was connected to nothing (field failure 2026-07-13:
+    UNT-BOARDBUILD set high to steer Wrench, Wrench claimed a medium unit
+    with a lower rowid instead).
     """
     claimed = _find_claimed_unit(conn, member_id)
     if claimed and _deps_met(conn, claimed):
         return claimed
 
-    for u in repo.find(conn, "unit", assignee_member_id=member_id):
+    candidates = sorted(
+        repo.find(conn, "unit", assignee_member_id=member_id),
+        key=_claim_sort_key,
+    )
+    for u in candidates:
         if u.get("status") != "pending" or u.get("claimed_by"):
             continue
         if not _deps_met(conn, u):
@@ -456,8 +479,16 @@ def _execute_run(
     if result.timed_out:
         # Partial stdout still carries whatever text the Member produced —
         # persist it; a timed-out deliverable is recoverable, a dropped one
-        # is not.
-        _persist_final_text(conn, run_id, parse_stream(result.stdout))
+        # is not. Bill it too: the tokens were burned whether or not the run
+        # finished, and an unbilled failure makes every firm's spend figure
+        # a floor that understates by exactly its failures (RUN-004,
+        # 2026-07-13: ~20min of tokens, ledger showed zero).
+        partial = parse_stream(result.stdout)
+        _persist_final_text(conn, run_id, partial)
+        update_budget_postrun(
+            conn, member_id, firm_id, partial,
+            run_id=run_id, unit_id=unit["id"],
+        )
         repo.update(conn, "member_run", run_id, {
             "status": "timed_out",
             "ended_at": datetime.now(tz=timezone.utc).isoformat(),
@@ -466,7 +497,12 @@ def _execute_run(
         return {"run_id": run_id, "status": "timed_out"}
 
     if result.returncode is not None and result.returncode != 0:
-        _persist_final_text(conn, run_id, parse_stream(result.stdout))
+        partial = parse_stream(result.stdout)
+        _persist_final_text(conn, run_id, partial)
+        update_budget_postrun(
+            conn, member_id, firm_id, partial,
+            run_id=run_id, unit_id=unit["id"],
+        )
         repo.update(conn, "member_run", run_id, {
             "status": "failed",
             "ended_at": datetime.now(tz=timezone.utc).isoformat(),
@@ -486,7 +522,7 @@ def _execute_run(
     mcp_missing = _mcp_startup_guard(conn, run_id, parsed, cwd)
 
     # 9. Validate
-    validation_result = validate_output(parsed, validation_config, cwd)
+    validation_result = validate_output(parsed, validation_config, cwd, unit=unit)
 
     if not validation_result.passed and validation_config:
         max_retries = validation_config.get("max_retries", 0) if isinstance(validation_config, dict) else 0
@@ -541,7 +577,7 @@ def _execute_run(
             )
             # The retry is a fresh spawn with its own init — guard its row too.
             mcp_missing = _mcp_startup_guard(conn, run_id, parsed, cwd)
-            validation_result = validate_output(parsed, validation_config, cwd)
+            validation_result = validate_output(parsed, validation_config, cwd, unit=unit)
 
     # 10. Rate limit awareness
     rate_warning = check_rate_limit(

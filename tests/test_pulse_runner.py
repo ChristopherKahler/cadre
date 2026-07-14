@@ -805,3 +805,159 @@ def test_mcp_log_verdict_unit(tmp_path):
         assert _mcp_log_verdict(ws, None, "firm") is None
     finally:
         runner_mod._MCP_LOG_ROOT = orig_root
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Claim ordering — priority steers, insertion order does not (2026-07-13)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestClaimOrdering:
+    """The Board's 'adjust Unit priorities' charter power must be connected
+    to the claim scan. Field failure 2026-07-13 (crows-and-pawns): Wrench
+    claimed a medium unit with a lower rowid while the Board had set
+    UNT-BOARDBUILD to high specifically to steer it there."""
+
+    def _unit_with(self, conn, unit_id, project_id, member_id, **fields):
+        from firm.core.repo import create
+        return create(conn, "unit", {
+            "id": unit_id,
+            "firm_id": "chrisai",
+            "project_id": project_id,
+            "name": f"Unit {unit_id}",
+            "status": "pending",
+            "assignee_member_id": member_id,
+            "depends_on": [],
+            **fields,
+        })
+
+    def test_high_priority_beats_earlier_rowid(self):
+        from firm.pulse.runner import _find_member_unit
+        conn = _fresh_conn()
+        _add_contract(conn, "CON-001")
+        _add_member(conn, "MEM-001", contract_id="CON-001")
+        _add_project(conn, "PRJ-001")
+        self._unit_with(conn, "UNT-SPRITEKIT", "PRJ-001", "MEM-001", priority="medium")
+        self._unit_with(conn, "UNT-BOARDBUILD", "PRJ-001", "MEM-001", priority="high")
+        unit = _find_member_unit(conn, "MEM-001")
+        assert unit is not None
+        assert unit["id"] == "UNT-BOARDBUILD"
+
+    def test_rank_breaks_priority_ties(self):
+        from firm.pulse.runner import _find_member_unit
+        conn = _fresh_conn()
+        _add_contract(conn, "CON-001")
+        _add_member(conn, "MEM-001", contract_id="CON-001")
+        _add_project(conn, "PRJ-001")
+        self._unit_with(conn, "UNT-A", "PRJ-001", "MEM-001", priority="high", rank=2)
+        self._unit_with(conn, "UNT-B", "PRJ-001", "MEM-001", priority="high", rank=1)
+        unit = _find_member_unit(conn, "MEM-001")
+        assert unit is not None
+        assert unit["id"] == "UNT-B"
+
+    def test_insertion_order_is_last_tiebreak(self):
+        from firm.pulse.runner import _find_member_unit
+        conn = _fresh_conn()
+        _add_contract(conn, "CON-001")
+        _add_member(conn, "MEM-001", contract_id="CON-001")
+        _add_project(conn, "PRJ-001")
+        self._unit_with(conn, "UNT-FIRST", "PRJ-001", "MEM-001", priority="medium")
+        self._unit_with(conn, "UNT-SECOND", "PRJ-001", "MEM-001", priority="medium")
+        unit = _find_member_unit(conn, "MEM-001")
+        assert unit is not None
+        assert unit["id"] == "UNT-FIRST"
+
+    def test_preclaimed_unit_still_wins_over_priority(self):
+        """The Board's claimed_by targeting lever must survive the sort
+        (tapir's live workaround — do not break it)."""
+        from firm.pulse.runner import _find_member_unit
+        conn = _fresh_conn()
+        _add_contract(conn, "CON-001")
+        _add_member(conn, "MEM-001", contract_id="CON-001")
+        _add_project(conn, "PRJ-001")
+        self._unit_with(conn, "UNT-HIGH", "PRJ-001", "MEM-001", priority="high")
+        self._unit_with(
+            conn, "UNT-TARGET", "PRJ-001", "MEM-001",
+            priority="low", claimed_by="MEM-001",
+        )
+        unit = _find_member_unit(conn, "MEM-001")
+        assert unit is not None
+        assert unit["id"] == "UNT-TARGET"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Failure billing — a dead run's tokens still hit the ledger (2026-07-13)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _timed_out_spawn_with_usage():
+    """A run killed mid-flight: assistant events carry per-message usage,
+    no terminal result event ever arrives (RUN-004's shape)."""
+    lines = [
+        json.dumps({"type": "system", "subtype": "init", "session_id": "ses-t"}),
+        json.dumps({
+            "type": "assistant",
+            "message": {
+                "usage": {"input_tokens": 9000, "output_tokens": 800},
+                "content": [{"type": "text", "text": "working on the toolchain"}],
+            },
+        }),
+        json.dumps({
+            "type": "assistant",
+            "message": {
+                "usage": {"input_tokens": 11000, "output_tokens": 1200},
+                "content": [{"type": "tool_use", "name": "Bash", "id": "t1",
+                             "input": {"command": "curl -O templates.tpz"}}],
+            },
+        }),
+    ]
+    return SpawnResult(
+        returncode=None, stdout="\n".join(lines), stderr="", pid=99,
+        timed_out=True,
+    )
+
+
+class TestFailureBilling:
+    """Timed-out and crashed runs burned real tokens; every firm's spend
+    figure was a floor that understated by exactly its failures (RUN-004,
+    2026-07-13: ~20min of tokens, zero usage_events)."""
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_timeout_creates_usage_event(self, mock_spawn):
+        mock_spawn.return_value = _timed_out_spawn_with_usage()
+        conn = _fresh_conn()
+        _add_contract(conn, "CON-001")
+        _add_member(conn, "MEM-001", contract_id="CON-001")
+        _add_project(conn, "PRJ-001")
+        _add_unit(conn, "UNT-001", "PRJ-001", claimed_by="MEM-001")
+
+        runner = make_runner("chrisai", "/tmp")
+        result = runner(conn, get(conn, "member", "MEM-001"))
+
+        assert result["status"] == "timed_out"
+        events = find(conn, "usage_event", member_id="MEM-001")
+        assert len(events) == 1
+        assert events[0]["tokens_in"] == 20000
+        assert events[0]["tokens_out"] == 2000
+        period = find(conn, "budget_period", member_id="MEM-001")[0]
+        assert period["run_count"] == 1
+        assert period["total_input_tokens"] == 20000
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_process_error_creates_usage_event(self, mock_spawn):
+        crashed = _timed_out_spawn_with_usage()
+        mock_spawn.return_value = SpawnResult(
+            returncode=1, stdout=crashed.stdout, stderr="boom", pid=99,
+            timed_out=False,
+        )
+        conn = _fresh_conn()
+        _add_contract(conn, "CON-001")
+        _add_member(conn, "MEM-001", contract_id="CON-001")
+        _add_project(conn, "PRJ-001")
+        _add_unit(conn, "UNT-001", "PRJ-001", claimed_by="MEM-001")
+
+        runner = make_runner("chrisai", "/tmp")
+        result = runner(conn, get(conn, "member", "MEM-001"))
+
+        assert result["status"] == "failed"
+        events = find(conn, "usage_event", member_id="MEM-001")
+        assert len(events) == 1
+        assert events[0]["tokens_in"] == 20000

@@ -20,7 +20,7 @@ from typing import Any
 
 from firm.contracts.dispatch import resolve_stage
 from firm.core import repo
-from firm.core.db import connect, get_db_path
+from firm.core.db import connect, get_db_path, resolve_firm_id
 from firm.services._id import next_id
 
 
@@ -28,7 +28,7 @@ def preflight(
     conn: sqlite3.Connection,
     member_id: str,
     stage: str,
-    firm_id: str = "chrisai",
+    firm_id: str = "",
 ) -> dict[str, Any]:
     """Resolve stage, find active unit, create member_run.
 
@@ -48,6 +48,7 @@ def preflight(
     Raises:
         ValueError: If member, contract, or stage not found.
     """
+    firm_id = resolve_firm_id(conn, firm_id or None)
     resolved_cmd = resolve_stage(conn, member_id, stage)
 
     # Find active units claimed by this member

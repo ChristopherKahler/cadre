@@ -147,7 +147,7 @@ class TestRunPulseCli:
         mock_connect.return_value = mock_conn
         mock_pulse.return_value = ActivationSummary(dry_run=True)
 
-        exit_code = run_pulse(tmp_path, dry_run=True)
+        exit_code = run_pulse(tmp_path, dry_run=True, firm_id="chrisai")
 
         assert exit_code == 0
         mock_pulse.assert_called_once()
@@ -174,7 +174,7 @@ class TestRunPulseCli:
             skipped=[{"member": None, "reason": "test"}],
         )
 
-        exit_code = run_pulse(tmp_path)
+        exit_code = run_pulse(tmp_path, firm_id="chrisai")
 
         assert exit_code == 0
         captured = capsys.readouterr()
@@ -223,6 +223,9 @@ def test_concurrent_live_pulse_refused(tmp_path, capsys, monkeypatch):
     firm_dir.mkdir()
     conn = connect(firm_dir / "firm.db")
     apply_migrations(conn)
+    conn.execute("INSERT INTO firm (id, name) VALUES ('chrisai', 'ChrisAI')")
+    conn.execute("INSERT INTO member (id, firm_id, name, role, status) VALUES ('MEM-001', 'chrisai', 'M', 'worker', 'active')")
+    conn.commit()
 
     import firm.pulse.spawn as spawn_mod
     monkeypatch.setattr(spawn_mod, "resolve_claude_bin", lambda: ("/bin/true", "test"))
@@ -252,6 +255,7 @@ def test_dry_run_ignores_lock(tmp_path, capsys):
     conn = connect(firm_dir / "firm.db")
     apply_migrations(conn)
     conn.execute("INSERT INTO firm (id, name) VALUES ('chrisai', 'ChrisAI')")
+    conn.execute("INSERT INTO member (id, firm_id, name, role, status) VALUES ('MEM-001', 'chrisai', 'M', 'worker', 'active')")
     conn.commit()
     assert dblock.acquire(conn, "chrisai", "other-host:1:aaaa")
     conn.close()
@@ -275,6 +279,7 @@ def test_live_pulse_releases_lock_after_run(tmp_path, capsys, monkeypatch):
     conn = connect(firm_dir / "firm.db")
     apply_migrations(conn)
     conn.execute("INSERT INTO firm (id, name) VALUES ('chrisai', 'ChrisAI')")
+    conn.execute("INSERT INTO member (id, firm_id, name, role, status) VALUES ('MEM-001', 'chrisai', 'M', 'worker', 'active')")
     conn.commit()
     conn.close()
 

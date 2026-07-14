@@ -125,6 +125,9 @@ keep this current._` It is the living part of the document; it fills up over tim
 
 - Write to be *used mid-decision*, not read once. Short paragraphs. No preamble.
 - Be specific to this firm. A sentence that would be true of any firm is wasted.
+- Loadouts and deny rules drift after founding — the Board can equip and
+  unequip from the dashboard. Treat the loadout facts above as founding-day
+  truth and say so where it matters; the live read is `/f/<firm>/api/floor`.
 - Do not invent facts about the Board or the business. Where you are inferring,
   the inference must be visibly grounded in something above.
 - No praise, no filler, no "in today's fast-paced world." Operator to operator.
@@ -188,7 +191,11 @@ def _fmt_loadouts(members: list[dict[str, Any]]) -> str:
             if lo.get(key):
                 bits.append(f"{label}: {', '.join(lo[key])}")
         for k in lo.get("knowledge") or []:
-            bits.append(f"knows {Path(k['path']).name} — {k.get('teaches','')}")
+            if isinstance(k, dict):
+                bits.append(f"knows {Path(str(k.get('path') or '')).name}"
+                            f" — {k.get('teaches', '')}")
+            elif k:
+                bits.append(f"knows {k}")
         out.append(f"- **{m['name']}**: " + ("; ".join(bits) if bits
                                              else "nothing beyond the firm's standing tools"))
     return "\n".join(out) or "- (none)"

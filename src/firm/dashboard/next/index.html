@@ -1206,6 +1206,12 @@ function chrome(where){
     </div>
     <div class="tools">
       ${runsIndicator()}
+      <a class="btn icon quiet" id="chatlink"
+         title="Co-Board chat — the boardroom in a conversation" aria-label="Co-Board chat"
+         style="display:none">💬</a>
+      <a class="btn icon quiet" id="chatnew" target="_blank" rel="noopener"
+         title="Co-Board chat in a new tab" aria-label="Co-Board chat in a new tab"
+         style="display:none">↗</a>
       <button class="btn icon quiet" id="theme" title="Switch theme" aria-label="Switch theme">◐</button>
     </div>
   </div>`;
@@ -1215,6 +1221,10 @@ function mount(html){
   app.innerHTML = html;
   const t = document.getElementById('theme');
   if(t) t.onclick = () => theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+  for(const id of ['chatlink', 'chatnew']){
+    const a = document.getElementById(id);
+    if(a && S.chatUrl){ a.href = S.chatUrl; a.style.display = ''; }
+  }
   const rp = document.getElementById('runspill');
   if(rp) rp.onclick = (e) => {
     e.stopPropagation();
@@ -3780,6 +3790,21 @@ async function route(){
   }
   viewBoardroom();
 }
+
+// The chat rail's front door, when one is configured — lights the 💬 in the
+// chrome on every view. Absent rail = the link just never appears.
+(async () => {
+  try{
+    const r = await GET('/api/next/rail');
+    if(r && r.chat && r.chat.configured){
+      S.chatUrl = r.chat.link_url || r.chat.url;
+      for(const id of ['chatlink', 'chatnew']){
+        const a = document.getElementById(id);
+        if(a){ a.href = S.chatUrl; a.style.display = ''; }
+      }
+    }
+  }catch(e){}
+})();
 
 addEventListener('hashchange', route);
 route();

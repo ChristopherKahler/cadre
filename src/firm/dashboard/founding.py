@@ -433,18 +433,23 @@ def _inventory() -> tuple[str, dict[str, set[str]]]:
     are ~150 of them — the whole point is that the Board stops scrolling
     through that list). Returns (prompt_text, validation_index).
     """
-    from firm.dashboard import discovery, exclusions
+    from firm.dashboard import discovery, exclusions, inventory
 
-    # The operator's global exclusion list is a hard boundary: an excluded
-    # item never enters the agent's head, and the validation index drops it
-    # even if the agent hallucinates the name.
+    # The Armory is the survey of record (machine tier, shared with Train and
+    # the Floor's equip picker) — founding demands fresh CLI identity probes
+    # because its prompt promises "probed just now". The operator's global
+    # exclusion list is a hard boundary: an excluded item never enters the
+    # agent's head, and the validation index drops it even if the agent
+    # hallucinates the name.
     ex = exclusions.load()
-    know = discovery.knowledge_survey(None)
-    mcp = [s for s in discovery.mcp_survey(_framework_root())["servers"]
+    inv = inventory.ensure(max_cli_age_sec=3600)
+    mcp = [s for s in inv.get("mcp") or []
            if s.get("available") and s["name"] not in set(ex["mcp"])]
-    skills = [sk for sk in know["skills"] if sk["name"] not in set(ex["skills"])]
-    commands = [c for c in know["commands"] if c["name"] not in set(ex["commands"])]
-    clis = [c for c in discovery.cli_survey()
+    skills = [sk for sk in inv.get("skills") or []
+              if sk["name"] not in set(ex["skills"])]
+    commands = [c for c in inv.get("commands") or []
+                if c["name"] not in set(ex["commands"])]
+    clis = [c for c in inv.get("cli") or []
             if c["present"] and c["name"] not in set(ex["clis"])]
 
     lines = ["### MCP servers (firm-wide armory — every Member shares these)",
@@ -954,24 +959,16 @@ def set_manifest(root: Path, firm_id: str, manifest: dict[str, Any]) -> dict[str
 
 
 def pulse_state(firm_id: str) -> dict[str, Any]:
-    """The firm's current pulse cadence, read from its systemd timer.
+    """The firm's current pulse cadence, read from the platform scheduler.
 
     The manifest UI needs the truth, not session memory — a refreshed page
     must show the real cadence and be able to change it.
     """
-    from firm.cli.heartbeat import _UNIT_PREFIX, default_unit_dir
-    timer = default_unit_dir() / f"{_UNIT_PREFIX}{firm_id}.timer"
-    if not timer.exists():
+    from firm.cli.heartbeat import _UNIT_PREFIX, _sched
+    st = _sched().status(f"{_UNIT_PREFIX}{firm_id}")
+    if not st.get("installed"):
         return {"ok": True, "enabled": False, "interval": None}
-    interval = None
-    try:
-        for line in timer.read_text(encoding="utf-8").splitlines():
-            if line.startswith("OnUnitActiveSec="):
-                interval = line.split("=", 1)[1].strip()
-                break
-    except OSError:
-        pass
-    return {"ok": True, "enabled": True, "interval": interval}
+    return {"ok": True, "enabled": True, "interval": st.get("interval")}
 
 
 def _preset_token_value(root: Path, kind: str, ref: str, key: str) -> str:

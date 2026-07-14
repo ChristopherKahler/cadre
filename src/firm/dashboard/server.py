@@ -914,6 +914,259 @@ def write_instructions(
 
 
 # ---------------------------------------------------------------------------
+# The Floor — the Board's game layer (v1: derived, read-only)
+# ---------------------------------------------------------------------------
+# Three laws (planning/cadre-firms/THE-FLOOR-DESIGN.md):
+#   1. XP anchors to verified outcomes — zero XP for activity. Runs are a
+#      stat and a tenure achievement, never a level driver.
+#   2. Derived, never authored — everything below is computed at read time
+#      from members, contracts, units, documents, gates, escalations, and
+#      usage_event. No writable game state exists anywhere.
+#   3. Board-facing only — none of this reaches member prompts or tools.
+
+_XP_UNIT_SHIPPED = 10        # unit closed with a registered deliverable
+_XP_GATE_APPROVED = 5        # asked right, asked early
+_XP_ESCALATION_ACTIONED = 5  # honesty pays
+_LEVEL_FLOORS = [0, 25, 60, 120, 220, 360, 550, 800, 1100, 1500]
+
+
+def _level_for(xp: int) -> tuple[int, int | None]:
+    """Stepped curve over member XP → (level, next threshold, None at cap)."""
+    level = 1
+    for i, floor_xp in enumerate(_LEVEL_FLOORS):
+        if xp >= floor_xp:
+            level = i + 1
+    return level, (_LEVEL_FLOORS[level] if level < len(_LEVEL_FLOORS) else None)
+
+
+def _json_dict(v: Any) -> dict[str, Any]:
+    """Config columns arrive as dicts or JSON strings depending on the repo
+    path that produced them — accept both, hand back {} for anything else."""
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str) and v.strip():
+        try:
+            parsed = json.loads(v)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def _parse_any_ts(v: Any) -> datetime | None:
+    if not v:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(v).replace(" ", "T"))
+    except ValueError:
+        return None
+    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+
+
+def _goal_completed(goal: dict[str, Any]) -> bool:
+    """True when the goal's metric verifiably sits at its target —
+    direction-aware, numbers only. The only jackpot in the game."""
+    m = _json_dict(goal.get("metric")) or _json_dict(goal.get("target"))
+    cur = m.get("current")
+    target = m.get("value", m.get("target"))
+    if isinstance(cur, bool) or isinstance(target, bool):
+        return False
+    if not isinstance(cur, (int, float)) or not isinstance(target, (int, float)):
+        return False
+    if str(m.get("direction") or "").startswith("lower"):
+        return cur <= target
+    return cur >= target
+
+
+def _floor_achievements(
+    stats: dict[str, Any], firm_goal_done: bool,
+) -> list[dict[str, Any]]:
+    """Tenure + craft + honesty tracks, derived from the stats block.
+    Discipline ("the seal never tested") waits for denial telemetry (v2)."""
+    def rung(track: str, name: str, desc: str, progress: int, target: int):
+        return {
+            "track": track, "name": name, "desc": desc, "target": target,
+            "progress": min(progress, target), "unlocked": progress >= target,
+        }
+    return [
+        rung("service", "Hundred survived", "100 completed runs — veterancy, not velocity",
+             stats["runs_survived"], 100),
+        rung("service", "Thousand survived", "1,000 completed runs",
+             stats["runs_survived"], 1000),
+        rung("craft", "First artifact", "first registered deliverable",
+             stats["deliverables"], 1),
+        rung("craft", "Ten shipped", "10 units closed with a deliverable attached",
+             stats["units_shipped"], 10),
+        rung("craft", "Fifty shipped", "50 units closed with a deliverable attached",
+             stats["units_shipped"], 50),
+        rung("craft", "Two hundred shipped", "200 units closed with a deliverable attached",
+             stats["units_shipped"], 200),
+        rung("honesty", "Raised the flag", "first escalation brought to the Board early",
+             stats["escalations_raised"], 1),
+        rung("goal", "The number hit",
+             "the firm's goal metric reached its target — firm-wide unlock",
+             1 if firm_goal_done else 0, 1),
+    ]
+
+
+def floor_state(
+    conn: sqlite3.Connection, workspace: Path, firm_id: str,
+) -> dict[str, Any]:
+    """Everything The Floor renders, in one payload — all derived (law 2)."""
+    firm = repo.get(conn, "firm", firm_id) or {"id": firm_id, "name": firm_id}
+    members = repo.find(conn, "member", firm_id=firm_id)
+    contracts = {c["id"]: c for c in repo.find(conn, "contract", firm_id=firm_id)}
+    units = repo.find(conn, "unit", firm_id=firm_id)
+    documents = repo.find(conn, "document", firm_id=firm_id)
+    gates = repo.find(conn, "gate", firm_id=firm_id)
+    escalations = repo.find(conn, "escalation", firm_id=firm_id)
+    goals = repo.find(conn, "goal", firm_id=firm_id)
+
+    runs_by_member = {
+        r["member_id"]: dict(r)
+        for r in conn.execute(
+            "SELECT member_id, COUNT(*) AS total, "
+            "SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS survived, "
+            "SUM(CASE WHEN status IN ('failed', 'timed_out') THEN 1 ELSE 0 END) AS failed "
+            "FROM member_run WHERE firm_id = ? GROUP BY member_id",
+            (firm_id,),
+        )
+    }
+    spend_by_member = {
+        r["member_id"]: r["usd"]
+        for r in conn.execute(
+            "SELECT member_id, COALESCE(SUM(dollar_equivalent), 0) AS usd "
+            "FROM usage_event WHERE firm_id = ? GROUP BY member_id",
+            (firm_id,),
+        )
+    }
+
+    units_with_docs = {
+        str(d.get("parent_entity_id")) for d in documents
+        if d.get("parent_entity_type") == "unit"
+    }
+    leads = {m.get("reports_to_member_id") for m in members} - {None}
+    firm_goal_done = any(_goal_completed(g) for g in goals)
+    firm_founded = _parse_any_ts(firm.get("created_at"))
+
+    # CLI sockets wear what the machine actually reports (base ext); a broken
+    # or absent BASE must never take the Floor down.
+    try:
+        tool_details = {
+            t.get("name"): (t.get("description") or t.get("version") or "")
+            for t in (sysconfig_svc.inventory(workspace).get("tools") or [])
+        }
+    except Exception:
+        tool_details = {}
+
+    cards = []
+    for m in members:
+        mine = [u for u in units
+                if u.get("assignee_member_id") == m["id"] or u.get("claimed_by") == m["id"]]
+        closed = [u for u in mine if u.get("status") == "done"]
+        shipped = [u for u in closed if str(u["id"]) in units_with_docs]
+        my_unit_ids = {u["id"] for u in mine}
+        deliverables = sum(
+            1 for d in documents
+            if d.get("author_id") == m["id"]
+            or (d.get("parent_entity_type") == "unit"
+                and d.get("parent_entity_id") in my_unit_ids)
+        )
+        my_gates = [g for g in gates if g.get("requesting_member_id") == m["id"]]
+        gates_approved = sum(1 for g in my_gates if g.get("status") == "approved")
+        my_escs = [e for e in escalations if e.get("raised_by_member_id") == m["id"]]
+        escs_actioned = sum(1 for e in my_escs if e.get("status") == "resolved")
+        rr = runs_by_member.get(m["id"], {})
+        spend = round(float(spend_by_member.get(m["id"]) or 0), 4)
+
+        stats = {
+            "runs_total": rr.get("total") or 0,
+            "runs_survived": rr.get("survived") or 0,
+            "runs_failed": rr.get("failed") or 0,
+            "units_closed": len(closed),
+            "units_shipped": len(shipped),
+            "deliverables": deliverables,
+            "gates_raised": len(my_gates),
+            "gates_approved": gates_approved,
+            "escalations_raised": len(my_escs),
+            "escalations_actioned": escs_actioned,
+            "spend_usd": spend,
+            "cost_per_deliverable": round(spend / deliverables, 2) if deliverables else None,
+        }
+        xp = (_XP_UNIT_SHIPPED * stats["units_shipped"]
+              + _XP_GATE_APPROVED * stats["gates_approved"]
+              + _XP_ESCALATION_ACTIONED * stats["escalations_actioned"])
+        level, next_at = _level_for(xp)
+
+        contract = contracts.get(m.get("contract_id") or "") or {}
+        loadout_raw = _json_dict(contract.get("skill_loadout"))
+        knowledge = []
+        for k in loadout_raw.get("knowledge") or []:
+            if isinstance(k, dict):
+                path = str(k.get("path") or k.get("name") or "")
+                knowledge.append({
+                    "name": Path(path).name or path or "attached folder",
+                    "teaches": str(k.get("teaches") or ""),
+                })
+            elif k:
+                knowledge.append({"name": str(k), "teaches": ""})
+        loadout = {
+            "mcp": [str(x) for x in loadout_raw.get("mcp") or []],
+            "skills": [str(x) for x in loadout_raw.get("skills") or []],
+            "commands": [str(x) for x in loadout_raw.get("commands") or []],
+            "cli": [{"name": str(c), "detail": tool_details.get(str(c), "")}
+                    for c in loadout_raw.get("cli") or []],
+            "knowledge": knowledge,
+        }
+        validation = _json_dict(contract.get("validation_config"))
+        seals = [
+            {"match": str(d.get("match") or ""), "reason": str(d.get("reason") or ""),
+             "tool": str(d.get("tool") or "")}
+            for d in (validation.get("deny") or []) if isinstance(d, dict)
+        ]
+        oaths = [str(g) for g in validation.get("gates_required") or []]
+        pulse = _parse_pulse_config(contract) if contract else {}
+
+        member_created = _parse_any_ts(m.get("created_at"))
+        founding = bool(
+            firm_founded and member_created
+            and abs((member_created - firm_founded).total_seconds()) <= 3600
+        )
+
+        cards.append({
+            "id": m["id"],
+            "name": m["name"],
+            "role": m.get("role"),
+            "status": m.get("status"),
+            "owns": m.get("description") or "",
+            "lead": m["id"] in leads,
+            "reports_to": m.get("reports_to_member_id"),
+            "tenure": {"founding": founding, "since": m.get("created_at")},
+            "budget": {"model": pulse.get("model"),
+                       "timeout_sec": pulse.get("timeout_sec")},
+            "loadout": loadout,
+            "oaths": oaths,
+            "seals": seals,
+            "stats": stats,
+            "xp": xp,
+            "level": level,
+            "level_floor": _LEVEL_FLOORS[level - 1],
+            "level_next_at": next_at,
+            "achievements": _floor_achievements(stats, firm_goal_done),
+        })
+
+    cards.sort(key=lambda c: c["id"])
+    return {
+        "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+        "firm": {"id": firm.get("id"), "name": firm.get("name"),
+                 "founded_at": firm.get("created_at")},
+        "goal_completed": firm_goal_done,
+        "members": cards,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Board actions
 # ---------------------------------------------------------------------------
 
@@ -1481,6 +1734,24 @@ def _firm_get(
         except ValueError as exc:
             _http_send(h, 404, {"error": str(exc)})
         return
+    if path == "/api/floor":
+        conn = connect(db_path)
+        try:
+            _http_send(h, 200, floor_state(conn, workspace, firm_id))
+        finally:
+            conn.close()
+        return
+    if path == "/api/inventory" or path.startswith("/api/inventory?"):
+        # The Armory — machine-tier, firm-agnostic; feeds the equip picker.
+        from firm.dashboard import inventory as inventory_mod
+        _, _, qs = path.partition("?")
+        params = {k: v[-1] for k, v in parse_qs(qs).items()}
+        _http_send(h, 200, inventory_mod.view(
+            kind=params.get("kind") or None,
+            q=params.get("q") or "",
+            include_excluded=params.get("all") == "1",
+        ))
+        return
     if path.startswith("/api/member/"):
         member_id = path.rsplit("/", 1)[1]
         conn = connect(db_path)
@@ -1528,36 +1799,41 @@ def _slack_token_from_workspace(workspace: Path) -> str | None:
     return m.group(1) if m else None
 
 
+def _venv_python(workspace: Path) -> str:
+    """The firm's OWN venv interpreter, never the hub's — a hub started from
+    one firm's venv must not run another firm's pulse with the wrong package
+    (field failure 2026-07-13: dnd-table's python executed crows-and-pawns'
+    workspace). Falls back to this interpreter when the firm has no venv."""
+    for rel in (("bin", "python"), ("Scripts", "python.exe")):
+        candidate = workspace / ".venv" / Path(*rel)
+        if candidate.exists():
+            return str(candidate)
+    return sys.executable
+
+
 def _fire_pulse(
     workspace: Path, firm_id: str, only: str | None = None,
 ) -> dict[str, Any]:
-    """Board-initiated pulse — detached via systemd-run so member runs
-    survive this HTTP request (a pulse blocks until its slowest member
-    finishes; never run it inside a request thread). With *only*, a
+    """Board-initiated pulse — detached through the platform scheduler so
+    member runs survive this HTTP request (a pulse blocks until its slowest
+    member finishes; never run it inside a request thread). With *only*, a
     Board-targeted pulse activating a single Member."""
+    from firm.sched import resolve_scheduler
+
     unit = f"pulse-{firm_id}-{int(time.time())}"
-    cmd = [
-        "systemd-run", "--user", "--collect", "--unit", unit,
-        "--working-directory", str(workspace),
-        f"--setenv=FIRM_ID={firm_id}",
-    ]
+    env = {"FIRM_ID": firm_id}
     claude_bin = os.environ.get("CADRE_CLAUDE_BIN")
     if not claude_bin:
-        nvm = Path.home() / ".nvm/versions/node/v22.11.0/bin/claude"
-        claude_bin = str(nvm) if nvm.exists() else None
+        from firm.pulse.spawn import resolve_claude_bin
+        claude_bin, _ = resolve_claude_bin()
     if claude_bin:
-        cmd.append(f"--setenv=CADRE_CLAUDE_BIN={claude_bin}")
+        env["CADRE_CLAUDE_BIN"] = claude_bin
     token = _slack_token_from_workspace(workspace)
     if token:
-        cmd.append(f"--setenv=CADRE_SLACK_TOKEN={token}")
-    # The firm's OWN venv, never the hub's interpreter — a hub started from
-    # one firm's venv must not run another firm's pulse with the wrong
-    # package (field failure 2026-07-13: dnd-table's python executed
-    # crows-and-pawns' workspace).
-    firm_python = workspace / ".venv" / "bin" / "python"
-    python_bin = str(firm_python) if firm_python.exists() else sys.executable
+        env["CADRE_SLACK_TOKEN"] = token
+
     pulse_argv = [
-        python_bin, "-m", "firm", "pulse",
+        _venv_python(workspace), "-m", "firm", "pulse",
         "--workspace", str(workspace), "--firm-id", firm_id,
     ]
     if only:
@@ -1567,22 +1843,28 @@ def _fire_pulse(
     # file and the second clobbered the first mid-write. /api/pulse-status
     # keeps reading last-pulse.json (last finisher wins, which is what
     # "last pulse" means); the per-pulse logs are the durable record.
+    # The redirect wrapper is Python, not a shell, so it runs on any OS.
     log_dir = workspace / ".firm" / "pulse-logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     pulse_log = log_dir / f"{unit}.json"
     status_file = workspace / ".firm" / "last-pulse.json"
-    cmd += [
-        "bash", "-c",
-        " ".join(shlex.quote(a) for a in pulse_argv)
-        + f" > {shlex.quote(str(pulse_log))} 2>&1"
-        + f"; cp {shlex.quote(str(pulse_log))} {shlex.quote(str(status_file))}",
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise ValueError(
-            f"pulse dispatch failed: {proc.stderr.strip() or proc.stdout.strip()}"
+    wrapper = (
+        "import shutil, subprocess, sys; "
+        f"rc = subprocess.call({pulse_argv!r}, "
+        f"stdout=open({str(pulse_log)!r}, 'w'), stderr=subprocess.STDOUT); "
+        f"shutil.copy({str(pulse_log)!r}, {str(status_file)!r}); "
+        "sys.exit(rc)"
+    )
+    try:
+        dispatched = resolve_scheduler().spawn_detached(
+            [_venv_python(workspace), "-c", wrapper],
+            workdir=workspace, env=env, unit=unit,
         )
-    return {"unit": unit, "monitor": f"journalctl --user -u {unit}"}
+    except OSError as exc:
+        raise ValueError(f"pulse dispatch failed: {exc}") from exc
+    monitor = (f"journalctl --user -u {unit}"
+               if dispatched.get("via") == "systemd-run" else str(pulse_log))
+    return {"unit": unit, "monitor": monitor, "via": dispatched.get("via")}
 
 
 def create_commission(
@@ -1641,6 +1923,154 @@ def create_commission(
     return {"unit": unit, "dispatch": dispatch}
 
 
+_EQUIP_KINDS = ("mcp", "skills", "commands", "cli", "knowledge")
+
+
+def _member_loadout(
+    conn: sqlite3.Connection, firm_id: str, member_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(contract row, parsed loadout with all five keys) — or a loud error."""
+    member = repo.get(conn, "member", member_id)
+    if not member or member.get("firm_id") != firm_id:
+        raise ValueError(f"unknown member {member_id!r}")
+    if not member.get("contract_id"):
+        raise ValueError(f"{member_id} has no contract — run Train to wire one first")
+    contract = repo.get(conn, "contract", member["contract_id"])
+    if not contract:
+        raise ValueError(f"contract {member['contract_id']!r} not found")
+    loadout = _json_dict(contract.get("skill_loadout"))
+    for k in _EQUIP_KINDS:
+        v = loadout.get(k)
+        loadout[k] = v if isinstance(v, list) else []
+    return contract, loadout
+
+
+def equip_member(
+    conn: sqlite3.Connection,
+    workspace: Path,
+    firm_id: str,
+    member_id: str,
+    body: dict[str, Any],
+) -> dict[str, Any]:
+    """Board equips one item onto a Member — the same audited path Train uses.
+
+    skills/commands/cli are loadout entries (the machine already carries the
+    thing; the loadout is who wears it). An MCP equip additionally materializes
+    the server's spec into the firm's ``.mcp.json`` through the sysconfig write
+    Train uses (timestamped backup + Records) — specs resolve LIVE via
+    ``discovery.raw_specs``, secrets ride as ``${KEY}`` placeholders for the
+    vault, never as values. knowledge attaches a {path, teaches} folder.
+    """
+    kind = str(body.get("kind") or "")
+    if kind not in _EQUIP_KINDS:
+        raise ValueError(f"unknown equip kind {kind!r}")
+    contract, loadout = _member_loadout(conn, firm_id, member_id)
+
+    needs_keys: list[str] = []
+    if kind == "knowledge":
+        path = str(body.get("path") or "").strip()
+        if not path:
+            raise ValueError("knowledge needs a path")
+        if any(isinstance(k, dict) and k.get("path") == path
+               for k in loadout["knowledge"]):
+            raise ValueError(f"{path} is already attached")
+        loadout["knowledge"].append(
+            {"path": path, "teaches": str(body.get("teaches") or "").strip()})
+        name = Path(path).name or path
+    else:
+        name = str(body.get("name") or "").strip().lstrip("/")
+        if not name:
+            raise ValueError("name is required")
+        if name in [str(x).lstrip("/") for x in loadout[kind]]:
+            raise ValueError(f"{name} is already equipped")
+        if kind == "cli" and shutil.which(name) is None:
+            # Same honesty contract as the pulse preflight (fork 014):
+            # presence is the one thing we can assert about an uncataloged
+            # tool — and a failure names what it searched.
+            raise ValueError(
+                f"`{name}` did not resolve on this process's PATH — "
+                "install it or check the name before equipping")
+        if kind == "mcp":
+            from firm.dashboard import discovery
+            specs = discovery.raw_specs([name])
+            if name not in specs:
+                # a server that exists only in this firm's own .mcp.json is
+                # already wired — loadout entry is all that's missing
+                try:
+                    own = json.loads(
+                        (workspace / ".mcp.json").read_text()).get("mcpServers") or {}
+                except (OSError, json.JSONDecodeError):
+                    own = {}
+                if not isinstance(own.get(name), dict):
+                    raise ValueError(
+                        f"no runnable spec found for {name!r} — "
+                        "it is not in your MCP config or any enabled plugin")
+            else:
+                sysconfig_svc.mcp_set(conn, firm_id, workspace, name, specs[name])
+                needs_keys = [
+                    k for k, v in (specs[name].get("env") or {}).items()
+                    if isinstance(v, str) and v.startswith("${")
+                ]
+        loadout[kind].append(name)
+
+    repo.update(conn, "contract", contract["id"], {"skill_loadout": loadout})
+    log_event(
+        conn,
+        firm_id=firm_id,
+        event_type="member.equipped",
+        actor={"type": "board", "id": None},
+        target_ref={"type": "member", "id": member_id},
+        details={"kind": kind, "name": name},
+    )
+    return {"member_id": member_id, "kind": kind, "name": name,
+            "needs_keys": needs_keys}
+
+
+def unequip_member(
+    conn: sqlite3.Connection,
+    firm_id: str,
+    member_id: str,
+    body: dict[str, Any],
+) -> dict[str, Any]:
+    """Remove one loadout entry. MCP unequip touches the loadout ONLY —
+    the firm's ``.mcp.json`` is firm-wide armory another Member may share;
+    pruning it is Train's call, not a socket click."""
+    kind = str(body.get("kind") or "")
+    if kind not in _EQUIP_KINDS:
+        raise ValueError(f"unknown equip kind {kind!r}")
+    contract, loadout = _member_loadout(conn, firm_id, member_id)
+    name = str(body.get("name") or "").strip()
+    if not name:
+        raise ValueError("name is required")
+
+    if kind == "knowledge":
+        kept = [k for k in loadout["knowledge"]
+                if not (isinstance(k, dict)
+                        and (k.get("path") == name
+                             or Path(str(k.get("path") or "")).name == name))]
+        if len(kept) == len(loadout["knowledge"]):
+            raise ValueError(f"{name} is not attached")
+        loadout["knowledge"] = kept
+    else:
+        bare = name.lstrip("/")
+        kept = [x for x in loadout[kind] if str(x).lstrip("/") != bare]
+        if len(kept) == len(loadout[kind]):
+            raise ValueError(f"{name} is not equipped")
+        loadout[kind] = kept
+        name = bare
+
+    repo.update(conn, "contract", contract["id"], {"skill_loadout": loadout})
+    log_event(
+        conn,
+        firm_id=firm_id,
+        event_type="member.unequipped",
+        actor={"type": "board", "id": None},
+        target_ref={"type": "member", "id": member_id},
+        details={"kind": kind, "name": name},
+    )
+    return {"member_id": member_id, "kind": kind, "name": name}
+
+
 def _firm_post(
     h: BaseHTTPRequestHandler,
     workspace: Path,
@@ -1650,6 +2080,16 @@ def _firm_post(
 ) -> None:
     """POST routing for one firm's boardroom (firm-relative *path*)."""
     parts = path.strip("/").split("/")
+    # Route: /api/inventory/sync — re-survey the machine into the Armory.
+    # Machine-tier, not firm state — no Records entry, any firm may trigger it.
+    if parts == ["api", "inventory", "sync"]:
+        from firm.dashboard import inventory as inventory_mod
+        inv = inventory_mod.sync()
+        _http_send(h, 200, {"ok": True, "result": {
+            "generated_at": inv.get("generated_at"),
+            "counts": {k: len(inv.get(k) or []) for k in ("mcp", "skills", "commands", "cli")},
+        }})
+        return
     # Route: /api/sysconfig/… — platform config, vault vars, MCP, tools
     if parts[:2] == ["api", "sysconfig"]:
         length = int(h.headers.get("Content-Length") or 0)
@@ -1726,6 +2166,20 @@ def _firm_post(
         conn = connect(db_path)
         try:
             result = create_commission(conn, workspace, firm_id, entity_id, body)
+            _http_send(h, 200, {"ok": True, "result": result})
+        except ValueError as exc:
+            _http_send(h, 400, {"ok": False, "error": str(exc)})
+        finally:
+            conn.close()
+        return
+    if action in ("member-equip", "member-unequip"):
+        conn = connect(db_path)
+        try:
+            result = (
+                equip_member(conn, workspace, firm_id, entity_id, body)
+                if action == "member-equip"
+                else unequip_member(conn, firm_id, entity_id, body)
+            )
             _http_send(h, 200, {"ok": True, "result": result})
         except ValueError as exc:
             _http_send(h, 400, {"ok": False, "error": str(exc)})
@@ -2164,6 +2618,14 @@ def make_hub_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 _http_send(self, 200, {"ok": True,
                                        "presets": discovery.notify_presets(root)})
                 return
+            if path == "/api/next/rail":
+                # The rails' read seam (status_payload) — the System card
+                # renders both rails with zero rail knowledge of its own.
+                from firm.cli import rail_chat, rail_slack
+                _http_send(self, 200, {"ok": True,
+                                       "chat": rail_chat.status_payload(),
+                                       "slack": rail_slack.status_payload()})
+                return
             if path.startswith("/api/next/pulse-state/"):
                 from firm.dashboard import founding
                 fid = path.rsplit("/", 1)[-1].split("?")[0]
@@ -2259,6 +2721,18 @@ def make_hub_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                         _http_send(self, 400, {"ok": False, "error": "nothing to save"})
                         return
                     _http_send(self, 200, {"ok": True, "prefs": save_prefs(root, patch)})
+                elif verb == "rail":
+                    # The rails' write seam (apply_setting) — one option per
+                    # call, service bounced by the seam itself.
+                    from firm.cli import rail_chat, rail_slack
+                    mod = {"chat": rail_chat, "slack": rail_slack}.get(
+                        str(body.get("rail") or ""))
+                    if mod is None:
+                        _http_send(self, 400,
+                                   {"ok": False, "error": "rail must be chat or slack"})
+                        return
+                    _http_send(self, 200, mod.apply_setting(
+                        str(body.get("key") or ""), body.get("value")))
                 elif verb == "found":
                     _http_send(self, 200, founding.start(body.get("brief") or ""))
                 elif verb == "reshuffle":

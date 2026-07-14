@@ -221,6 +221,12 @@ button.stat:hover{border-color:var(--brand-border-hover)}
 .attn-item .title{font:500 14.5px/1.5 var(--font-body);color:var(--brand-text)}
 .attn-item .meta{color:var(--brand-text-dim);font-size:12px;margin:4px 0 8px}
 .attn-item .body{color:var(--brand-text-secondary);font-size:13px;white-space:pre-wrap;margin-bottom:14px}
+/* long member-written bodies clamp to a standard card height; the Board
+   expands the ones it's actually reading */
+.attn-item .body.clip{max-height:150px;overflow:hidden;margin-bottom:0}
+.showmore{display:block;background:none;border:none;color:var(--brand-primary);cursor:pointer;
+  font:500 11.5px var(--font-body);padding:6px 0 12px;text-align:left}
+.showmore:hover{text-decoration:underline}
 .empty{color:var(--brand-text-dim);font-size:13px;padding:4px 0}
 
 /* ---- system page ---- */
@@ -585,6 +591,273 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 }
 .confignote button:hover{color:var(--brand-text)}
 
+/* ---- The Floor: character select ---- */
+.floorgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(212px,1fr));gap:14px}
+.fcard{position:relative;background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:14px;
+  padding:20px 16px 14px;cursor:pointer;text-align:center;box-shadow:var(--shadow-card);
+  min-width:0;max-width:100%;overflow:hidden;
+  transition:border-color 200ms cubic-bezier(.16,1,.3,1),transform 200ms cubic-bezier(.16,1,.3,1),box-shadow 200ms}
+.fcard:hover{border-color:var(--brand-primary);transform:translateY(-2px);box-shadow:0 0 24px rgba(var(--brand-primary-rgb),.16)}
+.fcard:focus-visible{outline:2px solid var(--brand-primary);outline-offset:2px}
+.fcard.dim{opacity:.55}
+.lvwrap{position:relative;width:74px;height:74px;margin:0 auto 10px}
+.lvwrap svg{position:absolute;inset:0;transform:rotate(-90deg)}
+.lvwrap .avatar{position:absolute;inset:7px;width:auto;height:auto;font-size:20px}
+.lvnum{position:absolute;bottom:-3px;right:-6px;min-width:23px;height:20px;padding:0 6px;border-radius:9999px;
+  background:var(--brand-elevated);border:1px solid var(--brand-border-hover);z-index:2;
+  font:600 10px/18px var(--font-mono);color:var(--brand-text)}
+.ring-track{stroke:var(--brand-tint-1);fill:none}
+.ring-fill{stroke:var(--brand-primary);fill:none;stroke-linecap:round;
+  transition:stroke-dashoffset 600ms cubic-bezier(.16,1,.3,1)}
+.fcard .fname{font:600 15px var(--font-display);color:var(--brand-text)}
+.fcard .frole{color:var(--brand-text-secondary);font-size:11.5px;margin-top:1px;min-height:16px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fbadges{display:flex;gap:5px;justify-content:center;margin-top:9px;flex-wrap:wrap}
+.floortag{font:600 9px var(--font-mono);letter-spacing:.12em;text-transform:uppercase;
+  border:1px solid currentColor;border-radius:9999px;padding:2px 8px;color:var(--brand-text-dim);white-space:nowrap}
+.floortag.lead{color:var(--brand-warning)}
+.floortag.budget{color:var(--brand-text-secondary)}
+.floortag.budget b{color:var(--brand-primary);font-weight:600;letter-spacing:0;margin-right:4px}
+.fcard .fowns{color:var(--brand-text-dim);font-size:10.5px;line-height:1.45;margin-top:8px;min-height:30px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.fcard .fstats{display:flex;justify-content:center;gap:16px;margin-top:13px;padding-top:11px;border-top:1px solid var(--brand-border)}
+.fcard .fstat .n{display:block;font:600 14px var(--font-mono);color:var(--brand-text);font-variant-numeric:tabular-nums}
+.fcard .fstat .l{font:500 8.5px var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--brand-text-dim)}
+
+/* a member mid-run: the card comes alive — glow ring, working line, and a
+   watered-down trickle of what they're actually doing right now */
+/* NOTE: the class is "running", never "live" — the sidebar's connection
+   badge owns the bare `.live` selector (display:flex + nowrap + mono) and it
+   flex-rows any card that borrows the name. Field failure 2026-07-14. */
+.fcard.running{border-color:rgba(var(--brand-primary-rgb),.55);animation:cardring 2.2s ease-in-out infinite}
+@media(prefers-reduced-motion:reduce){.fcard.running{animation:none;box-shadow:0 0 18px rgba(var(--brand-primary-rgb),.2)}}
+.fcard .factive{margin-top:11px;padding-top:10px;
+  border-top:1px solid color-mix(in srgb, var(--brand-primary) 30%, var(--brand-border))}
+.fcard .factive[hidden]{display:none}
+.fcard .fworking{display:flex;align-items:center;justify-content:center;gap:7px;flex-wrap:wrap;
+  font:600 9px var(--font-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--brand-primary)}
+.fcard .fdot{width:6px;height:6px;border-radius:9999px;background:var(--brand-primary);flex:none;
+  box-shadow:0 0 8px rgba(var(--brand-primary-rgb),.8);animation:pulse 1.1s infinite}
+@media(prefers-reduced-motion:reduce){.fcard .fdot{animation:none}}
+.fcard .ftick{margin-top:6px;font:400 9.5px var(--font-mono);color:var(--brand-text-secondary);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;min-height:14px;opacity:.85}
+
+/* ---- The Floor: character sheet (dossier plate) ---- */
+.sheet{background:var(--brand-canvas);border:1px solid var(--brand-border-hover);border-radius:16px;
+  box-shadow:0 32px 80px rgba(0,0,0,.5);width:min(1020px,96vw);position:relative;overflow:hidden}
+.sheetscroll{max-height:92vh;overflow-y:auto;overscroll-behavior:contain;
+  scrollbar-width:thin;scrollbar-color:transparent transparent}
+.sheetscroll:hover,.sheetscroll.scrolling{scrollbar-color:color-mix(in srgb, var(--brand-text) 22%, transparent) transparent}
+.sheetscroll::-webkit-scrollbar{width:6px}
+.sheetscroll::-webkit-scrollbar-track{background:transparent}
+.sheetscroll::-webkit-scrollbar-thumb{background:transparent;border-radius:3px}
+.sheetscroll:hover::-webkit-scrollbar-thumb,.sheetscroll.scrolling::-webkit-scrollbar-thumb{
+  background:color-mix(in srgb, var(--brand-text) 22%, transparent)}
+.sclose{position:absolute;top:14px;right:14px;z-index:5;width:32px;height:32px;border-radius:9999px;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+  background:var(--brand-elevated);border:1px solid var(--brand-border);color:var(--brand-text-secondary);
+  font:400 15px/1 var(--font-body);transition:color 140ms,border-color 140ms}
+.sclose:hover{color:var(--brand-text);border-color:var(--brand-border-hover)}
+.sclose:focus-visible{outline:2px solid var(--brand-primary);outline-offset:2px}
+
+.sheethead{padding:30px 34px 24px;padding-right:60px;
+  background-image:radial-gradient(var(--dot) 1px, transparent 1px);background-size:24px 24px}
+.plateline{display:flex;gap:22px;align-items:flex-start}
+.portrait{width:96px;height:96px;flex:none;border-radius:12px;position:relative;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--brand-gradient);background-size:300% 100%;
+  border:1px solid var(--brand-border-hover);box-shadow:inset 0 0 0 1px rgba(0,0,0,.25), 0 8px 24px rgba(0,0,0,.35);
+  font:800 34px var(--font-display);color:#fff;letter-spacing:-.02em}
+.lvplate{position:absolute;bottom:-9px;left:50%;transform:translateX(-50%);white-space:nowrap;
+  background:var(--brand-elevated);border:1px solid var(--brand-border-hover);border-radius:5px;
+  font:600 9.5px/1 var(--font-mono);letter-spacing:.14em;color:var(--brand-text);padding:4px 8px}
+.swho{flex:1;min-width:0}
+.serial{font:500 9.5px var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--brand-text-dim);
+  display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}
+.serial .burn{color:var(--brand-text-secondary)}
+.serial .burn b{color:var(--brand-primary);font-weight:600;margin-right:3px}
+.sheethead h3{font:800 32px/1.05 var(--font-display);letter-spacing:-.02em;color:var(--brand-text);margin-top:7px}
+.classline{font:600 11px var(--font-mono);letter-spacing:.22em;text-transform:uppercase;color:var(--brand-warning);margin-top:6px}
+.sowns{color:var(--brand-text-secondary);font-size:12.5px;line-height:1.6;margin-top:10px;max-width:64ch}
+.xpband{display:flex;align-items:center;gap:14px;margin-top:20px}
+.xpband .xk{font:600 10px var(--font-mono);letter-spacing:.16em;color:var(--brand-text);flex:none}
+.xbar{flex:1;height:7px;border-radius:4px;background:var(--brand-tint-1);
+  border:1px solid var(--brand-border);overflow:hidden}
+.xbar > div{height:100%;background:var(--brand-primary);border-radius:3px;
+  transition:width 700ms cubic-bezier(.16,1,.3,1)}
+.xpband .xv{font:500 10px var(--font-mono);letter-spacing:.1em;color:var(--brand-text-secondary);flex:none;font-variant-numeric:tabular-nums}
+.xwhy{font:400 9.5px var(--font-mono);letter-spacing:.04em;color:var(--brand-text-dim);margin-top:7px}
+.sheetlive{display:flex;align-items:center;gap:9px;margin-top:14px;padding:9px 13px;border-radius:9px;
+  border:1px solid rgba(var(--brand-primary-rgb),.35);background:rgba(var(--brand-primary-rgb),.06);
+  font:600 9.5px var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--brand-primary);
+  animation:stripglow 2.2s ease-in-out infinite}
+.sheetlive[hidden]{display:none}
+@media(prefers-reduced-motion:reduce){.sheetlive{animation:none}}
+.sheetlive .sltick{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-weight:400;letter-spacing:.03em;text-transform:none;color:var(--brand-text-secondary);text-align:right}
+#floorSheet.running .portrait{box-shadow:inset 0 0 0 1px rgba(0,0,0,.25), 0 0 26px rgba(var(--brand-primary-rgb),.4)}
+
+.szone{padding:22px 34px 26px;border-top:1px solid var(--brand-border);min-width:0;
+  animation:zoneRise 280ms cubic-bezier(.16,1,.3,1) both}
+.szone:nth-of-type(2){animation-delay:70ms}
+.szone:nth-of-type(3){animation-delay:140ms}
+@keyframes zoneRise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.zsplit{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--brand-border);
+  animation:zoneRise 280ms cubic-bezier(.16,1,.3,1) 210ms both}
+.zsplit .szone{border-top:none;animation:none}
+.zsplit .szone + .szone{border-left:1px solid var(--brand-border)}
+@media(max-width:880px){.zsplit{grid-template-columns:1fr}
+  .zsplit .szone + .szone{border-left:none;border-top:1px solid var(--brand-border)}}
+.zlabel{font:600 10.5px var(--font-mono);letter-spacing:.2em;text-transform:uppercase;color:var(--brand-text-secondary);
+  margin-bottom:16px;display:flex;align-items:center;gap:12px}
+.zlabel .zn{flex:none;font-weight:400;font-size:9px;letter-spacing:.08em;color:var(--brand-text-dim);text-transform:none}
+
+/* the socket wall — equipment as slots, category carried by rim + glyph;
+   five category columns spanning the full plate width */
+.sockwall{display:grid;grid-template-columns:repeat(5,1fr);gap:20px 24px}
+@media(max-width:880px){.sockwall{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:560px){.sockwall{grid-template-columns:repeat(2,1fr)}}
+.sgroup{min-width:0}
+.sglabel{font:500 8.5px var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--brand-text-dim);
+  margin-bottom:8px;text-align:center}
+.srow{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+.slot{width:66px;text-align:center;animation:equipIn 200ms ease-out both, rimpulse 460ms ease-out both}
+@keyframes equipIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes rimpulse{0%{outline:1px solid rgba(var(--brand-primary-rgb),.45);outline-offset:0px}
+  100%{outline:1px solid rgba(var(--brand-primary-rgb),0);outline-offset:7px}}
+.slot .cell{height:58px;border-radius:10px;display:flex;align-items:center;justify-content:center;
+  background:var(--brand-surface);border:1px solid var(--brand-border);
+  box-shadow:inset 0 2px 5px rgba(0,0,0,.28);transition:border-color 140ms}
+.slot:hover .cell{border-color:var(--brand-border-hover)}
+.slot .sg{font-size:20px;line-height:1;color:var(--brand-text-secondary)}
+.slot .cap{font:500 8.5px var(--font-mono);letter-spacing:.04em;color:var(--brand-text-dim);
+  margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slot.mcp .cell{border-color:color-mix(in srgb, var(--brand-accent) 45%, transparent)}
+.slot.mcp:hover .cell{border-color:color-mix(in srgb, var(--brand-accent) 75%, transparent)}
+.slot.mcp .sg{color:var(--brand-warning)}
+.slot.skill .cell{border-color:color-mix(in srgb, var(--brand-primary) 45%, transparent)}
+.slot.skill:hover .cell{border-color:color-mix(in srgb, var(--brand-primary) 75%, transparent)}
+.slot.skill .sg{color:var(--brand-primary)}
+.slot.empty .cell{border-style:dashed;background:transparent;box-shadow:none}
+.slot.empty .sg{opacity:.3}
+.slot.empty .cap{opacity:.6;font-style:italic}
+.slot.still{animation:none}
+.slot.just{animation:equipIn 200ms ease-out both, rimpulse 460ms ease-out both}
+.slot .cell{position:relative}
+.slot.clickable .cell{cursor:pointer;transition:border-color 140ms}
+.slot.clickable:hover .cell{border-color:var(--brand-primary)}
+.slot.clickable:hover .sg{opacity:.8}
+.slot .unx{position:absolute;top:-7px;right:-7px;width:19px;height:19px;border-radius:9999px;z-index:2;
+  border:1px solid var(--brand-border-hover);background:var(--brand-elevated);color:var(--brand-text-dim);
+  font:500 10px/1 var(--font-body);cursor:pointer;display:none;align-items:center;justify-content:center;padding:0}
+.slot:hover .unx,.slot .unx.armed{display:flex}
+.slot .unx:hover,.slot .unx.armed{color:var(--brand-danger);border-color:rgba(var(--brand-danger-rgb),.55)}
+.slot.add .cell{border-style:dashed;background:transparent;box-shadow:none;cursor:pointer;transition:border-color 140ms}
+.slot.add .sg{opacity:.45;font-size:17px}
+.slot.add:hover .cell{border-color:var(--brand-primary)}
+.slot.add:hover .sg{opacity:1;color:var(--brand-primary)}
+.slot.add .cap{opacity:.55}
+
+/* the armory picker — search the machine's inventory, one click equips */
+.palette{position:fixed;top:11vh;left:50%;transform:translateX(-50%);z-index:70;width:min(540px,92vw);
+  background:var(--brand-elevated);border:1px solid var(--brand-border-hover);border-radius:14px;
+  box-shadow:0 32px 80px rgba(0,0,0,.55);display:flex;flex-direction:column;max-height:72vh;overflow:hidden;
+  animation:palIn 180ms cubic-bezier(.16,1,.3,1) both}
+@keyframes palIn{from{opacity:0;transform:translateX(-50%) translateY(8px)}to{opacity:1;transform:translateX(-50%)}}
+.palette[hidden]{display:none}
+.palette .phead{display:flex;align-items:center;gap:10px;padding:14px 16px 10px}
+.palette .ptitle{flex:1;font:600 10.5px var(--font-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--brand-text-secondary)}
+.palette .pclose{width:26px;height:26px;border-radius:9999px;border:1px solid var(--brand-border);background:none;
+  color:var(--brand-text-dim);cursor:pointer;font:400 12px/1 var(--font-body)}
+.palette .pclose:hover{color:var(--brand-text);border-color:var(--brand-border-hover)}
+.palette .psearch{margin:0 16px 10px;background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:9999px;
+  padding:8px 14px;color:var(--brand-text);font:400 13px var(--font-body)}
+.palette .psearch:focus{outline:none;border-color:var(--brand-primary)}
+.plist{overflow-y:auto;padding:0 8px 8px;min-height:56px}
+.prow{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;min-width:0}
+.prow:hover{background:var(--brand-hover-bg)}
+.prow .pg{flex:none;font-size:14px;color:var(--brand-text-secondary)}
+.prow .pn{font:500 13px var(--font-body);color:var(--brand-text);white-space:nowrap}
+.prow .pd{flex:1;min-width:0;font-size:11px;color:var(--brand-text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prow .ptag{flex:none;font:500 8.5px var(--font-mono);letter-spacing:.08em;text-transform:uppercase;
+  border:1px solid var(--brand-border);border-radius:9999px;padding:2px 7px;color:var(--brand-text-dim)}
+.prow .ptag.warn{color:var(--brand-warning);border-color:rgba(var(--brand-accent-rgb),.4)}
+.prow.on{opacity:.45}
+.prow .pbtn{flex:none;font:600 10.5px var(--font-mono);border:1px solid rgba(var(--brand-primary-rgb),.4);border-radius:9999px;
+  background:none;color:var(--brand-primary);padding:3px 12px;cursor:pointer;white-space:nowrap}
+.prow .pbtn:hover{background:rgba(var(--brand-primary-rgb),.1)}
+.prow .pbtn.armed{color:var(--brand-warning);border-color:rgba(var(--brand-accent-rgb),.6)}
+.prow .pbtn:disabled{opacity:.5;cursor:default}
+.pfoot{padding:8px 16px 12px;font:400 9.5px var(--font-mono);color:var(--brand-text-dim);display:flex;gap:10px;align-items:center}
+.pfoot .btn.sm{margin-left:auto}
+.palette .kform{padding:0 16px 14px;display:flex;flex-direction:column;gap:8px}
+.palette .kform input{background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:8px;
+  padding:8px 12px;color:var(--brand-text);font:400 13px var(--font-body)}
+.palette .kform input:focus{outline:none;border-color:var(--brand-primary)}
+
+/* deny rules grouped by the tool they lock */
+.toolgroup{border:1px solid var(--brand-border);border-radius:10px;padding:12px 14px;margin-top:10px;background:var(--brand-surface);
+  animation:equipIn 200ms ease-out both}
+.toolgroup .tghead{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font:600 9.5px var(--font-mono);
+  letter-spacing:.14em;text-transform:uppercase;color:var(--brand-text-secondary);margin-bottom:9px}
+.toolgroup .tghead .tgn{color:var(--brand-text-dim);font-weight:400;letter-spacing:.04em;text-transform:none}
+.toolgroup .sealrow{margin:0}
+
+/* contract: oaths asked, seals held, budget allocated */
+.oath{display:flex;gap:10px;padding:7px 0;font-size:12.5px;color:var(--brand-text-secondary);line-height:1.55;
+  max-width:72ch;animation:equipIn 200ms ease-out both}
+.oath .og{color:var(--brand-warning);flex:none;font-size:11px;padding-top:2px}
+.sealshelf{font:500 8.5px var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--brand-text-dim);
+  margin:16px 0 9px}
+.sealrow{display:flex;flex-wrap:wrap;gap:8px}
+.seal{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:7px;cursor:help;
+  border:1.5px solid var(--brand-border-hover);background:var(--brand-elevated);
+  box-shadow:inset 0 2px 7px rgba(0,0,0,.35);
+  font:600 11px var(--font-mono);letter-spacing:.03em;color:var(--brand-text);
+  animation:equipIn 200ms ease-out both, rimpulse 460ms ease-out both}
+.seal .sx{color:var(--brand-danger);font-size:13px;line-height:1;flex:none}
+.dial{display:flex;align-items:center;gap:12px;margin-top:18px;padding:11px 14px;
+  border:1px solid var(--brand-border);border-radius:10px;background:var(--brand-surface);
+  animation:equipIn 200ms ease-out both}
+.dial .dk{font:500 8.5px var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--brand-text-dim);flex:none}
+.dial .dsegs{display:flex;gap:3px;flex:none}
+.dial .dseg{width:15px;height:8px;border-radius:2px;background:var(--brand-tint-1)}
+.dial .dseg.lit{background:var(--brand-primary)}
+.dial .dname{font:600 10.5px var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--brand-text)}
+.dial .dhint{font-size:10.5px;color:var(--brand-text-dim);margin-left:auto;text-align:right;line-height:1.45}
+
+/* the record — an RPG stat block, dotted leaders, mono values */
+.statblock{display:grid;grid-template-columns:1fr 1fr;column-gap:44px;row-gap:2px}
+@media(max-width:880px){.statblock{grid-template-columns:1fr}}
+.stl{display:flex;align-items:baseline;gap:10px;padding:7px 0;min-width:0}
+.stl .sk{font:500 9.5px var(--font-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--brand-text-dim);flex:none}
+.stl .dots{flex:1;border-bottom:1px dotted color-mix(in srgb, var(--brand-text-dim) 45%, transparent);
+  transform:translateY(-3px);min-width:16px}
+.stl .sv{font:600 15px var(--font-mono);color:var(--brand-text);font-variant-numeric:tabular-nums;flex:none}
+
+/* achievements — a medal shelf */
+.medals{display:flex;flex-wrap:wrap;gap:18px 14px}
+.medal{width:92px;text-align:center;cursor:help}
+.memblem{width:46px;height:46px;margin:0 auto;border-radius:9999px;display:flex;align-items:center;justify-content:center;
+  font-size:18px;color:var(--brand-text-dim);border:1px dashed color-mix(in srgb, var(--brand-text-dim) 50%, transparent);
+  background:transparent}
+.medal.unlocked .memblem{color:var(--brand-primary);border:1px solid color-mix(in srgb, var(--brand-primary) 60%, transparent);
+  background:rgba(var(--brand-primary-rgb),.09);box-shadow:0 0 16px rgba(var(--brand-primary-rgb),.12)}
+.medal .mname{font:500 9px var(--font-mono);letter-spacing:.03em;color:var(--brand-text-secondary);
+  margin-top:7px;line-height:1.35}
+.medal.unlocked .mname{color:var(--brand-text)}
+.medal .mprog{font:500 8.5px var(--font-mono);color:var(--brand-text-dim);margin-top:2px;font-variant-numeric:tabular-nums}
+.medal.unlocked .mprog{color:var(--brand-success)}
+.medal.locked{opacity:.75}
+
+@media(max-width:640px){
+  .sheethead{padding:24px 20px 20px;padding-right:54px}
+  .szone{padding:18px 20px 22px}
+  .plateline{gap:16px}
+  .portrait{width:72px;height:72px;font-size:26px;border-radius:10px}
+  .sheethead h3{font-size:24px}
+}
+
 /* ---- mobile ---- */
 @media(max-width:768px){
   .sidebar{position:fixed;left:0;top:0;bottom:0;z-index:45;background:var(--sidebar-bg);
@@ -622,6 +895,10 @@ tr.flash td{animation:rowflash 2.2s ease-out}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           <span>Roster</span>
         </button>
+        <button class="navitem" data-view="floor" title="The Floor — the roster as a character select, every stat earned">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg>
+          <span>The Floor</span>
+        </button>
         <button class="navitem" data-view="ops" title="Operations">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/></svg>
           <span>Operations</span>
@@ -633,6 +910,11 @@ tr.flash td{animation:rowflash 2.2s ease-out}
         <button class="navitem" data-view="docs" title="Deliverables">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
           <span>Deliverables</span>
+        </button>
+        <button class="navitem" id="chatNav" style="display:none"
+                title="Co-Board chat — opens in this tab; ↗ for a new tab">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span>Co-Board Chat</span><span id="chatNavNew" title="Open chat in a new tab" style="margin-left:auto;opacity:.65">↗</span>
         </button>
       </div>
       <div class="navgroup">
@@ -734,6 +1016,12 @@ tr.flash td{animation:rowflash 2.2s ease-out}
         </div>
       </div>
 
+      <!-- ============ THE FLOOR ============ -->
+      <div class="page" id="page-floor">
+        <div class="pagehead"><h1>The Floor</h1><p>Your roster as a character select. Every level, stat, and achievement below is derived from the ledger — verified outcomes only, nothing authored, and the members never see it.</p></div>
+        <div class="floorgrid" id="floorGrid"><div class="empty">Loading the floor…</div></div>
+      </div>
+
       <!-- ============ OPERATIONS ============ -->
       <div class="page" id="page-ops">
         <div class="pagehead" style="display:flex;align-items:flex-start;gap:16px">
@@ -796,10 +1084,16 @@ tr.flash td{animation:rowflash 2.2s ease-out}
       <!-- ============ SETTINGS ============ -->
       <div class="page" id="page-settings">
         <div class="pagehead"><h1>Settings</h1><p>Runtime levers per contract. Model changes take effect on the next spawn — no restart, and every change lands in Records.</p></div>
-        <div class="seclabel">Firm pulse — <span class="mono" style="font-size:11px">systemd timer · manual pulsing always works regardless</span></div>
+        <div class="stack">
+        <div>
+        <div class="seclabel">Firm pulse — <span class="mono" style="font-size:11px">scheduled cadence — systemd / launchd / Task Scheduler per OS · manual pulsing always works regardless</span></div>
         <div class="listcard" id="pulseCadence" style="padding:12px 14px">Loading…</div>
+        </div>
+        <div>
         <div class="seclabel">Member models — <span class="mono" style="font-size:11px">pulse_config.model → claude --model</span>; blank inherits your account default</div>
         <div class="listcard"><div class="tablewrap"><table id="settingsTable"></table></div></div>
+        </div>
+        <div>
         <div class="seclabel">Training — <span class="mono" style="font-size:11px">re-wire under the current framework</span></div>
         <div class="listcard" id="retrainCard" style="padding:12px 14px">
           <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
@@ -813,6 +1107,8 @@ tr.flash td{animation:rowflash 2.2s ease-out}
             </div>
             <a class="btn primary sm" id="retrainBtn" href="#" style="text-decoration:none;flex:none">Open Train →</a>
           </div>
+        </div>
+        </div>
         </div>
       </div>
 
@@ -909,6 +1205,22 @@ tr.flash td{animation:rowflash 2.2s ease-out}
   </div>
 </div>
 
+<div class="overlay" id="floorWrap">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetName" id="floorSheet"></div>
+  <div class="palette" id="equipPalette" hidden role="dialog" aria-modal="true" aria-labelledby="palTitle">
+    <div class="phead"><span class="ptitle" id="palTitle"></span>
+      <button class="pclose" onclick="closePalette()" aria-label="Close picker">✕</button></div>
+    <input class="psearch" id="palSearch" placeholder="Search the armory…" autocomplete="off" spellcheck="false">
+    <div class="plist" id="palList"></div>
+    <div class="kform" id="palKform" hidden>
+      <input id="palKPath" placeholder="Folder or file path — e.g. ~/docs/estate" autocomplete="off" spellcheck="false">
+      <input id="palKTeaches" placeholder="What it teaches — one line" autocomplete="off">
+      <div class="btn-row" style="justify-content:flex-end"><button class="btn primary sm" onclick="attachKnowledge()">Attach</button></div>
+    </div>
+    <div class="pfoot" id="palFoot"></div>
+  </div>
+</div>
+
 <div class="drawerwrap" id="runWrap">
   <div class="drawer runpanel" role="dialog" aria-modal="true" aria-labelledby="rpTitle" style="width:min(440px,94vw)">
     <div class="dwr-head" style="align-items:baseline">
@@ -981,7 +1293,7 @@ document.getElementById('sbTrigger').addEventListener('click', () => {
 /* Hub tenancy: served under /f/<firm> the server stamps data-base on <html>;
    standalone it's absent and BASE is ''. Every API URL goes through BASE. */
 const BASE = document.documentElement.dataset.base || '';
-const VIEWS = {dashboard:'Dashboard', roster:'Roster', ops:'Operations', goals:'Goals & spend', docs:'Deliverables', runs:'Runs', records:'Records', genspend:'Gen Spend', settings:'Settings', system:'System'};
+const VIEWS = {dashboard:'Dashboard', roster:'Roster', floor:'The Floor', ops:'Operations', goals:'Goals & spend', docs:'Deliverables', runs:'Runs', records:'Records', genspend:'Gen Spend', settings:'Settings', system:'System'};
 
 /* Re-Train lives in the hub's founding flow (/next). Under the hub, BASE is
    /f/<firm> — lift the id and point the Settings button at the Equip step
@@ -1003,6 +1315,10 @@ const VIEWS = {dashboard:'Dashboard', roster:'Roster', ops:'Operations', goals:'
 })();
 let currentView = 'dashboard';
 function show(view){
+  // The Floor's character sheets are deep-linkable: #/floor/MEM-002 opens
+  // the floor with that member's sheet — the shareable clip URL.
+  let floorMember = null;
+  if(view && view.startsWith('floor/')){ floorMember = view.slice(6); view = 'floor'; }
   const custom = CUSTOM_VIEWS[view];
   // Fullscreen custom views replace the whole window (a standalone app), never embed.
   if(custom && custom.mode === 'fullscreen'){ window.location.href = BASE + '/view/' + encodeURIComponent(view); return; }
@@ -1014,8 +1330,10 @@ function show(view){
   document.getElementById('crumbHere').textContent = VIEWS[view] || (custom && custom.title) || view;
   document.getElementById('scrollArea').scrollTop = 0;
   app.classList.remove('mobile-open');
-  if(location.hash !== '#/' + view) history.replaceState(null, '', '#/' + view);
+  const wantHash = '#/' + view + (floorMember ? '/' + floorMember : '');
+  if(location.hash !== wantHash) history.replaceState(null, '', wantHash);
   if(view === 'roster' && !viewInit) requestAnimationFrame(fitCanvas);
+  if(view === 'floor') loadFloor(floorMember);
   if(view === 'genspend') fetchGenBalance();
   if(view === 'system') loadSysconfig();
   if(custom && !custom.loaded) loadCustomFragment(view);
@@ -1463,6 +1781,7 @@ function render(){
     renderRosterCanvas(S); renderPipeline(S); renderGoals(S); renderCosts(S);
     renderDocs(S); renderRuns(S); renderRecords(S); renderGenSpend(S); renderSettings(S);
     updateEngagement();
+    if(currentView === 'floor'){ loadFloor(); paintFloorActivity(); }
   });
 }
 
@@ -1632,6 +1951,28 @@ async function dismissBoardItem(kind, id, btn){
   }
 }
 
+/* Member-written bodies run long — clamp to a standard height, expandable.
+   Expansion survives re-renders via the id set. */
+const _expandedBodies = new Set();
+function clampBodies(el){
+  el.querySelectorAll('.attn-item .body[data-eid]').forEach(b => {
+    const eid = b.dataset.eid;
+    if(_expandedBodies.has(eid)) return;              // Board opened it — leave it open
+    if(b.scrollHeight <= 170) return;                 // short enough already
+    b.classList.add('clip');
+    const btn = document.createElement('button');
+    btn.className = 'showmore';
+    btn.textContent = 'Show more';
+    btn.onclick = e => {
+      e.stopPropagation();
+      const open = b.classList.toggle('clip');
+      btn.textContent = open ? 'Show more' : 'Show less';
+      if(open) _expandedBodies.delete(eid); else _expandedBodies.add(eid);
+    };
+    b.after(btn);
+  });
+}
+
 function renderGates(S){
   const gates = (S.gates || []).filter(g => g.status === 'pending' && !g.dismissed_at)
     .sort((a,b) => (a.created_at || '').localeCompare(b.created_at || ''));
@@ -1642,7 +1983,7 @@ function renderGates(S){
       <div class="head">${pill(g.id,'warn')}${pill('by ' + esc(g.requesting_member_id),'dim')}<span class="when" title="${esc(tAttr(g.created_at))}">${timeAgo(g.created_at)}</span></div>
       <div class="title">${linkify(g.action)}</div>
       <div class="meta">on ${esc(g.target_entity_type)} ${linkify(g.target_entity_id)}</div>
-      ${g.context ? `<div class="body">${linkify(g.context)}</div>` : ''}
+      ${g.context ? `<div class="body" data-eid="${esc(g.id)}">${linkify(g.context)}</div>` : ''}
       ${deskChips(g.related_docs)}
       <div class="yourmove"><b>Your move</b><span>Read the evidence above, then Approve or Reject below. Your comment lands in the audit trail and the requester sees the verdict next pulse.</span></div>
       <div class="btn-row">
@@ -1652,6 +1993,7 @@ function renderGates(S){
         <button class="btn sm" onclick="dismissBoardItem('gate','${g.id}',this)" title="Clear the notification — the gate stays pending and resolvable, not a decision">Dismiss</button>
       </div>
     </div>`).join('');
+  clampBodies(el);
 }
 
 function renderEscalations(S){
@@ -1670,7 +2012,7 @@ function renderEscalations(S){
         <span class="when" title="${esc(tAttr(e.created_at))}">${timeAgo(e.created_at)}</span></div>
       <div class="title">${linkify(e.title)}</div>
       <div class="meta">${e.target_entity_id ? `on ${esc(e.target_entity_type)} ${linkify(e.target_entity_id)} · ` : ''}${esc(notified)}</div>
-      ${e.body ? `<div class="body">${linkify(e.body)}</div>` : ''}
+      ${e.body ? `<div class="body" data-eid="${esc(e.id)}">${linkify(e.body)}</div>` : ''}
       ${deskChips(e.related_docs)}
       <div class="yourmove"><b>Your move</b><span>${esc(e.raised_by_member_id)} needs a decision from you. Resolve with a note once handled${e.status === 'open' ? ', or Acknowledge to mark it seen while you work on it' : ''}. Reminders stop when you act.</span></div>
       <div class="btn-row">
@@ -1681,6 +2023,7 @@ function renderEscalations(S){
       </div>
     </div>`;
   }).join('');
+  clampBodies(el);
 }
 
 function renderRecent(S){
@@ -1845,6 +2188,562 @@ function renderRosterCanvas(S){
     applyView();
   }, {passive: false});
 })();
+
+/* ======================= THE FLOOR ======================= */
+/* Board-facing game layer, v1. Everything rendered here arrives derived
+   from the ledger (/api/floor) — no writable game state, and none of it
+   ever reaches a member prompt. Runs are a stat, never a level driver. */
+let FLOOR = null, floorFetchedAt = 0, floorLoading = false, sheetCtx = null;
+const BURN = {opus:'▮▮▮', sonnet:'▮▮▯', haiku:'▮▯▯'};
+const BURN_HINT = {
+  opus: 'Maximum budget — deepest judgment, highest burn.',
+  sonnet: 'Standard budget — strong reasoning at a fraction of the burn.',
+  haiku: 'Lean budget — fast and cheap, right for mechanical volume.',
+};
+const TRACK_GLYPH = {service:'♜', craft:'⚒', honesty:'⚑', goal:'◎'};
+
+async function loadFloor(memberId){
+  const el = document.getElementById('floorGrid');
+  const stale = !FLOOR || (Date.now() - floorFetchedAt > 10000);
+  if(stale && !floorLoading){
+    floorLoading = true;
+    try{
+      const r = await fetch(BASE + '/api/floor');
+      const d = await r.json();
+      if(d && d.members){ FLOOR = d; floorFetchedAt = Date.now(); }
+      else if(!FLOOR){
+        el.innerHTML = '<div class="empty">The Floor needs a dashboard server restart — the running server predates it (API said: ' + esc((d && d.error) || 'no response') + ').</div>';
+        floorLoading = false; return;
+      }
+    }catch(e){
+      if(!FLOOR){ el.innerHTML = '<div class="empty">Could not reach the floor: ' + esc(String(e)) + '</div>'; floorLoading = false; return; }
+    }
+    floorLoading = false;
+  }
+  renderFloor();
+  if(memberId) openSheet(memberId);
+}
+
+function ringSvg(m, px){
+  const r = (px - 5) / 2, c = 2 * Math.PI * r;
+  const span = m.level_next_at != null ? (m.level_next_at - m.level_floor) : 0;
+  const frac = span > 0 ? Math.max(0, Math.min(1, (m.xp - m.level_floor) / span)) : 1;
+  return `<svg width="${px}" height="${px}" viewBox="0 0 ${px} ${px}" aria-hidden="true">
+    <circle class="ring-track" cx="${px/2}" cy="${px/2}" r="${r}" stroke-width="2.5"/>
+    <circle class="ring-fill" cx="${px/2}" cy="${px/2}" r="${r}" stroke-width="2.5"
+      stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${(c * (1 - frac)).toFixed(1)}"/>
+  </svg>`;
+}
+
+function budgetChip(model){
+  const m = String(model || '').toLowerCase();
+  if(!BURN[m]) return '<span class="floortag budget" title="No model override on this contract — inherits your account default"><b>▯▯▯</b>default</span>';
+  return `<span class="floortag budget" title="${esc(BURN_HINT[m])}"><b>${BURN[m]}</b>${esc(m)}</span>`;
+}
+
+const XP_WHY = 'XP counts shipped units, approved gates, and actioned escalations — never runs, tokens, or spend.';
+
+function floorCard(m){
+  const st = m.stats;
+  return `<div class="fcard${m.status !== 'active' ? ' dim' : ''}" data-member="${esc(m.id)}" role="button" tabindex="0"
+      onclick="openSheet('${esc(m.id)}')" onkeydown="if(event.key==='Enter')openSheet('${esc(m.id)}')"
+      title="Open ${esc(m.name)}&#39;s sheet">
+    <div class="lvwrap">${ringSvg(m, 74)}<div class="avatar">${esc(initials(m.name))}</div>
+      <span class="lvnum" title="Level ${m.level} · ${m.xp} XP. ${esc(XP_WHY)}">L${m.level}</span></div>
+    <div class="fname">${esc(m.name)}</div>
+    <div class="frole">${esc(m.role || '')}</div>
+    <div class="fbadges">
+      ${m.lead ? '<span class="floortag lead" title="Others on the roster report to this member">Lead</span>' : ''}
+      ${m.status !== 'active' ? `<span class="floortag">${esc(m.status)}</span>` : ''}
+      ${budgetChip(m.budget.model)}
+    </div>
+    <div class="fowns">${esc(m.owns || '')}</div>
+    <div class="fstats">
+      <span class="fstat"><span class="n">${st.runs_total}</span><span class="l">runs</span></span>
+      <span class="fstat"><span class="n">${st.units_closed}</span><span class="l">closed</span></span>
+      <span class="fstat"><span class="n">${money(st.spend_usd)}</span><span class="l">spend</span></span>
+    </div>
+    <div class="factive" hidden>
+      <div class="fworking"><span class="fdot"></span>working ·
+        <span data-run-started=""></span> · <span class="funit"></span></div>
+      <div class="ftick" id="ftick-${esc(m.id)}"></div>
+    </div>
+  </div>`;
+}
+
+function renderFloor(){
+  const el = document.getElementById('floorGrid');
+  if(!el || !FLOOR) return;
+  const ms = FLOOR.members || [];
+  el.innerHTML = ms.length ? ms.map(floorCard).join('')
+    : '<div class="empty">No members yet — found the firm and the floor fills itself.</div>';
+  paintFloorActivity();
+}
+
+/* ---- live cards: a member mid-run glows, counts, and trickles their log ----
+   Class/elapsed/unit come from STATE (SSE-fresh, every render tick); the
+   activity one-liner tails the run transcript through the same endpoint the
+   Watch-live spy uses, at a gentler cadence. */
+let _floorSpyTimer = null;
+let _floorSpyState = {};   // memberId -> {runId, cursor, line}
+
+function paintFloorActivity(){
+  const grid = document.getElementById('floorGrid');
+  if(!grid || currentView !== 'floor') { syncFloorSpy({}); return; }
+  const byMember = {};
+  activeRuns().forEach(r => { if(!byMember[r.member_id]) byMember[r.member_id] = r; });
+  grid.querySelectorAll('.fcard[data-member]').forEach(card => {
+    const run = byMember[card.dataset.member];
+    card.classList.toggle('running', !!run);
+    const box = card.querySelector('.factive');
+    if(!box) return;
+    box.hidden = !run;
+    if(run){
+      const el = box.querySelector('[data-run-started]');
+      if(el && el.dataset.runStarted !== run.started_at){
+        el.dataset.runStarted = run.started_at;
+        el.textContent = fmtElapsed(run.started_at);
+      }
+      box.querySelector('.funit').textContent = run.unit_id || '—';
+      const st = _floorSpyState[card.dataset.member];
+      if(st && st.line) card.querySelector('.ftick').textContent = st.line;
+    } else {
+      card.querySelector('.ftick').textContent = '';
+    }
+  });
+  // the open sheet mirrors the same live state — strip in the header,
+  // glow on the portrait
+  const sheet = document.getElementById('floorSheet');
+  const band = document.getElementById('sheetLive');
+  if(band && sheetCtx){
+    const run = byMember[sheetCtx];
+    sheet.classList.toggle('running', !!run);
+    band.hidden = !run;
+    if(run){
+      const el = band.querySelector('[data-run-started]');
+      if(el && el.dataset.runStarted !== run.started_at){
+        el.dataset.runStarted = run.started_at;
+        el.textContent = fmtElapsed(run.started_at);
+      }
+      band.querySelector('.slunit').textContent = run.unit_id || '—';
+      const st = _floorSpyState[sheetCtx];
+      if(st && st.line) document.getElementById('sltick').textContent = st.line;
+    }
+  } else if(sheet){
+    sheet.classList.remove('running');
+  }
+  syncFloorSpy(byMember);
+}
+
+function syncFloorSpy(byMember){
+  Object.keys(_floorSpyState).forEach(mid => { if(!byMember[mid]) delete _floorSpyState[mid]; });
+  const wanted = Object.keys(byMember).length > 0 && currentView === 'floor';
+  if(!wanted){ clearInterval(_floorSpyTimer); _floorSpyTimer = null; return; }
+  if(!_floorSpyTimer){ _floorSpyTimer = setInterval(floorSpyTick, 2500); floorSpyTick(); }
+}
+
+async function floorSpyTick(){
+  if(currentView !== 'floor'){ syncFloorSpy({}); return; }
+  for(const r of activeRuns()){
+    const st = _floorSpyState[r.member_id] = _floorSpyState[r.member_id] || {runId: r.id, cursor: 0, line: ''};
+    if(st.runId !== r.id){ st.runId = r.id; st.cursor = 0; st.line = ''; }
+    try{
+      const res = await fetch(BASE + '/api/run/' + encodeURIComponent(r.id) + '/actions?cursor=' + st.cursor);
+      const d = await res.json();
+      st.cursor = d.cursor != null ? d.cursor : st.cursor;
+      const items = (d.items || []).filter(i => i.kind === 'tool' || i.kind === 'text');
+      if(items.length){
+        const last = items[items.length - 1];
+        st.line = last.kind === 'tool'
+          ? '⚙ ' + last.tool + (last.detail ? ' · ' + last.detail : '')
+          : '“' + String(last.text || '').replace(/\s+/g, ' ').slice(0, 110) + '”';
+        const el = document.getElementById('ftick-' + r.member_id);
+        if(el){ el.textContent = st.line; el.title = st.line; }
+        if(sheetCtx === r.member_id){
+          const sl = document.getElementById('sltick');
+          if(sl){ sl.textContent = st.line; sl.title = st.line; }
+        }
+      }
+    }catch(e){ /* transient — keep the last line */ }
+  }
+}
+
+function openSheet(memberId){
+  const m = ((FLOOR || {}).members || []).find(x => x.id === memberId);
+  if(!m){ toast('No sheet for ' + memberId + ' on this floor', true); return; }
+  const wrap = document.getElementById('floorWrap');
+  if(sheetCtx === memberId && wrap.classList.contains('show')) return;
+  sheetCtx = memberId;
+  document.getElementById('floorSheet').innerHTML =
+    '<button class="sclose" onclick="closeSheet()" aria-label="Close sheet">✕</button>' +
+    '<div class="sheetscroll">' + sheetHtml(m) + '</div>';
+  // scrollbar stays invisible until the sheet is actually scrolled (or hovered)
+  const sc = document.getElementById('floorSheet').querySelector('.sheetscroll');
+  sc.addEventListener('scroll', () => {
+    sc.classList.add('scrolling');
+    clearTimeout(sc._t);
+    sc._t = setTimeout(() => sc.classList.remove('scrolling'), 700);
+  }, {passive: true});
+  wrap.classList.add('show');
+  paintFloorActivity();   // a member mid-run shows it the moment the sheet opens
+  if(currentView === 'floor') history.replaceState(null, '', '#/floor/' + memberId);
+}
+function closeSheet(){
+  closePalette();
+  document.getElementById('floorWrap').classList.remove('show');
+  sheetCtx = null;
+  if(currentView === 'floor' && location.hash !== '#/floor') history.replaceState(null, '', '#/floor');
+}
+document.getElementById('floorWrap').addEventListener('click', e => {
+  if(e.target.id !== 'floorWrap') return;
+  if(!document.getElementById('equipPalette').hidden) closePalette();
+  else closeSheet();
+});
+
+/* ---- the armory picker: search the machine's inventory, one click equips ---- */
+let palCtx = null;      // {memberId, kind}
+let palItems = [];
+const PAL_GLYPH = {mcp: '◆', skills: '⬡', commands: '▸', cli: '⌘', knowledge: '▤'};
+const PAL_TITLE = {mcp: 'Equip · MCP servers', skills: 'Equip · skills',
+  commands: 'Equip · commands', cli: 'Equip · CLI tools', knowledge: 'Attach knowledge'};
+
+async function openPalette(memberId, kind){
+  palCtx = {memberId, kind};
+  const pal = document.getElementById('equipPalette');
+  const search = document.getElementById('palSearch');
+  const list = document.getElementById('palList');
+  const kform = document.getElementById('palKform');
+  const foot = document.getElementById('palFoot');
+  document.getElementById('palTitle').textContent = PAL_TITLE[kind] || 'Equip';
+  pal.hidden = false;
+  if(kind === 'knowledge'){
+    search.hidden = true; list.hidden = true; kform.hidden = false;
+    document.getElementById('palKPath').value = '';
+    document.getElementById('palKTeaches').value = '';
+    foot.textContent = 'A folder or document this member carries into every run.';
+    document.getElementById('palKPath').focus();
+    return;
+  }
+  search.hidden = false; list.hidden = false; kform.hidden = true;
+  search.value = '';
+  list.innerHTML = '<div class="prow"><span class="pd">Reading the armory…</span></div>';
+  foot.textContent = '';
+  let d = null;
+  try{
+    const r = await fetch(BASE + '/api/inventory?kind=' + encodeURIComponent(kind));
+    d = await r.json();
+  }catch(e){ /* handled below */ }
+  if(!d || !Array.isArray(d[kind])){
+    palItems = [];
+    list.innerHTML = '<div class="prow"><span class="pd">The armory needs a dashboard server restart — the running server predates it.</span></div>';
+    return;
+  }
+  palItems = d[kind];
+  foot.innerHTML = (d.generated_at ? 'armory surveyed ' + timeAgo(d.generated_at) : '') +
+    '<button class="btn sm" onclick="resyncArmory()">Resync machine</button>';
+  renderPalette();
+  search.oninput = renderPalette;
+  search.focus();
+}
+
+function renderPalette(){
+  if(!palCtx) return;
+  const {memberId, kind} = palCtx;
+  const list = document.getElementById('palList');
+  const q = document.getElementById('palSearch').value.trim().toLowerCase();
+  const m = ((FLOOR || {}).members || []).find(x => x.id === memberId);
+  const worn = new Set((((m || {}).loadout || {})[kind] || []).map(x =>
+    String(x && x.name != null ? x.name : x).replace(/^\//, '')));
+  const rows = palItems.filter(it => {
+    if(kind === 'cli' && it.present === false) return false;  // not on this machine
+    if(!q) return true;
+    const hay = (' ' + (it.name || '') + ' ' + (it.description || '') + ' ' +
+      (it.what || '') + ' ' + (it.detail || '') + ' ' + (it.command || '')).toLowerCase();
+    return hay.includes(q);
+  });
+  // Governed wrappers (gws-acct and kin) live outside the probe catalog —
+  // offer any typed CLI name as a manual equip; the server presence-checks it.
+  let manual = '';
+  if(kind === 'cli' && q && !palItems.some(it => String(it.name) === q) && !worn.has(q)){
+    manual = `<div class="prow"><span class="pg">⌘</span><span class="pn">${esc(q)}</span>
+      <span class="pd">not in the probe catalog — presence-checked on equip</span>
+      <button class="pbtn" onclick="doEquip('${esc(q)}',this)">Equip</button></div>`;
+  }
+  if(!rows.length && !manual){
+    list.innerHTML = '<div class="prow"><span class="pd">Nothing in the armory matches.</span></div>';
+    return;
+  }
+  list.innerHTML = manual + rows.map(it => {
+    const bare = String(it.name || '').replace(/^\//, '');
+    const isWorn = worn.has(bare);
+    const desc = it.description || it.what || it.detail || it.command || '';
+    const tags = [];
+    if(kind === 'mcp' && (it.needs_keys || []).length)
+      tags.push(`<span class="ptag warn" title="Needs ${esc(it.needs_keys.join(', '))} in the vault — System → Variables">keys</span>`);
+    if(kind === 'cli' && it.live === true)
+      tags.push('<span class="ptag" style="color:var(--brand-success);border-color:rgba(var(--brand-success-rgb),.4)">live</span>');
+    if(it.source) tags.push(`<span class="ptag">${esc(it.source)}</span>`);
+    const act = isWorn ? '<span class="ptag">equipped</span>'
+      : kind === 'mcp'
+        ? `<button class="pbtn" onclick="mcpEquipArm(this,'${esc(bare)}')">Equip</button>`
+        : `<button class="pbtn" onclick="doEquip('${esc(bare)}',this)">Equip</button>`;
+    return `<div class="prow${isWorn ? ' on' : ''}"><span class="pg">${PAL_GLYPH[kind]}</span>
+      <span class="pn">${esc(kind === 'commands' ? '/' + bare : String(it.name || ''))}</span>
+      <span class="pd">${esc(desc)}</span>${tags.join('')}${act}</div>`;
+  }).join('');
+}
+
+/* Equipping an MCP server writes the firm's .mcp.json — worth a second click. */
+function mcpEquipArm(btn, name){
+  if(!btn.dataset.armed){
+    btn.dataset.armed = '1'; btn.classList.add('armed'); btn.textContent = 'Wire into firm?';
+    setTimeout(() => {
+      btn.dataset.armed = ''; btn.classList.remove('armed'); btn.textContent = 'Equip';
+    }, 3500);
+    return;
+  }
+  doEquip(name, btn);
+}
+
+async function doEquip(name, btn){
+  if(!palCtx) return;
+  if(btn) btn.disabled = true;
+  const ctx = palCtx;
+  const out = await postAction('member-equip/' + encodeURIComponent(ctx.memberId), {kind: ctx.kind, name});
+  if(out.ok){
+    const nk = (out.result && out.result.needs_keys) || [];
+    toast(`${out.result.name} equipped — carried from the next run${nk.length ? ' · needs ' + nk.join(', ') + ' in the vault' : ''}`);
+    closePalette();
+    refreshLoadout(ctx.memberId, ctx.kind, out.result.name);
+  } else {
+    toast(out.error || 'Equip failed', true);
+    if(btn){ btn.disabled = false; btn.dataset.armed = ''; btn.classList.remove('armed'); btn.textContent = 'Equip'; }
+  }
+}
+
+async function attachKnowledge(){
+  if(!palCtx) return;
+  const path = document.getElementById('palKPath').value.trim();
+  if(!path){ toast('Path is required', true); return; }
+  const ctx = palCtx;
+  const out = await postAction('member-equip/' + encodeURIComponent(ctx.memberId), {
+    kind: 'knowledge', path,
+    teaches: document.getElementById('palKTeaches').value.trim(),
+  });
+  if(out.ok){
+    toast(out.result.name + ' attached — carried from the next run');
+    closePalette();
+    refreshLoadout(ctx.memberId, 'knowledge', out.result.name);
+  } else toast(out.error || 'Attach failed', true);
+}
+
+function closePalette(){
+  document.getElementById('equipPalette').hidden = true;
+  palCtx = null;
+}
+
+async function resyncArmory(){
+  const foot = document.getElementById('palFoot');
+  foot.textContent = 'Re-surveying the machine — CLI identity probes take a few seconds…';
+  try{
+    const r = await fetch(BASE + '/api/inventory/sync', {method: 'POST'});
+    const d = await r.json();
+    if(d.ok){
+      const c = d.result.counts || {};
+      toast(`Armory resynced — ${c.mcp ?? '?'} servers · ${c.skills ?? '?'} skills · ${c.commands ?? '?'} commands · ${c.cli ?? '?'} CLIs`);
+      if(palCtx) openPalette(palCtx.memberId, palCtx.kind);
+      return;
+    }
+  }catch(e){}
+  foot.textContent = 'Resync failed — is the hub current?';
+}
+
+let unequipTimer = null;
+async function unequipArm(btn, memberId, kind, name){
+  if(!btn.dataset.armed){
+    btn.dataset.armed = '1'; btn.classList.add('armed'); btn.textContent = '?';
+    clearTimeout(unequipTimer);
+    unequipTimer = setTimeout(() => {
+      btn.dataset.armed = ''; btn.classList.remove('armed'); btn.textContent = '✕';
+    }, 3000);
+    return;
+  }
+  clearTimeout(unequipTimer);
+  const out = await postAction('member-unequip/' + encodeURIComponent(memberId), {kind, name});
+  if(out.ok){
+    toast(`${name} unequipped${kind === 'mcp' ? ' — the server stays in the firm armory; Train prunes' : ''}`);
+    refreshLoadout(memberId, null, null);
+  } else toast(out.error || 'Unequip failed', true);
+}
+
+/* Re-paint the wall without replaying the whole sheet cascade — the newly
+   equipped slot alone plays the equip pulse. */
+async function refreshLoadout(memberId, kind, justName){
+  floorFetchedAt = 0;
+  try{
+    const r = await fetch(BASE + '/api/floor');
+    const d = await r.json();
+    if(d && d.members){ FLOOR = d; floorFetchedAt = Date.now(); }
+  }catch(e){}
+  renderFloor();
+  const m = ((FLOOR || {}).members || []).find(x => x.id === memberId);
+  const wall = document.getElementById('sockwall');
+  if(m && wall && sheetCtx === memberId){
+    wall.innerHTML = sockwallHtml(m, {
+      still: true,
+      just: justName ? String(justName).replace(/^\//, '') : null,
+      justKind: kind,
+    });
+  }
+}
+
+const EQUIP_CATS = [
+  ['mcp', 'MCP servers', 'mcp', '◆'],
+  ['skills', 'Skills', 'skill', '⬡'],
+  ['commands', 'Commands', 'cmd', '▸'],
+  ['cli', 'CLI tools', 'cli', '⌘'],
+  ['knowledge', 'Knowledge', 'tome', '▤'],
+];
+
+/* The socket wall renders separately from the sheet so equip/unequip can
+   re-paint just the wall: {still:true} seats existing slots without replaying
+   the cascade, {just, justKind} plays the equip pulse on the new item only. */
+function sockwallHtml(m, opts){
+  opts = opts || {};
+  let slot = 0;
+  const d = () => opts.still ? '' : ` style="animation-delay:${Math.min(slot++ * 40, 1400)}ms"`;
+  const mid = esc(m.id);
+  const stillCls = opts.still ? ' still' : '';
+  const slotEl = (kind, cls, glyph, name, title, uneqName) => {
+    const just = opts.just && opts.justKind === kind
+      && String(name).replace(/^\//, '') === opts.just;
+    return `<div class="slot ${cls}${just ? ' just' : stillCls}"${just ? '' : d()}${title ? ` title="${esc(title)}"` : ''}>
+      <div class="cell"><span class="sg">${glyph}</span>
+        <button class="unx" onclick="event.stopPropagation();unequipArm(this,'${mid}','${kind}','${esc(uneqName)}')"
+          title="Unequip ${esc(uneqName)}" aria-label="Unequip ${esc(uneqName)}">✕</button></div>
+      <div class="cap">${esc(name)}</div>
+    </div>`;
+  };
+  const lo = m.loadout || {};
+  const items = {
+    mcp: (lo.mcp || []).map(x => ({name: x, title: 'firm-credentialed server', uneq: x})),
+    skills: (lo.skills || []).map(x => ({name: x, title: 'skill', uneq: x})),
+    commands: (lo.commands || []).map(x => ({name: '/' + String(x).replace(/^\//, ''), title: 'command', uneq: String(x).replace(/^\//, '')})),
+    cli: (lo.cli || []).map(x => ({name: x.name, title: x.detail || 'tool on this machine', uneq: x.name})),
+    knowledge: (lo.knowledge || []).map(x => ({name: x.name, title: x.teaches ? 'teaches: ' + x.teaches : 'attached knowledge', uneq: x.name})),
+  };
+  return EQUIP_CATS.map(([kind, label, cls, glyph]) =>
+    `<div class="sgroup"><div class="sglabel">${label}</div><div class="srow">` +
+    items[kind].map(it => slotEl(kind, cls, glyph, it.name, it.title, it.uneq)).join('') +
+    `<div class="slot add${stillCls}"${d()} role="button" tabindex="0" title="Equip from the armory"
+        onclick="openPalette('${mid}','${kind}')" onkeydown="if(event.key==='Enter')openPalette('${mid}','${kind}')">
+        <div class="cell"><span class="sg">+</span></div><div class="cap">equip</div></div>` +
+    `</div></div>`
+  ).join('');
+}
+
+function sheetHtml(m){
+  // One cascade counter across the contract zone — the 40ms reveal.
+  let slot = 0;
+  const d = () => ` style="animation-delay:${Math.min(slot++ * 40, 1400)}ms"`;
+
+  const oaths = (m.oaths || []).length
+    ? m.oaths.map(o => `<div class="oath"${d()}><span class="og">◇</span><span>${esc(o)}</span></div>`).join('')
+    : '<div class="empty">Nothing on this contract needs your sign-off.</div>';
+  let seals;
+  if((m.seals || []).length){
+    const byTool = {};
+    m.seals.forEach(s => { const t = s.tool || ''; (byTool[t] = byTool[t] || []).push(s); });
+    const tools = Object.keys(byTool).sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
+    seals = `<div class="sealshelf">Deny rules — enforced by the runtime</div>` +
+      tools.map(t => `<div class="toolgroup"${d()}>
+        <div class="tghead">${t ? esc(t) : 'unlabeled'}${t ? '' : '<span class="tgn">wired before tool tagging — a re-Train labels these</span>'}</div>
+        <div class="sealrow">${byTool[t].map(s =>
+          `<span class="seal"${d()} title="${esc(s.reason)}"><span class="sx">⊘</span>${esc(s.match)}</span>`).join('')}</div>
+      </div>`).join('');
+  } else {
+    seals = '<div class="empty" style="margin-top:12px">No deny rules on this contract.</div>';
+  }
+  const bm = String(m.budget.model || '').toLowerCase();
+  const segs = bm === 'opus' ? 3 : bm === 'sonnet' ? 2 : bm === 'haiku' ? 1 : 0;
+  const dial = `<div class="dial"${d()}>
+      <span class="dk">Budget</span>
+      <span class="dsegs">${[1,2,3].map(i => `<span class="dseg${i <= segs ? ' lit' : ''}"></span>`).join('')}</span>
+      <span class="dname">${esc(bm || 'account default')}</span>
+      <span class="dhint">${esc(BURN_HINT[bm] || 'No override — inherits your account default.')}${m.budget.timeout_sec ? ' · ' + m.budget.timeout_sec + 's timeout' : ''}</span>
+    </div>`;
+
+  const st = m.stats;
+  const rows = [
+    ['Runs', st.runs_total, 'a stat, never a level driver'],
+    ['Survived', st.runs_survived, st.runs_failed + ' failed · survived = completed'],
+    ['Units closed', st.units_closed, 'all time'],
+    ['Shipped', st.units_shipped, 'closed with a registered deliverable'],
+    ['Gates', st.gates_approved + ' / ' + st.gates_raised, 'approved / raised'],
+    ['Escalations', st.escalations_raised, 'the honesty stat'],
+    ['Spend', money(st.spend_usd), 'all time'],
+    ['$ / deliverable', st.cost_per_deliverable != null ? money(st.cost_per_deliverable) : '—',
+      st.deliverables + ' deliverables registered'],
+  ];
+  const statblock = rows.map(([k, v, title]) =>
+    `<div class="stl" title="${esc(title)}"><span class="sk">${esc(k)}</span><span class="dots"></span><span class="sv">${v}</span></div>`
+  ).join('');
+
+  const medals = (m.achievements || []).slice()
+    .sort((a, b) => (b.unlocked === true) - (a.unlocked === true))
+    .map(a => `
+    <div class="medal ${a.unlocked ? 'unlocked' : 'locked'}" title="${esc(a.desc)} · ${esc(a.track)} track">
+      <div class="memblem">${TRACK_GLYPH[a.track] || '✦'}</div>
+      <div class="mname">${esc(a.name)}</div>
+      <div class="mprog">${a.unlocked ? '✓ earned' : (a.target > 1 ? a.progress + ' / ' + a.target : 'not yet')}</div>
+    </div>`).join('');
+
+  const span = m.level_next_at != null ? m.level_next_at - m.level_floor : 0;
+  const pct = span > 0 ? Math.max(0, Math.min(100, 100 * (m.xp - m.level_floor) / span)) : 100;
+  const tenure = m.tenure && m.tenure.founding
+    ? '<span title="On the roster since the firm was founded">FOUNDING CREW</span>'
+    : `<span title="Hired after founding">HIRED ${esc(String((m.tenure || {}).since || '').slice(0, 10))}</span>`;
+  const burn = BURN[bm]
+    ? `<span class="burn" title="${esc(BURN_HINT[bm])}"><b>${BURN[bm]}</b>${esc(bm.toUpperCase())}</span>`
+    : '<span class="burn" title="No model override — inherits your account default"><b>▯▯▯</b>DEFAULT</span>';
+
+  return `
+    <div class="sheethead">
+      <div class="plateline">
+        <div class="portrait">${esc(initials(m.name))}<span class="lvplate">LV ${m.level}</span></div>
+        <div class="swho">
+          <div class="serial"><span>${esc(m.id)}</span><span>·</span>${tenure}<span>·</span>
+            <span>${esc(String(m.status || '').toUpperCase())}</span>
+            ${m.lead ? '<span>·</span><span style="color:var(--brand-warning)" title="Others on the roster report to this member">LEAD</span>' : ''}
+            <span>·</span>${burn}</div>
+          <h3 id="sheetName">${esc(m.name)}</h3>
+          <div class="classline">${esc(m.role || 'unassigned')}</div>
+          ${m.owns ? `<div class="sowns">${esc(m.owns)}</div>` : ''}
+        </div>
+      </div>
+      <div class="xpband">
+        <span class="xk">LEVEL ${m.level}</span>
+        <div class="xbar" role="img" aria-label="${m.xp} XP, ${pct.toFixed(0)}% toward the next level"><div style="width:${pct}%"></div></div>
+        <span class="xv">${m.xp}${m.level_next_at != null ? ' / ' + m.level_next_at + ' XP' : ' XP · CAP'}</span>
+      </div>
+      <div class="xwhy">${esc(XP_WHY)}</div>
+      <div class="sheetlive" id="sheetLive" hidden aria-live="polite">
+        <span class="fdot"></span><span>Working</span>
+        <span data-run-started=""></span><span>·</span><span class="slunit"></span>
+        <span class="sltick" id="sltick"></span>
+      </div>
+    </div>
+    <div class="szone"><div class="zlabel">Loadout <span class="zn">wired at Train · carried on every run · click + to equip</span></div>
+      <div class="sockwall" id="sockwall">${sockwallHtml(m)}</div></div>
+    <div class="szone"><div class="zlabel">Contract <span class="zn">gates need your sign-off · deny rules are enforced</span></div>
+      ${oaths}${seals}${dial}</div>
+    <div class="zsplit">
+      <div class="szone"><div class="zlabel">Record <span class="zn">derived from the ledger</span></div>
+        <div class="statblock">${statblock}</div></div>
+      <div class="szone"><div class="zlabel">Achievements <span class="zn">earned, never granted${FLOOR && FLOOR.goal_completed ? ' · firm goal HIT' : ''}</span></div>
+        <div class="medals">${medals}</div></div>
+    </div>`;
+}
 
 /* ======================= MEMBER PROFILE ======================= */
 let profileCtx = null;
@@ -2814,6 +3713,8 @@ document.addEventListener('keydown', e => {
   if(document.getElementById('goalOverlay').classList.contains('show')) closeGoal();
   if(document.getElementById('drawerWrap').classList.contains('show')) closeProfile();
   if(document.getElementById('runWrap').classList.contains('show')) closeRunPanel();
+  if(!document.getElementById('equipPalette').hidden){ closePalette(); return; }
+  if(document.getElementById('floorWrap').classList.contains('show')) closeSheet();
 });
 document.getElementById('mConfirm').addEventListener('click', async () => {
   if(!modalCtx) return;
@@ -2914,6 +3815,25 @@ document.getElementById('pulseBtn').addEventListener('click', async () => {
 
 initCustomViews();
 initCustomBlocks();
+
+/* Co-Board chat in the sidebar — appears when a chat rail is configured.
+   Main click replaces this window; the ↗ opens a new tab. */
+(async () => {
+  try{
+    const r = await (await fetch('/api/next/rail')).json();
+    if(!(r && r.chat && r.chat.configured)) return;
+    const url = r.chat.link_url || r.chat.url;
+    const btn = document.getElementById('chatNav');
+    if(!btn) return;
+    btn.style.display = '';
+    btn.addEventListener('click', () => { window.location.href = url; });
+    const nt = document.getElementById('chatNavNew');
+    if(nt) nt.addEventListener('click', (e) => {
+      e.stopPropagation();
+      window.open(url, '_blank', 'noopener');
+    });
+  }catch(e){}
+})();
 </script>
 </body>
 </html>

@@ -571,3 +571,89 @@ class TestExpectedMcpServers:
         assert expected_mcp_servers(str(tmp_path)) == []
         (tmp_path / ".mcp.json").write_text(json.dumps({"mcpServers": ["nope"]}))
         assert expected_mcp_servers(str(tmp_path)) == []
+
+
+class TestFullLoad:
+    """Trust posture: .firm/spawn.json {"full": true} drops --strict-mcp-config."""
+
+    def test_default_is_lean(self, tmp_path):
+        from firm.pulse.spawn import full_load
+        assert full_load(str(tmp_path)) is False
+        assert full_load(None) is False
+
+    def test_full_file_enables(self, tmp_path):
+        import json as _json
+        from firm.pulse.spawn import full_load
+        (tmp_path / ".firm").mkdir()
+        (tmp_path / ".firm" / "spawn.json").write_text(_json.dumps({"full": True}))
+        assert full_load(str(tmp_path)) is True
+
+    def test_explicit_false_and_garbage_stay_lean(self, tmp_path):
+        from firm.pulse.spawn import full_load
+        (tmp_path / ".firm").mkdir()
+        (tmp_path / ".firm" / "spawn.json").write_text('{"full": false}')
+        assert full_load(str(tmp_path)) is False
+        (tmp_path / ".firm" / "spawn.json").write_text("not json")
+        assert full_load(str(tmp_path)) is False
+
+    def test_strict_flag_never_leaves_the_module_list(self, tmp_path):
+        # cmd.remove() must operate on the per-spawn copy — a mutated module
+        # list would leak full-load into every later firm's spawn.
+        from firm.pulse.spawn import _CLAUDE_FLAGS
+        assert "--strict-mcp-config" in _CLAUDE_FLAGS
+
+
+class TestUsageFallbackWithoutResult:
+    """A stream cut before its result event (timeout/kill) must still
+    report the tokens its assistant messages carried — billing reads this."""
+
+    def test_accumulates_message_usage_when_no_result(self):
+        lines = [
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "usage": {"input_tokens": 100, "output_tokens": 10,
+                              "cache_read_input_tokens": 5},
+                    "content": [{"type": "text", "text": "one"}],
+                },
+            }),
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "usage": {"input_tokens": 200, "output_tokens": 30},
+                    "content": [{"type": "text", "text": "two"}],
+                },
+            }),
+        ]
+        parsed = parse_stream("\n".join(lines))
+        assert parsed["usage"]["input_tokens"] == 300
+        assert parsed["usage"]["output_tokens"] == 40
+        assert parsed["usage"]["cache_read"] == 5
+
+    def test_result_event_still_wins_when_present(self):
+        lines = [
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "usage": {"input_tokens": 100, "output_tokens": 10},
+                    "content": [{"type": "text", "text": "one"}],
+                },
+            }),
+            json.dumps({
+                "type": "result",
+                "usage": {"input_tokens": 1234, "output_tokens": 567},
+                "total_cost_usd": 0.02,
+                "stop_reason": "end_turn",
+            }),
+        ]
+        parsed = parse_stream("\n".join(lines))
+        assert parsed["usage"]["input_tokens"] == 1234
+        assert parsed["usage"]["output_tokens"] == 567
+
+    def test_no_usage_anywhere_stays_zero(self):
+        lines = [json.dumps({
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "hi"}]},
+        })]
+        parsed = parse_stream("\n".join(lines))
+        assert parsed["usage"]["input_tokens"] == 0

@@ -109,3 +109,71 @@ def test_log_event_bumps_rev(tmp_path: Path) -> None:
         assert get_rev(conn) == before + 1
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# resolve_firm_id — the workspace db is the authority; never guess a name
+# ---------------------------------------------------------------------------
+
+def _firm_db(tmp_path: Path, *firm_ids: str) -> sqlite3.Connection:
+    from firm.core.migrate import apply_migrations
+    conn = connect(tmp_path / "firm.db")
+    apply_migrations(conn)
+    for fid in firm_ids:
+        conn.execute("INSERT INTO firm (id, name) VALUES (?, ?)", (fid, fid))
+    conn.commit()
+    return conn
+
+
+def test_resolve_firm_id_explicit_wins(tmp_path: Path, monkeypatch) -> None:
+    from firm.core.db import resolve_firm_id
+    monkeypatch.setenv("FIRM_ID", "enviro")
+    conn = _firm_db(tmp_path, "dbfirm")
+    try:
+        assert resolve_firm_id(conn, "flagged") == "flagged"
+    finally:
+        conn.close()
+
+
+def test_resolve_firm_id_reads_the_single_row(tmp_path: Path, monkeypatch) -> None:
+    from firm.core.db import resolve_firm_id
+    # A stale exported FIRM_ID must NOT override the workspace's own firm —
+    # that is exactly the wrong-scope bug this function exists to kill.
+    monkeypatch.setenv("FIRM_ID", "somewhere-else")
+    conn = _firm_db(tmp_path, "wastelander")
+    try:
+        assert resolve_firm_id(conn) == "wastelander"
+    finally:
+        conn.close()
+
+
+def test_resolve_firm_id_env_breaks_ambiguity(tmp_path: Path, monkeypatch) -> None:
+    from firm.core.db import resolve_firm_id
+    monkeypatch.setenv("FIRM_ID", "beta")
+    conn = _firm_db(tmp_path, "alpha", "beta")
+    try:
+        assert resolve_firm_id(conn) == "beta"
+    finally:
+        conn.close()
+
+
+def test_resolve_firm_id_refuses_to_guess(tmp_path: Path, monkeypatch) -> None:
+    from firm.core.db import resolve_firm_id
+    monkeypatch.delenv("FIRM_ID", raising=False)
+    empty = _firm_db(tmp_path)
+    try:
+        with pytest.raises(ValueError, match="refusing to guess"):
+            resolve_firm_id(empty)
+    finally:
+        empty.close()
+
+
+def test_resolve_firm_id_multi_firm_needs_override(tmp_path: Path, monkeypatch) -> None:
+    from firm.core.db import resolve_firm_id
+    monkeypatch.delenv("FIRM_ID", raising=False)
+    conn = _firm_db(tmp_path, "alpha", "beta")
+    try:
+        with pytest.raises(ValueError, match="holds 2 firms"):
+            resolve_firm_id(conn)
+    finally:
+        conn.close()

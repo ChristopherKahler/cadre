@@ -17,6 +17,7 @@ import json
 import os
 import signal
 import socket
+import sys
 import threading
 import time
 from pathlib import Path
@@ -292,6 +293,23 @@ def _drain_queue(workspace: Path, db_path: Path, firm_id: str) -> int:
 
 
 def _pid_alive(pid: int) -> bool:
+    if sys.platform.startswith("win"):
+        # os.kill(pid, 0) on Windows TERMINATES the process (anything but the
+        # CTRL_* events routes to TerminateProcess) — probe via OpenProcess.
+        import ctypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not h:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not k32.GetExitCodeProcess(h, ctypes.byref(code)):
+                return False
+            return code.value == STILL_ACTIVE
+        finally:
+            k32.CloseHandle(h)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

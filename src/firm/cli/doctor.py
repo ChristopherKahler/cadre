@@ -54,12 +54,12 @@ def _parse_json_col(row: dict[str, Any] | None, col: str) -> dict[str, Any]:
 def diagnose(workspace: Path, firm_id: str, *,
              unit_dir: Path | None = None) -> list[dict[str, Any]]:
     """The report card. Read-only — every finding carries its route."""
-    from firm.cli.heartbeat import _UNIT_PREFIX, _systemctl, default_unit_dir
+    from firm.cli.heartbeat import _UNIT_PREFIX, _sched
     from firm.cli.install_hooks import POLICY_HOOK_COMMAND, POLICY_HOOK_SCRIPT_NAME
     from firm.pulse import preflight
     from firm.services import policy as policy_svc
 
-    unit_dir = unit_dir or default_unit_dir()
+    sched = _sched(unit_dir)
     checks: list[dict[str, Any]] = []
     conn = connect(get_db_path(workspace))
     try:
@@ -154,23 +154,22 @@ def diagnose(workspace: Path, firm_id: str, *,
             f"north_star: {has_ns}, firm-level goal: {firm_goal} — "
             "a firm with no number cannot fail, only be busy"))
 
-        # 7 + 8. schedule truth and systemd ghosts — mechanical
+        # 7 + 8. schedule truth and scheduler ghosts — mechanical
         stem = f"{_UNIT_PREFIX}{firm_id}"
-        timer_path = unit_dir / f"{stem}.timer"
+        st = sched.status(stem)
         schedule = firm.get("schedule")
-        in_sync = bool(schedule) == timer_path.exists()
+        in_sync = bool(schedule) == bool(st.get("installed"))
         checks.append(_check(
             "schedule", "firm.schedule matches the timer", in_sync,
             "mechanical",
-            f"schedule={schedule!r}, timer file: {timer_path.exists()}",
+            f"schedule={schedule!r}, timer installed: {bool(st.get('installed'))} "
+            f"({sched.name})",
             fix="reconcile the row to timer truth"))
-        rc_svc, _ = _systemctl("is-failed", f"{stem}.service")
-        rc_tmr, _ = _systemctl("is-failed", f"{stem}.timer")
-        ghost = (rc_svc == 0 or rc_tmr == 0) and not timer_path.exists()
+        ghost = bool(st.get("failed")) and not st.get("installed")
         checks.append(_check(
-            "ghost-units", "No failed systemd ghosts", not ghost, "mechanical",
+            "ghost-units", "No failed scheduler ghosts", not ghost, "mechanical",
             f"{stem} sits failed with its files gone" if ghost else "clean",
-            fix="systemctl reset-failed"))
+            fix="clear the scheduler's failure residue"))
 
         # 9. credential liveness — board (a re-login is a human act)
         dead = preflight.dead_tools(conn, firm_id)
@@ -220,12 +219,12 @@ def diagnose(workspace: Path, firm_id: str, *,
 def fix(workspace: Path, firm_id: str, checks: list[dict[str, Any]], *,
         unit_dir: Path | None = None) -> list[str]:
     """Apply the mechanical fixes for failed checks. Judgment stays routed."""
-    from firm.cli.heartbeat import _UNIT_PREFIX, _systemctl, default_unit_dir
+    from firm.cli.heartbeat import _UNIT_PREFIX, _sched
     from firm.cli.install_hooks import install_policy_hook
     from firm.core.migrate import apply_migrations
     from firm.services import policy as policy_svc
 
-    unit_dir = unit_dir or default_unit_dir()
+    sched = _sched(unit_dir)
     failed = {c["key"] for c in checks if not c["ok"] and c["route"] == "mechanical"}
     did: list[str] = []
     if not failed:
@@ -243,18 +242,13 @@ def fix(workspace: Path, firm_id: str, checks: list[dict[str, Any]], *,
             policy_svc.materialize(conn, workspace, firm_id)
             did.append("policy: re-materialized")
         if "schedule" in failed:
-            timer_path = unit_dir / f"{_UNIT_PREFIX}{firm_id}.timer"
-            interval = None
-            if timer_path.exists():
-                for line in timer_path.read_text().splitlines():
-                    if line.startswith("OnUnitActiveSec="):
-                        interval = line.split("=", 1)[1].strip()
+            st = sched.status(f"{_UNIT_PREFIX}{firm_id}")
+            interval = st.get("interval") if st.get("installed") else None
             repo.update(conn, "firm", firm_id, {"schedule": interval})
             did.append(f"schedule: reconciled to {interval!r}")
         if "ghost-units" in failed:
-            stem = f"{_UNIT_PREFIX}{firm_id}"
-            _systemctl("reset-failed", f"{stem}.service", f"{stem}.timer")
-            did.append("ghost-units: reset-failed")
+            sched.clear_failed(f"{_UNIT_PREFIX}{firm_id}")
+            did.append("ghost-units: failure residue cleared")
         if "denials" in failed:
             n = policy_svc.ingest_denials(conn, workspace, firm_id)
             did.append(f"denials: {n} ingested")

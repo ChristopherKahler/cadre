@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from typing import Any, Callable
 
 
@@ -66,26 +67,129 @@ def _validate_ac_self_report(
     }
 
 
+_DELETION_TOKEN_RE = re.compile(
+    r"(?:^|[;&|]\s*|\s)(rm|unlink|rmdir|mv)\s|shutil\.rmtree|os\.(?:remove|unlink)"
+)
+
+
+def _declared_outputs(unit: dict[str, Any] | None) -> list[str]:
+    """Paths the unit DECLARES as deliverables (``unit.outputs``).
+
+    Entries may be bare strings or ``{"path": ...}`` dicts; anything else is
+    skipped. Returns [] when the unit declares nothing.
+    """
+    if not unit:
+        return []
+    raw = unit.get("outputs")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    if not isinstance(raw, list):
+        return []
+    paths: list[str] = []
+    for entry in raw:
+        if isinstance(entry, str) and entry.strip():
+            paths.append(entry.strip())
+        elif isinstance(entry, dict) and entry.get("path"):
+            paths.append(str(entry["path"]))
+    return paths
+
+
+def _artifact_failures(
+    paths: list[str], cwd: str, *, min_bytes: int = 1,
+) -> list[str]:
+    """Assert the artifact, never the container (tapir's rule, 2026-07-13).
+
+    A declared deliverable must exist and be non-trivial: a file needs
+    ``>= min_bytes`` bytes; a directory needs at least one real file of
+    ``>= min_bytes`` bytes somewhere inside it. An empty dir passing a
+    ``[ -d ... ]`` check is exactly how UNT-TOOLING's export templates went
+    green while 1.2GB sat unextracted. Returns human-readable failure lines,
+    [] when every artifact holds up.
+    """
+    import os
+
+    failures: list[str] = []
+    for p in paths:
+        full = p if os.path.isabs(p) else os.path.join(cwd, p)
+        if not os.path.exists(full):
+            failures.append(f"{p}: declared deliverable does not exist")
+        elif os.path.isdir(full):
+            has_content = any(
+                os.path.getsize(os.path.join(root, f)) >= min_bytes
+                for root, _dirs, files in os.walk(full)
+                for f in files
+            )
+            if not has_content:
+                failures.append(
+                    f"{p}: declared deliverable is an empty directory"
+                )
+        elif os.path.getsize(full) < min_bytes:
+            failures.append(
+                f"{p}: declared deliverable is empty ({os.path.getsize(full)} bytes)"
+            )
+    return failures
+
+
 def _validate_file_exists(
     result: dict[str, Any],
     cwd: str,
     *,
     require_written: bool = False,
+    unit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Check that expected output files exist on disk.
 
-    Looks for file paths mentioned in tool_calls (Write/Edit tools) and
-    verifies they exist. If no tool_calls with file outputs, passes by
-    default — UNLESS ``require_written`` is set, in which case a run that
-    wrote no file fails. Set ``require_written`` on contracts whose units
-    always produce a file deliverable (e.g. a Novelist's chapter): it is
-    what stops a blocked or no-op run from completing a unit it never
-    actually drafted.
+    Declared-deliverables mode: when the unit declares ``outputs``, THOSE
+    are the deliverables — each must exist and be non-trivial (see
+    ``_artifact_failures``), and incidental writes are ignored entirely. A
+    member's scratch files are its own business; the unit's contract is the
+    declared artifact list.
+
+    Fallback (no declared outputs): looks for file paths mentioned in
+    tool_calls (Write/Edit tools) and verifies they exist. If no tool_calls
+    with file outputs, passes by default — UNLESS ``require_written`` is
+    set, in which case a run that wrote no file fails. Set
+    ``require_written`` on contracts whose units always produce a file
+    deliverable (e.g. a Novelist's chapter): it is what stops a blocked or
+    no-op run from completing a unit it never actually drafted.
+
+    Cleanup is not failure: a written file that is missing at run end does
+    NOT fail the run when the run's own Bash calls show deletion evidence
+    for it (an ``rm``/``mv``/``unlink`` naming the path or its basename).
+    A member that scratches two temp files and correctly deletes them did
+    its job — before this, that run was marked failed and Ralph-Wiggum
+    retried at full price (field failure 2026-07-13: crows-and-pawns
+    RUN-007 burned $7.76 being punished for cleaning up after itself; the
+    retry did identical work for $1.57). With ``require_written`` set, at
+    least one written file must SURVIVE cleanup — deleting every file you
+    wrote is still not a deliverable.
     """
     import os
 
+    declared = _declared_outputs(unit)
+    if declared:
+        failures = _artifact_failures(declared, cwd)
+        if failures:
+            return {
+                "name": "file_exists",
+                "passed": False,
+                "message": "Declared deliverables failed: " + "; ".join(failures),
+            }
+        return {
+            "name": "file_exists",
+            "passed": True,
+            "message": (
+                f"All {len(declared)} declared deliverable(s) exist and are "
+                "non-empty"
+            ),
+        }
+
     tool_calls = result.get("tool_calls", [])
     written_files: list[str] = []
+    deletion_commands: list[str] = []
     for tc in tool_calls:
         if not isinstance(tc, dict):
             continue
@@ -95,6 +199,10 @@ def _validate_file_exists(
             continue
         if name in ("Write", "Edit") and inp.get("file_path"):
             written_files.append(inp["file_path"])
+        elif name == "Bash":
+            cmd = inp.get("command") or ""
+            if isinstance(cmd, str) and _DELETION_TOKEN_RE.search(cmd):
+                deletion_commands.append(cmd)
 
     if not written_files:
         return {
@@ -107,18 +215,163 @@ def _validate_file_exists(
             ),
         }
 
+    def _deleted_by_run(fp: str) -> bool:
+        base = os.path.basename(fp)
+        return any(fp in cmd or base in cmd for cmd in deletion_commands)
+
+    surviving: list[str] = []
+    cleaned: list[str] = []
     missing: list[str] = []
     for fp in written_files:
-        if not os.path.exists(fp):
+        if os.path.exists(fp):
+            surviving.append(fp)
+        elif _deleted_by_run(fp):
+            cleaned.append(fp)
+        else:
             missing.append(fp)
 
-    passed = len(missing) == 0
-    if passed:
-        msg = f"All {len(written_files)} output files exist"
-    else:
-        msg = f"Missing files: {', '.join(missing)}"
+    if missing:
+        return {
+            "name": "file_exists",
+            "passed": False,
+            "message": f"Missing files: {', '.join(missing)}",
+        }
+    if require_written and not surviving:
+        return {
+            "name": "file_exists",
+            "passed": False,
+            "message": (
+                f"All {len(written_files)} written file(s) were deleted by the "
+                "run — expected a surviving file deliverable"
+            ),
+        }
+    msg = f"All {len(surviving)} output files exist"
+    if cleaned:
+        msg += f" ({len(cleaned)} scratch file(s) cleaned up by the run)"
+    return {"name": "file_exists", "passed": True, "message": msg}
 
-    return {"name": "file_exists", "passed": passed, "message": msg}
+
+def _validate_ac_script(
+    result: dict[str, Any],
+    cwd: str,
+    *,
+    unit: dict[str, Any] | None = None,
+    timeout_sec: int = 120,
+) -> dict[str, Any]:
+    """Execute the unit's machine-checkable acceptance criteria.
+
+    An acceptance criterion that names a check script (a ``.sh``/``.bash``/
+    ``.py`` path) is executable law, not prose: this validator extracts every
+    script path from the unit's ``acceptance_criteria``, runs each from the
+    firm workspace, and requires exit 0. A referenced script that does not
+    exist fails — an AC pointing at a check nobody wrote is an unmet AC.
+
+    This is what stops a member from passing by writing a report about
+    itself (field failure 2026-07-13: UNT-TOOLING went green with export
+    templates missing entirely, while its own AC said "when
+    scripts/verify_toolchain.sh runs, then it exits 0" — nothing ever ran
+    it). Prose-only ACs pass with an explicit "unverified" note: honesty
+    over theater, and no false-fails for firms whose ACs carry no scripts.
+
+    Convention for Boards: name a script in an AC only if running it IS the
+    check. Scripts must resolve inside the firm workspace; paths escaping it
+    are ignored.
+    """
+    import os
+    import re
+    import subprocess
+
+    if not unit:
+        return {
+            "name": "ac_script",
+            "passed": True,
+            "message": "No unit context — nothing to check",
+        }
+
+    raw = unit.get("acceptance_criteria")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            raw = [raw]
+    if not raw:
+        return {
+            "name": "ac_script",
+            "passed": True,
+            "message": "Unit has no acceptance criteria",
+        }
+    if not isinstance(raw, list):
+        raw = [raw]
+
+    texts: list[str] = []
+    for entry in raw:
+        if isinstance(entry, str):
+            texts.append(entry)
+        elif isinstance(entry, dict):
+            texts.append(str(entry.get("text") or entry.get("criterion") or ""))
+
+    script_re = re.compile(r"[\w./-]+\.(?:sh|bash|py)\b")
+    workspace = os.path.realpath(cwd)
+    scripts: list[str] = []
+    for text in texts:
+        for candidate in script_re.findall(text):
+            resolved = os.path.realpath(os.path.join(cwd, candidate))
+            if not resolved.startswith(workspace + os.sep):
+                continue  # escapes the firm workspace — not ours to run
+            if resolved not in scripts:
+                scripts.append(resolved)
+
+    # Artifact floor — declared deliverables must hold up regardless of what
+    # the check scripts claim. A vacuous script ([ -d ... ] on an empty dir)
+    # must not be able to bless a unit whose artifacts aren't there.
+    failures: list[str] = _artifact_failures(_declared_outputs(unit), cwd)
+
+    if not scripts:
+        n = len([t for t in texts if t.strip()])
+        if failures:
+            return {
+                "name": "ac_script",
+                "passed": False,
+                "message": "AC check failed: " + "; ".join(failures),
+            }
+        return {
+            "name": "ac_script",
+            "passed": True,
+            "message": f"No check scripts named in ACs ({n} prose criteria unverified)",
+        }
+
+    for script in scripts:
+        rel = os.path.relpath(script, workspace)
+        if not os.path.exists(script):
+            failures.append(f"{rel}: referenced by an AC but does not exist")
+            continue
+        runner = ["bash", script] if not script.endswith(".py") else ["python3", script]
+        try:
+            proc = subprocess.run(
+                runner, cwd=cwd, capture_output=True, text=True,
+                timeout=timeout_sec,
+            )
+        except subprocess.TimeoutExpired:
+            failures.append(f"{rel}: timed out after {timeout_sec}s")
+            continue
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "").strip()[-300:]
+            failures.append(f"{rel}: exit {proc.returncode} — {tail}")
+
+    if failures:
+        return {
+            "name": "ac_script",
+            "passed": False,
+            "message": "AC check failed: " + "; ".join(failures),
+        }
+    return {
+        "name": "ac_script",
+        "passed": True,
+        "message": (
+            f"All {len(scripts)} AC check script(s) passed"
+            " and declared deliverables hold up"
+        ),
+    }
 
 
 def _validate_sql_guard(
@@ -176,8 +429,12 @@ VALIDATOR_REGISTRY: dict[str, Callable[..., dict[str, Any]]] = {
     "file_exists": _validate_file_exists,
     "min_word_count": _validate_min_word_count,
     "ac_self_report": _validate_ac_self_report,
+    "ac_script": _validate_ac_script,
     "sql_guard": _validate_sql_guard,
 }
+
+# Validators that receive the unit row (declared outputs, acceptance criteria).
+_UNIT_AWARE = {"file_exists", "ac_script"}
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +472,7 @@ def validate_output(
     result: dict[str, Any],
     validation_config: dict[str, Any] | None,
     cwd: str,
+    unit: dict[str, Any] | None = None,
 ) -> ValidationResult:
     """Run configured validators against a run result.
 
@@ -223,6 +481,9 @@ def validate_output(
         validation_config: From contract.validation_config JSON. None = skip
             the configured validators (the always-on floor still applies).
         cwd: Working directory for file-based validators.
+        unit: The unit row this run served, for unit-aware validators
+            (declared outputs, acceptance criteria). None keeps every
+            validator in its unit-less fallback behavior.
 
     Returns:
         ValidationResult with per-validator details.
@@ -271,6 +532,8 @@ def validate_output(
                 "message": f"Unknown validator: {name}",
             })
             continue
+        if name in _UNIT_AWARE:
+            params.setdefault("unit", unit)
         detail = fn(result, cwd, **params)
         details.append(detail)
 

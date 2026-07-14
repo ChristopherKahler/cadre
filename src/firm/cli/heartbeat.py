@@ -1,16 +1,15 @@
-"""``firm heartbeat`` — autonomous pulse cadence via systemd user timers.
+"""``firm heartbeat`` — autonomous pulse cadence via the host scheduler.
 
 enable/disable/status for a per-firm timer that fires ``firm pulse`` on an
 interval. The timer is only a metronome: business hours, per-member frequency,
 budget preflight, claimed-unit availability, and the pulse lock still decide
 whether anything spawns — a tick that finds nothing due is a near-free no-op.
 
-Unit files land in ``~/.config/systemd/user/`` as
-``cadre-heartbeat-<firm>.{service,timer}``. Runtime environment (claude
-binary, notify tokens) is captured at enable time from the process env plus
-the workspace ``.env`` — re-run ``enable`` after rotating tokens. Requires a
-systemd user session, the same dependency the dashboard's detached pulse
-(``systemd-run --user``) already carries.
+The mechanism is the platform scheduler behind ``firm.sched`` — systemd user
+timers on Linux/WSL2, launchd LaunchAgents on macOS, Task Scheduler on
+Windows. Runtime environment (claude binary, notify tokens) is captured at
+enable time from the process env plus the workspace ``.env`` — re-run
+``enable`` after rotating tokens.
 """
 
 from __future__ import annotations
@@ -24,6 +23,8 @@ from pathlib import Path
 
 from firm.core.db import connect, get_db_path, resolve_firm_id
 from firm.pulse.spawn import resolve_claude_bin
+from firm.sched import resolve_scheduler
+from firm.sched.base import SchedulerError, interval_to_seconds
 
 _UNIT_PREFIX = "cadre-heartbeat-"
 _INTERVAL_RE = re.compile(r"^\d+(s|m|min|h|d)$")
@@ -40,13 +41,18 @@ def default_unit_dir() -> Path:
     return Path.home() / ".config" / "systemd" / "user"
 
 
+def _sched(unit_dir: Path | None = None):
+    """The platform scheduler; an explicit *unit_dir* pins the systemd
+    backend (the tests' knob, meaningless on other platforms)."""
+    if unit_dir is not None:
+        from firm.sched.systemd import SystemdScheduler
+        return SystemdScheduler(unit_dir=unit_dir)
+    return resolve_scheduler()
+
+
 def validate_interval(interval: str) -> str:
-    """Return *interval* if it is a simple systemd span (30m, 1h, 90s, 2d)."""
-    if not _INTERVAL_RE.match(interval):
-        raise ValueError(
-            f"invalid interval {interval!r} — use <number><unit> with unit "
-            "one of s/m/min/h/d, e.g. 30m or 1h"
-        )
+    """Return *interval* if it is a simple span (30m, 1h, 90s, 2d)."""
+    interval_to_seconds(interval)   # raises ValueError with the usage line
     return interval
 
 
@@ -166,20 +172,22 @@ def run_enable(
         _emit({"ok": False, "reason": f"claude runtime not wired: {detail}"})
         return 1
 
-    unit_dir = unit_dir or default_unit_dir()
-    unit_dir.mkdir(parents=True, exist_ok=True)
+    sched = _sched(unit_dir)
     stem = f"{_UNIT_PREFIX}{firm_id}"
     env = capture_env(workspace, firm_id, claude_bin)
-    (unit_dir / f"{stem}.service").write_text(
-        render_service(workspace, firm_id, sys.executable, env)
-    )
-    (unit_dir / f"{stem}.timer").write_text(render_timer(firm_id, interval))
-
-    for step in (["daemon-reload"], ["enable", "--now", f"{stem}.timer"]):
-        rc, out = _systemctl(*step)
-        if rc != 0:
-            _emit({"ok": False, "reason": f"systemctl {' '.join(step)}: {out}"})
-            return 1
+    try:
+        installed = sched.install_timer(
+            stem,
+            description=f"Cadre heartbeat pulse — firm {firm_id}",
+            workdir=workspace,
+            env=env,
+            argv=[sys.executable, "-m", "firm", "pulse",
+                  "--workspace", str(workspace), "--firm-id", firm_id],
+            interval=interval,
+        )
+    except SchedulerError as exc:
+        _emit({"ok": False, "reason": str(exc)})
+        return 1
 
     # firm.schedule is the single source of truth for cadence (fork 005) —
     # the hub reads it to tell "not operational" from "healthy and idle",
@@ -203,8 +211,9 @@ def run_enable(
         "ok": True,
         "firm_id": firm_id,
         "interval": interval,
-        "timer": f"{stem}.timer",
-        "unit_dir": str(unit_dir),
+        "timer": installed.get("unit", stem),
+        "scheduler": sched.name,
+        "unit_dir": installed.get("unit_dir", ""),
         "claude_bin": claude_bin,
         "env_keys": sorted(env),
     })
@@ -226,28 +235,18 @@ def run_disable(firm_id: str | None = None, *, unit_dir: Path | None = None) -> 
         _emit({"ok": False, "reason": "no firm id — pass --firm-id or run "
                                       "from a firm workspace"})
         return 1
-    unit_dir = unit_dir or default_unit_dir()
+    sched = _sched(unit_dir)
     stem = f"{_UNIT_PREFIX}{firm_id}"
-    if not (unit_dir / f"{stem}.timer").exists():
+    st = sched.status(stem)
+    if not st.get("installed"):
         _emit({"ok": False, "reason": f"no heartbeat installed for firm {firm_id!r}"})
         return 1
 
-    # The workspace path lives in the service file — read it BEFORE the
-    # unlink, so firm.schedule can be nulled after the units are gone.
-    ws_str = _service_workspace(unit_dir / f"{stem}.service") \
-        if (unit_dir / f"{stem}.service").exists() else None
+    # The workspace path lives in the installed unit — read it BEFORE the
+    # removal, so firm.schedule can be nulled after the units are gone.
+    ws_str = st.get("workdir")
 
-    rc, out = _systemctl("disable", "--now", f"{stem}.timer")
-    if rc != 0:
-        _emit({"ok": False, "reason": f"systemctl disable: {out}"})
-        return 1
-    for suffix in (".timer", ".service"):
-        (unit_dir / f"{stem}{suffix}").unlink(missing_ok=True)
-    _systemctl("daemon-reload")
-    # A unit that ever failed stays in systemd's runtime as `not-found
-    # failed` after its file is removed — permanent ghost noise that reads
-    # as a broken firm in every health sweep (fork 005, chief-of-staff).
-    _systemctl("reset-failed", f"{stem}.service", f"{stem}.timer")
+    sched.remove(stem)
 
     schedule_recorded = False
     if ws_str:
@@ -277,36 +276,23 @@ def _service_workspace(service_path: Path) -> str | None:
 
 
 def run_status(*, unit_dir: Path | None = None) -> int:
-    unit_dir = unit_dir or default_unit_dir()
-    timers = sorted(unit_dir.glob(f"{_UNIT_PREFIX}*.timer"))
+    sched = _sched(unit_dir)
     entries = []
-    for timer_path in timers:
-        stem = timer_path.stem
+    for stem in sched.list_installed(_UNIT_PREFIX):
         firm_id = stem[len(_UNIT_PREFIX):]
-        rc, active = _systemctl("is-active", f"{stem}.timer")
-        entry: dict = {"firm_id": firm_id, "timer": f"{stem}.timer", "state": active}
-
-        service_path = unit_dir / f"{stem}.service"
-        workspace = (
-            _service_workspace(service_path) if service_path.exists() else None
-        )
+        st = sched.status(stem)
+        entry: dict = {"firm_id": firm_id, "timer": stem,
+                       "state": st.get("state", "unknown"),
+                       "scheduler": sched.name}
+        workspace = st.get("workdir")
         if workspace:
             entry["workspace"] = workspace
             last_pulse = Path(workspace) / ".firm" / "last-pulse.json"
             if last_pulse.exists():
                 entry["last_pulse"] = int(last_pulse.stat().st_mtime)
-
-        rc, out = _systemctl(
-            "show", f"{stem}.timer",
-            "--property=NextElapseUSecRealtime,LastTriggerUSec",
-        )
-        if rc == 0:
-            for line in out.splitlines():
-                key, _, val = line.partition("=")
-                if key == "NextElapseUSecRealtime" and val:
-                    entry["next_fire"] = val
-                if key == "LastTriggerUSec" and val:
-                    entry["last_fire"] = val
+        for k in ("next_fire", "last_fire"):
+            if st.get(k):
+                entry[k] = st[k]
         entries.append(entry)
 
     _emit({"ok": True, "heartbeats": entries})

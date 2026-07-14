@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from firm.core import repo
-from firm.core.db import connect, get_db_path
+from firm.core.db import connect, get_db_path, resolve_firm_id
 from firm.services.unit import complete_unit
 
 
@@ -46,7 +46,7 @@ def run_unit_complete(
     *,
     run_id: str | None = None,
     dry_run: bool = False,
-    firm_id: str = "chrisai",
+    firm_id: str | None = None,
 ) -> int:
     """Complete *unit_id* in the workspace firm DB.
 
@@ -66,6 +66,11 @@ def run_unit_complete(
 
     conn = connect(db_path)
     try:
+        try:
+            firm_id = resolve_firm_id(conn, firm_id)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
         unit = repo.get(conn, "unit", unit_id)
         if unit is None:
             print(

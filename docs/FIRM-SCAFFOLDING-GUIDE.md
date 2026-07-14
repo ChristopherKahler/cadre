@@ -34,7 +34,7 @@ A firm = a workspace folder + a SQLite entity DB + AI Members spawned as headles
 │   │   ├── 10-squad.md            # (optional) squad protocol, if the squad tool is installed
 │   │   └── _member/<MEM-ID>/*.md  # per-member fragments (e.g. 50-squad-contract.md) — that member only
 │   └── dashboard/views.json       # (optional) custom boardroom views — see ENGINEERING.md §5
-├── scripts/seed_<firm>.py         # idempotent seed — THE definition of the firm (pattern below)
+├── scripts/seed_<firm>.py         # create-or-AMEND seed — THE definition of the firm (firm.seedkit, pattern below)
 ├── reports/                       # convention: members write run reports here
 ├── .gitignore                     # .venv/, .firm/*.db, .firm/*.db-*, __pycache__/, .env
 └── .gitattributes                 # * text=auto eol=lf
@@ -50,7 +50,7 @@ Plus one folder OUTSIDE the workspace, on the Windows side: `/mnt/c/Users/Chris/
 
 ## 2. Primitives — what exists and how it composes
 
-Everything is an entity row in `firm.db` with a `PREFIX-NNN` id minted by `services/_id.next_id` (custom ids like `UNT-DEV-INFRA` are also legal when you create rows in a seed). **Writes go through the service layer only**: members write via the firm MCP, the Board writes via dashboard actions (`perform_action`), seeds use `firm.core.repo.create/update` (column-validated). Records/usage events/comments are immutable.
+Everything is an entity row in `firm.db` with a `PREFIX-NNN` id minted by `services/_id.next_id` (custom ids like `UNT-DEV-INFRA` are also legal when you create rows in a seed). **Writes go through the service layer only**: members write via the firm MCP, the Board writes via dashboard actions (`perform_action`), seeds use `firm.seedkit.ensure` (create-or-amend, column-validated via repo — see §3's seed pattern). Records/usage events/comments are immutable.
 
 ### The hierarchy
 
@@ -67,9 +67,9 @@ Firm ─┬─ Operation (department-scale, has owner_member_id)
 ### Firm row (identity — set ALL of this in the seed)
 
 ```python
-repo.create(conn, "firm", {
+ensure(conn, "firm", {
     "id": "acme", "name": "Acme Lab",
-    "description": "...", "operator": "Chris Kahler",
+    "description": "...", "operator": "Your Name",
     "north_star": "one sentence the whole firm optimizes for",
     "core_values": json.dumps(["...", "..."]),
     "vision": "...",
@@ -83,7 +83,7 @@ repo.create(conn, "firm", {
 ### Contract (the behavior levers — every field matters)
 
 ```python
-repo.create(conn, "contract", {
+ensure(conn, "contract", {
     "id": "CON-ENG", "firm_id": "acme", "name": "Acme Engineer Contract",
     "member_id": None,                          # None = shared by several members; or bind to one member
     "runtime_type": "claude_code",
@@ -105,7 +105,7 @@ repo.create(conn, "contract", {
 ### Member
 
 ```python
-repo.create(conn, "member", {
+ensure(conn, "member", {
     "id": "MEM-NOVA", "firm_id": "acme", "name": "Nova", "role": "Next.js Engineer",
     "description": "2-4 sentences — this IS the member's identity in its prompt; make it specific",
     "reports_to_member_id": "MEM-LEAD",   # None = reports to the Board directly
@@ -121,7 +121,7 @@ A member's composed prompt = **Identity** (name/role/id/reports-to/description) 
 ### Unit (the work atom)
 
 ```python
-repo.create(conn, "unit", {
+ensure(conn, "unit", {
     "id": "UNT-APP", "firm_id": "acme", "project_id": "PRJ-001",
     "name": "imperative, one-run-sized task",
     "description": "scope notes; what this unit is NOT is as valuable as what it is",
@@ -139,7 +139,7 @@ Scope units to ONE member-run each (fits inside `timeout_sec`). Enforce review/s
 ### Goal
 
 ```python
-repo.create(conn, "goal", {
+ensure(conn, "goal", {
     "id": "GL-001", "firm_id": "acme", "level": "operation",
     "parent_entity_type": "operation", "parent_entity_id": "OP-001",
     "metric": json.dumps({"type": "demos_validated", "current": 0}),
@@ -246,23 +246,40 @@ mkdir -p reports scripts /mnt/c/Users/Chris/Claude/Projects/acme-boardroom
 #   is which contract is which role; the merge is mechanical and re-runnable:
 .venv/bin/cadre templates apply discipline --map lead=CON-LEAD --map dev=CON-ENG
 
-# 3. Seed script (scripts/seed_acme.py) — idempotent: guard EVERY create with repo.get
+# 3. Seed script (scripts/seed_acme.py) — create-or-AMEND via firm.seedkit.
+#    The seed is THE definition of the firm, so a re-run must LAND your edits,
+#    not skip them. A bare create-if-absent guard is safe but inert — every
+#    edit to an existing entity is silently swallowed (the 2026-07-12 lesson).
 ```
 
 ```python
-from firm.core import repo
-import json, sqlite3
-conn = sqlite3.connect("/home/<user>/firms/acme/.firm/firm.db"); conn.row_factory = sqlite3.Row
+import json
 
-# firm row: identity + north_star + core_values + notify_config     (§2 schema)
-# contracts: CON-LEAD (900s) + CON-ENG (900s) — model, budgets, validation, loadout ALL set
-# members:   MEM-DIR (lead, reports_to None, can_self_assign=1)
-#            MEM-LEAD (reports_to MEM-DIR) · MEM-ENG-A, MEM-ENG-B (report_to MEM-LEAD)
-# operation OP-001 (owner MEM-LEAD) → project PRJ-001 (due_date NOT NULL — it bites)
-# units:     UNT-BUILD (assignee MEM-ENG-A, depends_on [])
-#            UNT-SHIP  (assignee MEM-ENG-B, depends_on ["UNT-BUILD"], acceptance = evidence requirements)
-# goal GL-001 on OP-001
-conn.commit()
+from firm.seedkit import ensure, merge_pack, seed_session
+
+# seed_session applies migrations and takes a PRE-SEED SNAPSHOT automatically
+# (.firm/snapshots/*.json — commit these; a bad write becomes a git diff).
+with seed_session("/home/<user>/firms/acme") as conn:
+    # firm row: identity + north_star + core_values + notify_config   (§2 schema)
+    ensure(conn, "firm", {...})
+
+    # contracts — name the DEFINITIONAL fields in resync so edits land on re-run.
+    # Runtime state is never resynced (ensure refuses it): status, claimed_by,
+    # assignee_member_id, pulse_config (the Board's live model lever), and
+    # budget_config (Board-tuned limits). Goals are CREATE-ONLY by convention —
+    # metric/target carry live progress and Board tuning. notify_config on the
+    # firm row is create-only too (the manifest flow writes it).
+    ensure(conn, "contract", {...}, resync=(
+        "name", "validation_config", "skill_loadout"))
+    merge_pack(conn, "CON-LEAD", ".firm/templates/discipline/lead.json")
+    #   ^ AFTER the contract: ensure resyncs skill_loadout to the base loadout,
+    #     packs re-append. Contracts print a RESYNC line every run — expected
+    #     churn, not a bug.
+
+    # members / operation / project (due_date NOT NULL — it bites) / goal: same
+    # shape. Units name their definitional fields:
+    ensure(conn, "unit", {...}, resync=(
+        "name", "description", "acceptance_criteria", "depends_on", "priority"))
 ```
 
 ```bash

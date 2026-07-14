@@ -28,6 +28,14 @@ classifiers = [
 # ESC-004/RUN-051, 2026-07-08..10); only chrisai worked, via a manual install.
 dependencies = [
   "mcp>=1.0",
+  # Vault encryption (Fernet). Imported lazily — every non-vault surface
+  # works without it, but installs get it so the vault works out of the box.
+  "cryptography>=42",
+  # Slack rail (firm.rail.slack). Only its builtin SocketModeClient is used —
+  # pure Python, no aiohttp/websocket-client — because a correct stdlib
+  # WebSocket client is ~500 lines of frame protocol slack-sdk already
+  # maintains. Imported lazily inside `cadre slack serve`.
+  "slack-sdk>=3.27",
 ]
 
 [project.optional-dependencies]
@@ -40,13 +48,13 @@ cadre = "firm.__main__:main"
 firm = "firm.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/chriskahler/agent-company-architecture"
+Homepage = "https://github.com/ChristopherKahler/cadre"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-firm = ["migrations/*.sql", "dashboard/*.html", "templates/**/*"]
+firm = ["migrations/*.sql", "dashboard/*.html", "dashboard/next/*.html", "templates/**/*", "rail/*.json", "rail/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -510,3 +510,231 @@ class TestSqlGuard:
         r = validate_output(_mock_result(), cfg, str(ws))
         assert r.passed is False
         assert "error" in r.details[0]["message"].lower()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Validation: file_exists — cleanup is not failure (RUN-007, 2026-07-13)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestFileExistsCleanup:
+    """A member that deletes its own scratch files did its job. Wrench was
+    failed and Ralph-Wiggum retried ($7.76) for deleting _tmp_ files it
+    correctly cleaned up (crows-and-pawns RUN-007, 2026-07-13)."""
+
+    def test_deleted_scratch_passes(self, tmp_path):
+        deliverable = tmp_path / "report.md"
+        deliverable.write_text("findings")
+        scratch = tmp_path / "_tmp_scratch.gd"
+        result = _mock_result(text="done", tool_calls=[
+            {"name": "Write", "input": {"file_path": str(deliverable)}},
+            {"name": "Write", "input": {"file_path": str(scratch)}},
+            {"name": "Bash", "input": {"command": f"rm {scratch}"}},
+        ])
+        config = {"validators": [{"name": "file_exists", "require_written": True}]}
+        out = validate_output(result, config, str(tmp_path))
+        assert out.passed is True
+        assert "cleaned up" in out.details[0]["message"]
+
+    def test_basename_deletion_evidence_counts(self, tmp_path):
+        deliverable = tmp_path / "report.md"
+        deliverable.write_text("findings")
+        scratch = tmp_path / "test_zzscratch.gd"
+        result = _mock_result(text="done", tool_calls=[
+            {"name": "Write", "input": {"file_path": str(deliverable)}},
+            {"name": "Write", "input": {"file_path": str(scratch)}},
+            {"name": "Bash", "input": {"command": "rm test_zzscratch.gd"}},
+        ])
+        config = {"validators": ["file_exists"]}
+        out = validate_output(result, config, str(tmp_path))
+        assert out.passed is True
+
+    def test_missing_without_deletion_evidence_fails(self, tmp_path):
+        ghost = tmp_path / "never_landed.md"
+        result = _mock_result(text="done", tool_calls=[
+            {"name": "Write", "input": {"file_path": str(ghost)}},
+        ])
+        config = {"validators": ["file_exists"]}
+        out = validate_output(result, config, str(tmp_path))
+        assert out.passed is False
+        assert "Missing" in out.details[0]["message"]
+
+    def test_all_written_deleted_fails_when_required(self, tmp_path):
+        scratch = tmp_path / "_tmp_only.md"
+        result = _mock_result(text="done", tool_calls=[
+            {"name": "Write", "input": {"file_path": str(scratch)}},
+            {"name": "Bash", "input": {"command": f"rm {scratch}"}},
+        ])
+        config = {"validators": [{"name": "file_exists", "require_written": True}]}
+        out = validate_output(result, config, str(tmp_path))
+        assert out.passed is False
+        assert "deleted" in out.details[0]["message"]
+
+    def test_unrelated_bash_is_not_deletion_evidence(self, tmp_path):
+        ghost = tmp_path / "gone.md"
+        result = _mock_result(text="done", tool_calls=[
+            {"name": "Write", "input": {"file_path": str(ghost)}},
+            {"name": "Bash", "input": {"command": f"cat {ghost} | head -5"}},
+        ])
+        config = {"validators": ["file_exists"]}
+        out = validate_output(result, config, str(tmp_path))
+        assert out.passed is False
+
+
+class TestFileExistsDeclaredOutputs:
+    """When the unit declares outputs, THOSE are the contract — incidental
+    writes are the member's own business (tapir, 2026-07-13)."""
+
+    def test_declared_deliverable_present_ignores_scratch(self, tmp_path):
+        (tmp_path / "reports").mkdir()
+        (tmp_path / "reports" / "out.md").write_text("real")
+        unit = {"id": "UNT-X", "outputs": json.dumps(["reports/out.md"])}
+        ghost = tmp_path / "scratch.md"
+        result = _mock_result(text="done", tool_calls=[
+            {"name": "Write", "input": {"file_path": str(ghost)}},
+        ])
+        config = {"validators": [{"name": "file_exists", "require_written": True}]}
+        out = validate_output(result, config, str(tmp_path), unit=unit)
+        assert out.passed is True
+        assert "declared" in out.details[0]["message"]
+
+    def test_declared_deliverable_missing_fails(self, tmp_path):
+        unit = {"id": "UNT-X", "outputs": json.dumps(["reports/out.md"])}
+        result = _mock_result(text="done", tool_calls=[])
+        config = {"validators": ["file_exists"]}
+        out = validate_output(result, config, str(tmp_path), unit=unit)
+        assert out.passed is False
+
+    def test_declared_empty_file_fails(self, tmp_path):
+        (tmp_path / "out.md").write_text("")
+        unit = {"id": "UNT-X", "outputs": json.dumps(["out.md"])}
+        result = _mock_result(text="done", tool_calls=[])
+        config = {"validators": ["file_exists"]}
+        out = validate_output(result, config, str(tmp_path), unit=unit)
+        assert out.passed is False
+        assert "empty" in out.details[0]["message"]
+
+    def test_declared_dict_entries_supported(self, tmp_path):
+        (tmp_path / "post.md").write_text("content")
+        unit = {"id": "UNT-X", "outputs": json.dumps([{"path": "post.md"}])}
+        result = _mock_result(text="done", tool_calls=[])
+        config = {"validators": ["file_exists"]}
+        out = validate_output(result, config, str(tmp_path), unit=unit)
+        assert out.passed is True
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Validation: ac_script — ACs are executable law (UNT-TOOLING, 2026-07-13)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestAcScript:
+    """An AC that names a check script is run, exit 0 required. Paired with
+    the artifact floor: a vacuous script must not bless missing artifacts."""
+
+    def _unit(self, criteria, outputs=None):
+        return {
+            "id": "UNT-X",
+            "acceptance_criteria": json.dumps(criteria),
+            "outputs": json.dumps(outputs) if outputs else None,
+        }
+
+    def test_passing_script_passes(self, tmp_path):
+        (tmp_path / "scripts").mkdir()
+        script = tmp_path / "scripts" / "verify.sh"
+        script.write_text("#!/bin/bash\nexit 0\n")
+        unit = self._unit(["when scripts/verify.sh runs, then it exits 0"])
+        out = validate_output(
+            _mock_result(text="done"),
+            {"validators": ["ac_script"]}, str(tmp_path), unit=unit,
+        )
+        assert out.passed is True
+
+    def test_failing_script_fails(self, tmp_path):
+        (tmp_path / "scripts").mkdir()
+        script = tmp_path / "scripts" / "verify.sh"
+        script.write_text("#!/bin/bash\necho 'templates missing' >&2\nexit 3\n")
+        unit = self._unit(["when scripts/verify.sh runs, then it exits 0"])
+        out = validate_output(
+            _mock_result(text="done"),
+            {"validators": ["ac_script"]}, str(tmp_path), unit=unit,
+        )
+        assert out.passed is False
+        assert "exit 3" in out.details[0]["message"]
+
+    def test_referenced_script_missing_fails(self, tmp_path):
+        unit = self._unit(["when scripts/verify.sh runs, then it exits 0"])
+        out = validate_output(
+            _mock_result(text="done"),
+            {"validators": ["ac_script"]}, str(tmp_path), unit=unit,
+        )
+        assert out.passed is False
+        assert "does not exist" in out.details[0]["message"]
+
+    def test_prose_only_acs_pass_with_note(self, tmp_path):
+        unit = self._unit(["The Board is satisfied with the tone"])
+        out = validate_output(
+            _mock_result(text="done"),
+            {"validators": ["ac_script"]}, str(tmp_path), unit=unit,
+        )
+        assert out.passed is True
+        assert "unverified" in out.details[0]["message"]
+
+    def test_no_unit_context_passes(self, tmp_path):
+        out = validate_output(
+            _mock_result(text="done"),
+            {"validators": ["ac_script"]}, str(tmp_path),
+        )
+        assert out.passed is True
+
+    def test_vacuous_script_cannot_bless_empty_artifact(self, tmp_path):
+        """The UNT-TOOLING case: script checks [ -d dir ] on an empty dir and
+        exits 0 — the artifact floor must still fail the unit."""
+        (tmp_path / "scripts").mkdir()
+        script = tmp_path / "scripts" / "verify.sh"
+        script.write_text("#!/bin/bash\n[ -d templates ] && exit 0\nexit 1\n")
+        (tmp_path / "templates").mkdir()  # exists, but EMPTY
+        unit = self._unit(
+            ["when scripts/verify.sh runs, then it exits 0"],
+            outputs=["templates"],
+        )
+        out = validate_output(
+            _mock_result(text="done"),
+            {"validators": ["ac_script"]}, str(tmp_path), unit=unit,
+        )
+        assert out.passed is False
+        assert "empty directory" in out.details[0]["message"]
+
+    def test_path_escaping_workspace_ignored(self, tmp_path):
+        unit = self._unit(["run ../../outside/evil.sh to verify"])
+        out = validate_output(
+            _mock_result(text="done"),
+            {"validators": ["ac_script"]}, str(tmp_path), unit=unit,
+        )
+        assert out.passed is True  # nothing runnable in-workspace → prose note
+
+    def test_zero_work_script_passes_without_declared_outputs(self, tmp_path):
+        """Documented limitation (tapir, 2026-07-13): a check script that
+        exits 0 having verified nothing (gdUnit4 runtest.sh: 'No test cases
+        found, abort test run!' + exit 0) passes ac_script when the unit
+        declares no outputs. The mitigation is declaring outputs — the
+        artifact floor catches what the script's opinion cannot. Fix the
+        script; this test pins the boundary of what ac_script can know."""
+        (tmp_path / "scripts").mkdir()
+        script = tmp_path / "scripts" / "runtest.sh"
+        script.write_text("#!/bin/bash\necho 'No test cases found'\nexit 0\n")
+        unit = self._unit(["when scripts/runtest.sh runs, then it exits 0"])
+        out = validate_output(
+            _mock_result(text="done"),
+            {"validators": ["ac_script"]}, str(tmp_path), unit=unit,
+        )
+        assert out.passed is True  # ac_script cannot know the script ran nothing
+
+        # Same script, but the unit declares its deliverable: floor catches it.
+        unit_with_outputs = self._unit(
+            ["when scripts/runtest.sh runs, then it exits 0"],
+            outputs=["reports/results.xml"],
+        )
+        out = validate_output(
+            _mock_result(text="done"),
+            {"validators": ["ac_script"]}, str(tmp_path), unit=unit_with_outputs,
+        )
+        assert out.passed is False

@@ -425,15 +425,24 @@ class TestPulse:
         assert after["last_activated"] is not None
         assert now.isoformat() in after["last_activated"]
 
-    def test_no_eligible_members_returns_empty(self):
+    def test_zero_active_members_fails_loudly(self):
+        # The old behavior returned an empty summary — {"ok": true, "ran": 0}
+        # — indistinguishable from a healthy idle firm. A scope that resolves
+        # no one must refuse to pretend (state-integrity fork, 2026-07-13).
         conn = _fresh_conn()
         now = datetime(2026, 4, 16, 12, 0, 0, tzinfo=timezone.utc)
         _add_member(conn, "MEM-001", status="paused")
 
-        summary = pulse(conn, "chrisai", _noop_callback, now=now)
+        with pytest.raises(ValueError, match="zero active members"):
+            pulse(conn, "chrisai", _noop_callback, now=now)
 
-        assert len(summary.ran) == 0
-        assert len(summary.errors) == 0
+    def test_unknown_firm_fails_loudly(self):
+        conn = _fresh_conn()
+        now = datetime(2026, 4, 16, 12, 0, 0, tzinfo=timezone.utc)
+        _add_member(conn, "MEM-001")
+
+        with pytest.raises(ValueError, match="does not exist"):
+            pulse(conn, "nosuchfirm", _noop_callback, now=now)
 
 
 # ---------------------------------------------------------------------------

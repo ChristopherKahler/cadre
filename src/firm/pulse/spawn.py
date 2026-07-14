@@ -60,6 +60,26 @@ _CLAUDE_FLAGS: list[str] = [
 ]
 
 
+def full_load(cwd: str | None) -> bool:
+    """Board-chosen trust posture: ``.firm/spawn.json`` → ``{"full": true}``.
+
+    A FULL-LOAD firm spawns members WITHOUT ``--strict-mcp-config`` — they
+    inherit the operator's user-scope/plugin MCP fleet on top of the firm
+    armory. That buys a personal-proxy firm (The Desk) the operator's own
+    reach, and costs exactly what the strict comment above describes: loadout
+    discipline, and a prompt-size tax (slower boot) on every run. Which is
+    why it is per-firm, chosen by the Board at founding (the Manifest step),
+    and the default — no file — is LEAN: the loadout is the law.
+    """
+    if not cwd:
+        return False
+    try:
+        with open(os.path.join(cwd, ".firm", "spawn.json"), encoding="utf-8") as f:
+            return bool(json.load(f).get("full"))
+    except (OSError, ValueError):
+        return False
+
+
 def mcp_config_path(cwd: str | None) -> str | None:
     """Absolute path to the firm workspace's ``.mcp.json``, or None.
 
@@ -155,6 +175,8 @@ def spawn_member_run(
         )
 
     cmd = [claude_bin, *_CLAUDE_FLAGS]
+    if full_load(cwd):
+        cmd.remove("--strict-mcp-config")
     mcp_config = mcp_config_path(cwd)
     if mcp_config:
         cmd += ["--mcp-config", mcp_config]
@@ -163,6 +185,17 @@ def spawn_member_run(
     cmd += ["-p", prompt]
 
     env = dict(os.environ)
+    if cwd:
+        # Firm vault → child env (member run + every MCP server it spawns).
+        # setdefault: an operator's explicit shell export still wins.
+        try:
+            from pathlib import Path
+
+            from firm.secrets.provider import resolve_provider
+            for k, v in resolve_provider().resolve(Path(cwd)).items():
+                env.setdefault(k, v)
+        except Exception:
+            pass   # vault is additive — it must never block a member run
     if member_id:
         env["CADRE_MEMBER_ID"] = member_id
     if firm_id:

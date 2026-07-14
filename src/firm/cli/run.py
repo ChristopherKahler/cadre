@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from firm.core.db import connect, get_db_path
+from firm.core.db import connect, get_db_path, resolve_firm_id
 from firm.hooks.run_record import on_run_end
 
 
@@ -28,7 +28,7 @@ def run_run_end(
     error_json: str | None = None,
     notes: str | None = None,
     dry_run: bool = False,
-    firm_id: str = "chrisai",
+    firm_id: str | None = None,
 ) -> int:
     """Finalize *run_id* in the workspace firm DB.
 
@@ -52,6 +52,12 @@ def run_run_end(
 
     conn = connect(db_path)
     try:
+        try:
+            firm_id = resolve_firm_id(conn, firm_id)
+        except ValueError as exc:
+            print(json.dumps({"ok": False, "reason": "firm-id-unresolved",
+                              "message": str(exc)}))
+            return 0
         if dry_run:
             return _dry_run(conn, run_id=run_id, final_status=final_status,
                             outputs=outputs)

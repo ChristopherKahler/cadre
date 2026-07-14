@@ -38,6 +38,18 @@ def parse_stream(stdout: str) -> dict[str, Any]:
     stop_reason: str | None = None
     init_tools: list[str] | None = None
     mcp_servers: list[dict[str, Any]] | None = None
+    saw_result = False
+    # Per-message usage accumulator — the billing fallback for runs that die
+    # before their terminal result event (timeout, kill). Without it a
+    # timed-out run bills ZERO despite burning real tokens, so every firm's
+    # spend figure understates by exactly its failures (RUN-004, 2026-07-13:
+    # ~20min of tokens, ledger shows nothing).
+    accum_usage: dict[str, int] = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read": 0,
+        "cache_create": 0,
+    }
 
     for raw_line in stdout.split("\n"):
         line = raw_line.strip()
@@ -69,6 +81,16 @@ def parse_stream(stdout: str) -> dict[str, Any]:
             msg = event.get("message", {})
             if not isinstance(msg, dict):
                 continue
+            mu = msg.get("usage")
+            if isinstance(mu, dict):
+                accum_usage["input_tokens"] += mu.get("input_tokens", 0) or 0
+                accum_usage["output_tokens"] += mu.get("output_tokens", 0) or 0
+                accum_usage["cache_read"] += (
+                    mu.get("cache_read_input_tokens", 0) or 0
+                )
+                accum_usage["cache_create"] += (
+                    mu.get("cache_creation_input_tokens", 0) or 0
+                )
             for block in msg.get("content", []):
                 if not isinstance(block, dict):
                     continue
@@ -104,6 +126,7 @@ def parse_stream(stdout: str) -> dict[str, Any]:
 
         # --- result event ---
         elif etype == "result":
+            saw_result = True
             u = event.get("usage", {})
             if isinstance(u, dict):
                 usage["input_tokens"] = u.get("input_tokens", 0)
@@ -125,6 +148,9 @@ def parse_stream(stdout: str) -> dict[str, Any]:
                 is_error = True
             if event.get("subtype") == "error":
                 is_error = True
+
+    if not saw_result and any(accum_usage.values()):
+        usage = accum_usage
 
     return {
         "session_id": session_id,

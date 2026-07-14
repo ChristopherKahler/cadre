@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from firm.core.db import db_connection
+from firm.core.db import db_connection, resolve_firm_id
 from firm.services.escalation import raise_escalation
 
 
@@ -30,7 +30,7 @@ def run_escalation_raise(
     severity: str = "normal",
     target_entity_type: str = "",
     target_entity_id: str = "",
-    firm_id: str,
+    firm_id: str | None = None,
 ) -> int:
     """Raise an escalation in *workspace*'s firm DB. JSON to stdout, errors to
     stderr. Returns 0 on success, 1 on a structured failure."""
@@ -49,7 +49,7 @@ def run_escalation_raise(
 
     try:
         with db_connection(workspace) as conn:
-            result = raise_escalation(conn, firm_id, data)
+            result = raise_escalation(conn, resolve_firm_id(conn, firm_id), data)
     except Exception as exc:  # service raises ValueError/TypeError on bad input
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
         return 1

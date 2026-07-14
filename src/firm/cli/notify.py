@@ -13,7 +13,7 @@ import json
 import sys
 from pathlib import Path
 
-from firm.core.db import connect, get_db_path
+from firm.core.db import connect, get_db_path, resolve_firm_id
 from firm.notify import send_board_dm
 
 
@@ -21,7 +21,7 @@ def run_notify(
     workspace: Path,
     message: str,
     *,
-    firm_id: str = "chrisai",
+    firm_id: str | None = None,
 ) -> int:
     """Send *message* to the Board. Returns 0 if delivered, 1 otherwise."""
     workspace = workspace.expanduser().resolve()
@@ -34,7 +34,11 @@ def run_notify(
 
     conn = connect(db_path)
     try:
+        firm_id = resolve_firm_id(conn, firm_id)
         result = send_board_dm(conn, firm_id, message)
+    except ValueError as exc:
+        print(json.dumps({"ok": False, "reason": str(exc)}), file=sys.stderr)
+        return 1
     finally:
         conn.close()
 

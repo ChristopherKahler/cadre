@@ -277,7 +277,8 @@ Return ONLY a JSON object, no prose, no code fence:
       "cli": ["CLI tool names verbatim from the list, [] if none fit"],
       "knowledge": [{{"path": "an attached folder path, verbatim", "teaches": "one line"}}],
       "deny": [{{"match": "pattern over the tool call — bare string = substring, * ? [ = glob",
-                 "reason": "one line: which NEVER this enforces"}}],
+                 "reason": "one line: which NEVER this enforces",
+                 "tool": "the exact equipped server/CLI this locks (e.g. gws, slack-desk) — the Board reads rules grouped by this"}}],
       "note": "One sentence: how this person works, given what they carry."
     }}
   ],
@@ -391,7 +392,8 @@ def _validate(plan: dict[str, Any], members: list[dict[str, Any]],
             # the loadout is wrong, not a policy.
             "deny": [
                 {"match": str(d["match"]).strip()[:120],
-                 "reason": str(d.get("reason") or "").strip()[:200]}
+                 "reason": str(d.get("reason") or "").strip()[:200],
+                 "tool": str(d.get("tool") or "").strip()[:60]}
                 for d in (m.get("deny") or [])
                 if isinstance(d, dict) and str(d.get("match") or "").strip()
             ][:12],
