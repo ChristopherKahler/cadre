@@ -326,7 +326,7 @@ ALTER TABLE contract ADD COLUMN budget_config TEXT;      -- JSON (migrated from 
   "grace_sec": 30,
   "model": "claude-sonnet-4-6",
   "max_turns": 25,
-  "cwd": "/home/chriskahler/chris-ai-systems",
+  "cwd": "/path/to/your/workspace",
   "instructions_file": ".firm/instructions/MEM-001.md",
   "extra_args": [],
   "env": {}

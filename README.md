@@ -84,6 +84,27 @@ Both `cadre` and `firm` console scripts route to the same CLI. The import packag
 
 ---
 
+## Platforms
+
+Cadre runs on Linux, WSL2, macOS, and Windows. The core — dashboards, hub,
+founding/Train, the Floor, the Armory, pulse — is pure Python (3.11+) over
+SQLite and runs anywhere the `claude` CLI does.
+
+The autonomy layer (heartbeat cadence, rails, detached pulse dispatch) rides
+the host scheduler through `firm.sched`, per OS:
+
+| OS | Scheduler backend | Mechanism |
+|---|---|---|
+| Linux / WSL2 | `systemd` | user timers + services (`~/.config/systemd/user`) |
+| macOS | `launchd` | LaunchAgents plists (`~/Library/LaunchAgents`) |
+| Windows | `winsched` | Task Scheduler + launcher scripts (`~/.cadre/sched`) |
+
+Everything else about `cadre heartbeat enable`, the rails, and `Pulse now`
+is identical across OSes. Every push runs the test suite on all three via CI.
+macOS/Windows scheduler backends are newer than the Linux one — if a timer or
+rail misbehaves there, `cadre doctor` names the failing mechanism; issues
+welcome with its output.
+
 ## Quickstart
 
 ### Bootstrap a demo Firm
