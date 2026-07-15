@@ -403,6 +403,13 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
   color:var(--brand-text-secondary);font-size:12.5px;line-height:1.45}
 .mcheck[hidden]{display:none}  /* honor the hidden attr — openModal toggles it per action; without this the flex display leaks the escalation follow-up checkbox onto gate modals */
 .mcheck input{margin-top:2px;accent-color:var(--brand-primary)}
+.ratepick{display:flex;gap:8px;margin:6px 0 12px}
+.ratebtn{flex:1;padding:12px 0;border:1px solid var(--brand-border);border-radius:10px;background:var(--brand-surface);color:var(--brand-text-secondary);font:600 16px var(--font-mono);cursor:pointer;transition:border-color .12s,color .12s,box-shadow .12s}
+.ratebtn:hover{border-color:var(--brand-border-hover);color:var(--brand-text)}
+.ratebtn.sel{border-color:var(--brand-primary);color:var(--brand-primary);box-shadow:inset 0 0 0 1px var(--brand-primary)}
+.runscore{display:inline-flex;align-items:center;gap:3px;font:600 11px var(--font-mono);color:var(--brand-warning)}
+.ratemini{flex:none;padding:3px 9px;border:1px solid var(--brand-border);border-radius:20px;background:var(--brand-surface);color:var(--brand-text-secondary);font:600 10.5px var(--font-mono);letter-spacing:.04em;cursor:pointer;text-transform:uppercase}
+.ratemini:hover{border-color:var(--brand-primary);color:var(--brand-text)}
 
 /* ---- settings page ---- */
 #settingsTable select{background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:8px;
@@ -1114,6 +1121,17 @@ tr.flash td{animation:rowflash 2.2s ease-out}
           </div>
         </div>
         </div>
+        <div>
+        <div class="seclabel">Run review — <span class="mono" style="font-size:11px">Board-only quality scoring of completed member runs · never shown to members</span></div>
+        <div class="listcard" id="runReviewCard" style="padding:12px 14px">
+          <label class="mcheck" style="margin:0;align-items:center">
+            <input type="checkbox" id="setRunNudge" onchange="setRunNudge(this)">
+            <span>Show a subtle &ldquo;runs awaiting your rating&rdquo; nudge in the nav badge
+              <span style="display:block;color:var(--brand-text-dim);font-size:11px;margin-top:2px">Off by default. Counts completed runs you haven&rsquo;t scored yet — it never pings Slack, and members never see the score.</span>
+            </span>
+          </label>
+        </div>
+        </div>
         </div>
       </div>
 
@@ -1153,6 +1171,19 @@ tr.flash td{animation:rowflash 2.2s ease-out}
     <div class="btn-row">
       <button class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn primary" id="mConfirm"></button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="rateOverlay">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="rateTitle">
+    <h3 id="rateTitle">Rate this run</h3>
+    <div class="msub" id="rateSub"></div>
+    <div class="ratepick" id="ratePick" role="radiogroup" aria-label="Quality score, 1 to 5"></div>
+    <textarea id="rateNote" placeholder="Optional note — why this score (Board-only, never shown to the member)…"></textarea>
+    <div class="btn-row">
+      <button class="btn" onclick="closeRate()">Cancel</button>
+      <button class="btn primary" id="rateConfirm" onclick="submitRate()">Save rating</button>
     </div>
   </div>
 </div>
@@ -1707,7 +1738,7 @@ function renderRunPanel(){
       <div class="lrow">${sdot(r.status === 'completed' ? 'done' : 'failed')}
         <span class="mono" style="font-size:11px;color:var(--brand-text-dim)">${esc(r.id)}</span>
         <span class="grow">${esc(memberName(r.member_id))} · ${esc(r.unit_id || '—')}</span>
-        ${pill(r.status)}<span class="end">${dur(r.duration_sec)}${r.cost_usd != null ? ' · ' + money(r.cost_usd) : ''}</span>
+        ${pill(r.status)} ${runRateCtl(r)} <span class="end">${dur(r.duration_sec)}${r.cost_usd != null ? ' · ' + money(r.cost_usd) : ''}</span>
       </div>`).join('') : '<div class="lrow"><span class="empty">Nothing yet.</span></div>'}</div>`;
 }
 
@@ -1796,15 +1827,19 @@ function renderStats(S){
   const pendingGates = (S.gates || []).filter(g => g.status === 'pending' && !g.dismissed_at).length;
   const openEsc = (S.escalations || []).filter(e => e.status !== 'resolved').length;
   const attn = pendingGates + openEsc;
+  const toRate = (S.run_review && S.run_review.nudge_enabled) ? (S.run_review.unrated_count || 0) : 0;
   const navAttn = document.getElementById('navAttn');
-  navAttn.textContent = attn;
-  navAttn.classList.toggle('hot', attn > 0);
+  navAttn.textContent = attn + toRate;
+  navAttn.classList.toggle('hot', attn > 0);   // ratings bump the count but never glow — subtle by design
+  navAttn.title = toRate
+    ? `${pendingGates} gate${pendingGates === 1 ? '' : 's'} · ${openEsc} escalation${openEsc === 1 ? '' : 's'} · ${toRate} run${toRate === 1 ? '' : 's'} awaiting your rating`
+    : '';
   const spend = (S.cost_by_member || []).reduce((a,c) => a + (c.total_usd || 0), 0);
   const activeMembers = (S.roster || []).filter(m => m.status === 'active').length;
   const runsToday = (S.runs || []).filter(r => { const d = parseTs(r.started_at); return d && (Date.now() - d.getTime()) < 86400e3; }).length;
   const runningNow = (S.runs || []).filter(r => r.status === 'running').length;
   const tiles = [
-    {k:'NEEDS YOU', v:attn, hot:attn > 0, sub:`${pendingGates} gate${pendingGates === 1 ? '' : 's'} · ${openEsc} escalation${openEsc === 1 ? '' : 's'}`, view:'dashboard'},
+    {k:'NEEDS YOU', v:attn, hot:attn > 0, sub:`${pendingGates} gate${pendingGates === 1 ? '' : 's'} · ${openEsc} escalation${openEsc === 1 ? '' : 's'}${toRate ? ' · ' + toRate + ' to rate' : ''}`, view:'dashboard'},
     {k:'IN FLIGHT', v:count(['pending','in_progress','in_review']), sub:`${count(['blocked'])} blocked`, view:'ops'},
     {k:'DONE', v:count(['done']), sub:'units, all time', view:'ops'},
     {k:'RUNS 24H', v:runsToday, sub:runningNow ? `${runningNow} running now` : 'none running now', view:'runs'},
@@ -2689,6 +2724,8 @@ function sheetHtml(m){
     ['Spend', money(st.spend_usd), 'all time'],
     ['$ / deliverable', st.cost_per_deliverable != null ? money(st.cost_per_deliverable) : '—',
       st.deliverables + ' deliverables registered'],
+    ['Quality', st.run_score_avg != null ? st.run_score_avg + ' / 5' : '—',
+      (st.runs_rated || 0) + ' of ' + st.runs_total + ' runs rated by the Board'],
   ];
   const statblock = rows.map(([k, v, title]) =>
     `<div class="stl" title="${esc(title)}"><span class="sk">${esc(k)}</span><span class="dots"></span><span class="sv">${v}</span></div>`
@@ -2810,6 +2847,7 @@ function renderProfile(P){
       <div class="pstat"><div class="k">SPEND</div><div class="v">${money(st.total_cost_usd)}</div></div>
       <div class="pstat"><div class="k">AVG RUN</div><div class="v">${st.avg_duration_sec != null ? dur(st.avg_duration_sec) : '—'}</div></div>
       <div class="pstat"><div class="k">FAILED</div><div class="v">${st.runs_failed}</div></div>
+      <div class="pstat" title="${st.runs_rated || 0} of ${st.runs_total} runs rated by the Board${st.run_score_recent != null ? ' · recent ' + st.run_score_recent + '/5' : ''}"><div class="k">QUALITY</div><div class="v">${st.run_score_avg != null ? st.run_score_avg + '/5' : '—'}</div></div>
       <div class="pstat"><div class="k">ESCALATIONS</div><div class="v">${st.escalations_raised}</div></div>
       <div class="pstat"><div class="k">LAST ACTIVE</div><div class="v" style="font-size:13px">${timeAgo(m.last_activated)}</div></div>
     </div>
@@ -2843,7 +2881,7 @@ function renderProfile(P){
       <div class="lrow"><span class="mono" style="font-size:11px;color:var(--brand-text-dim)">${esc(r.id)}</span>
         <span class="grow">${esc(r.unit_id || '—')}</span>${pill(r.status)}
         <span class="mono" style="font-size:11px">${dur(r.duration_sec)}</span>
-        <span class="end">${timeAgo(r.started_at)}</span></div>`).join('') : '<div class="lrow"><span class="empty">No runs yet.</span></div>'}</div>
+        ${runRateCtl(r)}<span class="end">${timeAgo(r.started_at)}</span></div>`).join('') : '<div class="lrow"><span class="empty">No runs yet.</span></div>'}</div>
     <div class="seclabel">Recent records</div>
     <div class="listcard">${P.records.length ? P.records.map(r => `
       <div class="evt"><span class="t">${timeAgo(r.timestamp)}</span>
@@ -3305,6 +3343,11 @@ async function loadPulseCadence(){
 }
 
 function renderSettings(S){
+  // Keep the run-review toggle in sync — but never clobber it mid-click.
+  const nudge = document.getElementById('setRunNudge');
+  if(nudge && nudge !== document.activeElement){
+    nudge.checked = !!(S.run_review && S.run_review.nudge_enabled);
+  }
   const rows = S.contract_settings || [];
   const el = document.getElementById('settingsTable');
   if(!el) return;
@@ -3336,6 +3379,59 @@ async function setContractModel(contractId, sel){
     toast(out.error || 'Model update failed', true);
   }
   sel.disabled = false;
+}
+
+/* ---- Run review: Board-only run scoring + the toggleable nudge ---- */
+async function setRunNudge(el){
+  const out = await postAction('firm-setting/run_review_nudge', {value: el.checked});
+  if(out.ok){ toast(el.checked ? 'Run-review nudge on' : 'Run-review nudge off'); lastHash = null; poll(); }
+  else { toast(out.error || 'Setting update failed', true); el.checked = !el.checked; }
+}
+let rateCtx = {runId: null, score: null};
+function openRate(runId, suggested, current, memberId){
+  suggested = (suggested == null) ? null : suggested;
+  current = (current == null) ? null : current;
+  rateCtx = {runId, score: current || suggested || null};
+  const who = memberId ? memberName(memberId) : '';
+  const label = current ? `currently ${current}/5` : (suggested ? `suggested ${suggested}/5 — confirm or override` : 'not yet rated');
+  document.getElementById('rateSub').textContent = `${runId}${who ? ' · ' + who : ''} · ${label}`;
+  document.getElementById('rateNote').value = '';
+  document.getElementById('rateConfirm').textContent = current ? 'Update rating' : 'Save rating';
+  renderRatePick();
+  document.getElementById('rateOverlay').classList.add('show');
+}
+function renderRatePick(){
+  document.getElementById('ratePick').innerHTML = [1,2,3,4,5].map(n =>
+    `<button type="button" class="ratebtn${n === rateCtx.score ? ' sel' : ''}" role="radio" aria-checked="${n === rateCtx.score}"
+        onclick="rateCtx.score=${n};renderRatePick()">${n}</button>`).join('');
+}
+function closeRate(){ document.getElementById('rateOverlay').classList.remove('show'); rateCtx = {runId: null, score: null}; }
+async function submitRate(){
+  if(!rateCtx.runId) return;
+  if(!rateCtx.score){ toast('Pick a score, 1–5', true); return; }
+  const btn = document.getElementById('rateConfirm'); btn.disabled = true;
+  const note = document.getElementById('rateNote').value.trim();
+  const out = await postAction('run-score/' + encodeURIComponent(rateCtx.runId), {score: rateCtx.score, notes: note || null});
+  btn.disabled = false;
+  if(out.ok){
+    toast(`Run rated ${rateCtx.score}/5 — every stat recomputes`);
+    closeRate(); lastHash = null; poll();
+    if(currentView === 'floor') loadFloor();
+    if(document.getElementById('drawerWrap').classList.contains('show') && profileCtx) openProfile(profileCtx);
+  } else {
+    toast(out.error || 'Rating failed', true);
+  }
+}
+document.getElementById('rateOverlay').addEventListener('click', e => { if(e.target.id === 'rateOverlay') closeRate(); });
+// Board-facing per-run rate control — a score chip once rated, a Rate button before.
+// Args are ids/numbers only, so the inline handler needs no string escaping.
+function runRateCtl(r){
+  const sug = r.run_score_suggested != null ? r.run_score_suggested : 'null';
+  const cur = r.run_score != null ? r.run_score : 'null';
+  const call = `openRate('${esc(r.id)}', ${sug}, ${cur}, '${esc(r.member_id || '')}')`;
+  return r.run_score != null
+    ? `<span class="runscore" title="Board quality score — never shown to the member">★ ${r.run_score}/5</span> <button class="ratemini" title="Change score" onclick="${call}">re-rate</button>`
+    : `<button class="ratemini" title="Rate this run 1–5 (Board-only)" onclick="${call}">Rate</button>`;
 }
 
 /* ---- system config (platform-aware workspace editor) ---- */
@@ -3712,6 +3808,7 @@ function closeModal(){
 document.getElementById('overlay').addEventListener('click', e => { if(e.target.id === 'overlay') closeModal(); });
 document.addEventListener('keydown', e => {
   if(e.key !== 'Escape') return;
+  if(document.getElementById('rateOverlay').classList.contains('show')){ closeRate(); return; }
   if(document.getElementById('overlay').classList.contains('show')) closeModal();
   if(document.getElementById('docOverlay').classList.contains('show')) closeDoc();
   if(document.getElementById('workOverlay').classList.contains('show')) closeWork();

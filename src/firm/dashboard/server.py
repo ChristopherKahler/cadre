@@ -41,6 +41,7 @@ from firm.services import escalation as escalation_svc
 from firm.services import gate as gate_svc
 from firm.services import goal as goal_svc
 from firm.services import member as member_svc
+from firm.services import run as run_svc
 from firm.services import unit as unit_svc
 from firm.services._records import log_event
 from firm.secrets.vault import VaultError
@@ -659,6 +660,9 @@ def assemble_state(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
         r["duration_sec"] = _run_duration_sec(r)
         r["cost_usd"] = run_costs.get(r["id"])
         r.pop("prompt_snapshot", None)
+        # Board-facing pre-fill for the rate control — a suggestion the
+        # operator confirms or overrides, derived from the run's own signal.
+        r["run_score_suggested"] = run_svc.suggest_score(r)
         if r.get("status") == "running":
             # Mirror reap_stale_runs: past 2x contract timeout + grace the
             # spawning pulse is presumed dead — surface that instead of an
@@ -708,6 +712,15 @@ def assemble_state(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
             "timeout_sec": pc.get("timeout_sec"),
         })
 
+    # The third notification type — a toggleable "runs awaiting your rating"
+    # nudge. Count is derived (completed runs with no score); the toggle lives
+    # in firm.notify_config where the notifier already reads at fire time.
+    unrated_runs = conn.execute(
+        "SELECT COUNT(*) FROM member_run "
+        "WHERE firm_id = ? AND status = 'completed' AND run_score IS NULL",
+        (firm_id,),
+    ).fetchone()[0]
+
     return {
         "generated_at": datetime.now(tz=timezone.utc).isoformat(),
         "firm": firm,
@@ -727,6 +740,10 @@ def assemble_state(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
         "cost_by_member": cost_by_member,
         "budget_periods": budget_periods,
         "notify_configured": bool(firm.get("notify_config")),
+        "run_review": {
+            "nudge_enabled": bool(_json_dict(firm.get("notify_config")).get("run_review_nudge")),
+            "unrated_count": unrated_runs,
+        },
     }
 
 
@@ -803,6 +820,7 @@ def member_profile(
     for r in recent_runs:
         r["duration_sec"] = _run_duration_sec(r)
         r.pop("prompt_snapshot", None)
+        r["run_score_suggested"] = run_svc.suggest_score(r)
 
     records = sorted(
         (r for r in repo.find(conn, "records", firm_id=firm_id)
@@ -863,6 +881,15 @@ def member_profile(
     completed = sum(1 for r in runs if r.get("status") == "completed")
     failed = sum(1 for r in runs if r.get("status") in ("failed", "timed_out"))
 
+    # Board-only run-score aggregate — derived at read time, never stored.
+    # `runs` is sorted newest-first, so scores[:5] is the recent trend window.
+    scores = [r["run_score"] for r in runs if r.get("run_score") is not None]
+    run_score_avg = round(sum(scores) / len(scores), 1) if scores else None
+    recent_scores = scores[:5]
+    run_score_recent = (
+        round(sum(recent_scores) / len(recent_scores), 1) if recent_scores else None
+    )
+
     return {
         "member": member,
         "contract": contract,
@@ -881,6 +908,9 @@ def member_profile(
             "avg_duration_sec": round(sum(durations) / len(durations)) if durations else None,
             "units_done": units_done,
             "escalations_raised": escalations_raised,
+            "run_score_avg": run_score_avg,
+            "runs_rated": len(scores),
+            "run_score_recent": run_score_recent,
         },
         "recent_runs": recent_runs,
         "records": records,
@@ -1028,11 +1058,22 @@ def floor_state(
         for r in conn.execute(
             "SELECT member_id, COUNT(*) AS total, "
             "SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS survived, "
-            "SUM(CASE WHEN status IN ('failed', 'timed_out') THEN 1 ELSE 0 END) AS failed "
+            "SUM(CASE WHEN status IN ('failed', 'timed_out') THEN 1 ELSE 0 END) AS failed, "
+            "AVG(CASE WHEN run_score IS NOT NULL THEN run_score END) AS avg_score, "
+            "SUM(CASE WHEN run_score IS NOT NULL THEN 1 ELSE 0 END) AS rated "
             "FROM member_run WHERE firm_id = ? GROUP BY member_id",
             (firm_id,),
         )
     }
+    # Recent-score window per member (newest first) — the calibration trend the
+    # Ladder fork can weight. Derived at read time; no stored aggregate.
+    recent_scores_by_member: dict[str, list[int]] = {}
+    for row in conn.execute(
+        "SELECT member_id, run_score FROM member_run "
+        "WHERE firm_id = ? AND run_score IS NOT NULL ORDER BY started_at DESC",
+        (firm_id,),
+    ):
+        recent_scores_by_member.setdefault(row["member_id"], []).append(row["run_score"])
     spend_by_member = {
         r["member_id"]: r["usd"]
         for r in conn.execute(
@@ -1093,6 +1134,8 @@ def floor_state(
             "escalations_actioned": escs_actioned,
             "spend_usd": spend,
             "cost_per_deliverable": round(spend / deliverables, 2) if deliverables else None,
+            "run_score_avg": round(rr["avg_score"], 1) if rr.get("avg_score") is not None else None,
+            "runs_rated": rr.get("rated") or 0,
         }
         xp = (_XP_UNIT_SHIPPED * stats["units_shipped"]
               + _XP_GATE_APPROVED * stats["gates_approved"]
@@ -1157,12 +1200,28 @@ def floor_state(
         })
 
     cards.sort(key=lambda c: c["id"])
+
+    # Calibration aggregate — the derived score signal the Calibration Ladder
+    # (separate fork) weights for tier graduation. Exposed here as read-time
+    # derivation only; the tier model is NOT defined in this fork.
+    calibration = {}
+    for m in members:
+        rr = runs_by_member.get(m["id"], {})
+        recent = recent_scores_by_member.get(m["id"], [])[:5]
+        calibration[m["id"]] = {
+            "avg": round(rr["avg_score"], 2) if rr.get("avg_score") is not None else None,
+            "rated": rr.get("rated") or 0,
+            "total": rr.get("total") or 0,
+            "recent_avg": round(sum(recent) / len(recent), 2) if recent else None,
+        }
+
     return {
         "generated_at": datetime.now(tz=timezone.utc).isoformat(),
         "firm": {"id": firm.get("id"), "name": firm.get("name"),
                  "founded_at": firm.get("created_at")},
         "goal_completed": firm_goal_done,
         "members": cards,
+        "calibration": calibration,
     }
 
 
@@ -1313,6 +1372,39 @@ def perform_action(
         if data.get("name") is None or data.get("project_id") is None:
             raise ValueError("name and project_id are required")
         return unit_svc.create_unit(conn, firm_id_of(conn, body), data)
+    if action == "run-score":
+        # Board rates a completed run 1-5 (+ optional note). One path serves
+        # the initial score and every rescore; the score feeds Floor stats and
+        # (later) the Calibration Ladder, and is NEVER shown to the member.
+        # entity_id = run id.
+        return run_svc.score_run(
+            conn, entity_id, body.get("score"), body.get("notes"),
+            actor={"type": "board", "id": None},
+        )
+    if action == "firm-setting":
+        # Board toggles a per-firm boolean setting, persisted in
+        # firm.notify_config (where notify.get_notify_config reads it at fire
+        # time). entity_id = setting key; body.value = new value. Mirrors the
+        # contract-model config-write idiom.
+        allowed = {"run_review_nudge"}
+        if entity_id not in allowed:
+            raise ValueError(f"unknown firm setting {entity_id!r}")
+        setting_firm_id = firm_id_of(conn, body)
+        firm = repo.get(conn, "firm", setting_firm_id)
+        if not firm:
+            raise ValueError(f"unknown firm {setting_firm_id!r}")
+        cfg = _json_dict(firm.get("notify_config"))
+        cfg[entity_id] = bool(body.get("value"))
+        repo.update(conn, "firm", setting_firm_id, {"notify_config": json.dumps(cfg)})
+        log_event(
+            conn,
+            firm_id=setting_firm_id,
+            event_type="firm.setting_updated",
+            actor={"type": "board", "id": None},
+            target_ref={"type": "firm", "id": setting_firm_id},
+            details={entity_id: cfg[entity_id]},
+        )
+        return {"firm_id": setting_firm_id, "key": entity_id, "value": cfg[entity_id]}
     raise ValueError(f"Unknown action {action!r}")
 
 
