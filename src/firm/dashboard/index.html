@@ -703,6 +703,15 @@ tr.flash td{animation:rowflash 2.2s ease-out}
   transition:width 700ms cubic-bezier(.16,1,.3,1)}
 .xpband .xv{font:500 10px var(--font-mono);letter-spacing:.1em;color:var(--brand-text-secondary);flex:none;font-variant-numeric:tabular-nums}
 .xwhy{font:400 9.5px var(--font-mono);letter-spacing:.04em;color:var(--brand-text-dim);margin-top:7px}
+/* Calibration Ladder — the trust/autonomy band, a distinct axis from level/XP.
+   Reuses the xpband skeleton, tinted warning so it never reads as the same bar. */
+.xpband.tierband{margin-top:13px}
+.xpband.tierband .xk{color:var(--brand-warning)}
+.xpband.tierband .xbar > div{background:var(--brand-warning)}
+.floortag.tier{color:var(--brand-warning);border-color:color-mix(in srgb,var(--brand-warning) 38%,transparent)}
+.sovtag{font:600 9px var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--brand-warning)}
+.tierreadout{font-size:12.5px;color:var(--brand-text-secondary);margin-bottom:10px}
+.tierreadout b{color:var(--brand-warning)}
 .sheetlive{display:flex;align-items:center;gap:9px;margin-top:14px;padding:9px 13px;border-radius:9px;
   border:1px solid rgba(var(--brand-primary-rgb),.35);background:rgba(var(--brand-primary-rgb),.06);
   font:600 9.5px var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--brand-primary);
@@ -2291,6 +2300,38 @@ function budgetChip(model){
 }
 
 const XP_WHY = 'XP counts shipped units, approved gates, and actioned escalations — never runs, tokens, or spend.';
+const TIER_WHY = 'Trust tier is earned autonomy — sustained Board scores, not output. It gates which enforced seals may loosen. The member never sees it.';
+
+// The Calibration-Ladder band — a distinct axis from level/XP. Progress is
+// shown against the next tier's rated-run gate (the anti-jump axis); the score
+// floor rides alongside in the hint. A sovereign Board override is flagged.
+function tierBand(m){
+  const tp = m.tier_progress || {};
+  const sov = tp.sovereign || [];
+  const blanket = sov.includes('*');
+  let pct = 100, hint;
+  if(tp.next_tier != null){
+    const haveR = (tp.have && tp.have.rated) || 0;
+    const needR = tp.needs && tp.needs.rated;
+    if(needR){ pct = Math.max(0, Math.min(100, 100 * haveR / needR)); }
+    const bits = [];
+    if(needR) bits.push(`${Math.max(0, needR - haveR)} more rated`);
+    if(tp.needs && tp.needs.avg) bits.push(`avg ≥ ${tp.needs.avg}`);
+    hint = `${bits.length ? bits.join(' · ') + ' → ' : '→ '}T${tp.next_tier} ${esc(tp.next_label || '')}`;
+  } else {
+    hint = 'TOP TIER · full earned trust';
+  }
+  const sovTag = sov.length
+    ? ` · <span class="sovtag" title="Sovereign Board override — ${blanket ? 'every seal loosenable at will' : esc(sov.join(', '))} · bypasses the ladder">⚑ ${blanket ? 'sovereign' : esc(sov.join(', '))}</span>`
+    : '';
+  return `
+    <div class="xpband tierband">
+      <span class="xk">TRUST T${m.tier} · ${esc(m.tier_label || '')}</span>
+      <div class="xbar" role="img" aria-label="tier ${m.tier}, ${pct.toFixed(0)}% toward the next"><div style="width:${pct}%"></div></div>
+      <span class="xv">${hint}</span>
+    </div>
+    <div class="xwhy">${esc(TIER_WHY)}${sovTag}</div>`;
+}
 
 function floorCard(m){
   const st = m.stats;
@@ -2304,6 +2345,7 @@ function floorCard(m){
     <div class="fbadges">
       ${m.lead ? '<span class="floortag lead" title="Others on the roster report to this member">Lead</span>' : ''}
       ${m.status !== 'active' ? `<span class="floortag">${esc(m.status)}</span>` : ''}
+      <span class="floortag tier" title="Trust tier ${m.tier} (${esc(m.tier_label || '')}) — earned autonomy, gates seal loosening. The member never sees it.${(m.tier_progress && (m.tier_progress.sovereign || []).length) ? ' · sovereign override active' : ''}">T${m.tier}${(m.tier_progress && (m.tier_progress.sovereign || []).length) ? ' ⚑' : ''}</span>
       ${budgetChip(m.budget.model)}
     </div>
     <div class="fowns">${esc(m.owns || '')}</div>
@@ -2799,6 +2841,7 @@ function sheetHtml(m){
         <span class="xv">${m.xp}${m.level_next_at != null ? ' / ' + m.level_next_at + ' XP' : ' XP · CAP'}</span>
       </div>
       <div class="xwhy">${esc(XP_WHY)}</div>
+      ${tierBand(m)}
       <div class="sheetlive" id="sheetLive" hidden aria-live="polite">
         <span class="fdot"></span><span>Working</span>
         <span data-run-started=""></span><span>·</span><span class="slunit"></span>
@@ -2959,6 +3002,11 @@ function renderProfile(P){
     <div class="field"><label>Reports to</label><select id="fMgr">${mgrOpts}</select></div>
     <div class="field"><label>Contract</label><select id="fContract">${contractOpts}</select></div>
     <div class="btn-row" style="margin-bottom:26px"><button class="btn primary" onclick="saveMember()">Save changes</button></div>
+    <div class="seclabel">Calibration — trust tier &amp; sovereign override <span class="hint">Board-only · the member never sees this</span></div>
+    <div class="tierreadout">Earned tier: <b>T${P.calibration.tier} · ${esc(P.calibration.tier_label)}</b>${P.calibration.next.needed_tier != null ? ` — next is T${P.calibration.next.needed_tier}${P.calibration.next.needs.rated ? ' (needs ' + P.calibration.next.needs.rated + ' rated' + (P.calibration.next.needs.avg ? ' @ ≥' + P.calibration.next.needs.avg : '') + ')' : (P.calibration.next.needs.avg ? ' (needs avg ≥' + P.calibration.next.needs.avg + ')' : '')}` : ' — top tier, full earned trust'}</div>
+    <div class="field"><label>Sovereign override <span class="hint">comma-separated capabilities (read, write, shell, network…), or * for blanket · empty = none, the ladder gates every loosening</span></label>
+      <input id="fSovereign" value="${esc((P.calibration.sovereign || []).join(', '))}" placeholder="e.g. network, shell — or * for full sovereignty"></div>
+    <div class="btn-row" style="margin-bottom:26px"><button class="btn primary" onclick="saveSovereign()">Save override</button></div>
     <div class="seclabel">Standing instructions file — appended to the identity section of every prompt</div>
     <div class="field"><textarea id="fInstructions" style="min-height:160px;font-family:var(--font-mono);font-size:12px">${esc(P.instructions)}</textarea></div>
     <div class="btn-row"><button class="btn primary" onclick="saveInstructions()">Save instructions</button></div>`;
@@ -3008,6 +3056,16 @@ async function saveInstructions(){
   });
   if(out.ok){ toast('Instructions saved — next run picks them up'); }
   else toast(out.error || 'Save failed', true);
+}
+async function saveSovereign(){
+  if(!profileCtx) return;
+  const raw = document.getElementById('fSovereign').value.trim();
+  const caps = raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : [];
+  const out = await postAction('member-sovereign/' + encodeURIComponent(profileCtx), {capabilities: caps});
+  if(out.ok){
+    toast(caps.length ? 'Sovereign override set — bypasses the ladder' : 'Override cleared — the ladder gates again');
+    lastHash = null; poll(); openProfile(profileCtx);
+  } else toast(out.error || 'Save failed', true);
 }
 
 function renderPipeline(S){

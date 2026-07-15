@@ -30,11 +30,13 @@ from urllib.parse import parse_qs
 from firm.core import repo
 from firm.core.db import connect, db_is_remote, get_db_path, resolve_firm_id
 from firm.core.migrate import apply_migrations
+from firm.dashboard import calibration as calibration_svc
 from firm.pulse.orchestrator import (
     _REAP_GRACE_SEC,
     _contract_timeout_sec,
     compute_load,
 )
+from firm.services import autonomy as autonomy_svc
 from firm.services import comment as comment_svc
 from firm.services import document as document_svc
 from firm.services import escalation as escalation_svc
@@ -890,8 +892,21 @@ def member_profile(
         round(sum(recent_scores) / len(recent_scores), 1) if recent_scores else None
     )
 
+    # Calibration Ladder — the earned trust tier + the sovereign Board override
+    # (the ladder's only authored input). Derived at read time; Board-facing
+    # (the member never sees this — Invariant #5). Powers the Manage-tab control.
+    sovereign = calibration_svc.sovereign_capabilities(conn, firm_id, member_id)
+    tier = calibration_svc.tier_of(conn, firm_id, member_id)
+    calibration = {
+        "tier": tier,
+        "tier_label": calibration_svc.tier_label(tier),
+        "sovereign": sovereign,
+        "next": calibration_svc.next_tier_requirements(conn, firm_id, member_id),
+    }
+
     return {
         "member": member,
+        "calibration": calibration,
         "contract": contract,
         "contracts": repo.find(conn, "contract", firm_id=firm_id),
         "members": [
@@ -1065,15 +1080,6 @@ def floor_state(
             (firm_id,),
         )
     }
-    # Recent-score window per member (newest first) — the calibration trend the
-    # Ladder fork can weight. Derived at read time; no stored aggregate.
-    recent_scores_by_member: dict[str, list[int]] = {}
-    for row in conn.execute(
-        "SELECT member_id, run_score FROM member_run "
-        "WHERE firm_id = ? AND run_score IS NOT NULL ORDER BY started_at DESC",
-        (firm_id,),
-    ):
-        recent_scores_by_member.setdefault(row["member_id"], []).append(row["run_score"])
     spend_by_member = {
         r["member_id"]: r["usd"]
         for r in conn.execute(
@@ -1100,6 +1106,14 @@ def floor_state(
         }
     except Exception:
         tool_details = {}
+
+    # Calibration aggregate — the derived run-score signal, produced in ONE
+    # place (calibration.py) so scoring stays single-source; nothing here
+    # re-reads member_run.run_score. Feeds both the top-level payload and each
+    # card's derived Calibration-Ladder tier (Floor law 2: derived, never
+    # authored). Board-facing only (law 3): tier + override reach no member
+    # surface — see the member-blindness test.
+    calibration = calibration_svc.calibration_aggregate(conn, firm_id)
 
     cards = []
     for m in members:
@@ -1189,6 +1203,15 @@ def floor_state(
             and abs((member_created - firm_founded).total_seconds()) <= 3600
         )
 
+        # Calibration Ladder — the earned trust/autonomy tier, a distinct axis
+        # from level/XP (output). Derived from the run-score aggregate; the only
+        # authored input is the sovereign override. Board-facing (Invariant #5).
+        cal_agg = calibration.get(m["id"]) or {
+            "avg": None, "rated": 0, "total": 0, "recent_avg": None}
+        sovereign = calibration_svc.sovereign_capabilities(conn, firm_id, m["id"])
+        tier = calibration_svc.tier_for_aggregate(cal_agg)
+        tier_progress = calibration_svc.tier_progress_for_aggregate(cal_agg, sovereign)
+
         cards.append({
             "id": m["id"],
             "name": m["name"],
@@ -1210,23 +1233,12 @@ def floor_state(
             "level_floor": _LEVEL_FLOORS[level - 1],
             "level_next_at": next_at,
             "achievements": _floor_achievements(stats, firm_goal_done),
+            "tier": tier,
+            "tier_label": calibration_svc.tier_label(tier),
+            "tier_progress": tier_progress,
         })
 
     cards.sort(key=lambda c: c["id"])
-
-    # Calibration aggregate — the derived score signal the Calibration Ladder
-    # (separate fork) weights for tier graduation. Exposed here as read-time
-    # derivation only; the tier model is NOT defined in this fork.
-    calibration = {}
-    for m in members:
-        rr = runs_by_member.get(m["id"], {})
-        recent = recent_scores_by_member.get(m["id"], [])[:5]
-        calibration[m["id"]] = {
-            "avg": round(rr["avg_score"], 2) if rr.get("avg_score") is not None else None,
-            "rated": rr.get("rated") or 0,
-            "total": rr.get("total") or 0,
-            "recent_avg": round(sum(recent) / len(recent), 2) if recent else None,
-        }
 
     return {
         "generated_at": datetime.now(tz=timezone.utc).isoformat(),
@@ -1393,6 +1405,19 @@ def perform_action(
         return run_svc.score_run(
             conn, entity_id, body.get("score"), body.get("notes"),
             actor={"type": "board", "id": None},
+        )
+    if action == "member-sovereign":
+        # Sovereign Board override for the Calibration Ladder: the Board grants
+        # a Member capabilities DIRECTLY, bypassing the earned tier (the Board
+        # owns the risk). entity_id = member id; body.capabilities = list (or
+        # "*" for blanket); [] clears. The ladder keeps deriving the tier — the
+        # override just stops it from gating. Board-only, never member-read
+        # (Invariant #5). Mirrors the run-score / firm-setting write idiom.
+        caps = body.get("capabilities")
+        if caps is None:
+            caps = body.get("capability")
+        return autonomy_svc.set_sovereign_override(
+            conn, entity_id, caps, actor={"type": "board", "id": None},
         )
     if action == "firm-setting":
         # Board toggles a per-firm boolean setting, persisted in

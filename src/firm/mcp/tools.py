@@ -47,16 +47,38 @@ def _get_conn() -> sqlite3.Connection:
     return connect(get_db_path(Path(cwd)))
 
 
+# Board-only member fields that must never reach the member MCP surface
+# (Invariant #5 — structural blindness). member.autonomy carries the sovereign
+# Calibration-Ladder override: Board config a member must not see, because a
+# member that learns its autonomy grants (or its tier) games them. Stripped at
+# the read chokepoint below so no member-returning tool — present or future —
+# can leak it. No other entity has this column, so the pop is a harmless no-op
+# everywhere else. (run_score needs no strip: it lives on member_run, which no
+# member tool returns.)
+_BOARD_ONLY_FIELDS = ("autonomy",)
+
+
+def _scrub(row: dict) -> dict:
+    """Drop Board-only fields from an outbound MCP dict (Invariant #5)."""
+    for field in _BOARD_ONLY_FIELDS:
+        row.pop(field, None)
+    return row
+
+
+def _serialize(result):
+    """Normalize a service return into JSON-safe, member-blind data."""
+    if isinstance(result, list):
+        return [_scrub(dict(r)) if hasattr(r, "keys") else r for r in result]
+    if hasattr(result, "keys"):
+        return _scrub(dict(result))
+    return result
+
+
 def _safe(fn, *args, **kwargs) -> dict | list:
     """Call fn, return result or {"error": str} on ValueError."""
     conn = _get_conn()
     try:
-        result = fn(conn, *args, **kwargs)
-        if isinstance(result, list):
-            return [dict(r) if hasattr(r, "keys") else r for r in result]
-        if hasattr(result, "keys"):
-            return dict(result)
-        return result
+        return _serialize(fn(conn, *args, **kwargs))
     except (ValueError, TypeError, sqlite3.IntegrityError) as exc:
         return {"error": str(exc)}
     finally:
@@ -73,12 +95,7 @@ def _safe_firm(fn, firm_id: str, *args, **kwargs) -> dict | list:
     conn = _get_conn()
     try:
         fid = resolve_firm_id(conn, firm_id or None)
-        result = fn(conn, fid, *args, **kwargs)
-        if isinstance(result, list):
-            return [dict(r) if hasattr(r, "keys") else r for r in result]
-        if hasattr(result, "keys"):
-            return dict(result)
-        return result
+        return _serialize(fn(conn, fid, *args, **kwargs))
     except (ValueError, TypeError, sqlite3.IntegrityError) as exc:
         return {"error": str(exc)}
     finally:
