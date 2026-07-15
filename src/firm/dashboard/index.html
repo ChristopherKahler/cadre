@@ -733,6 +733,15 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .sockwall{display:grid;grid-template-columns:repeat(5,1fr);gap:20px 24px}
 @media(max-width:880px){.sockwall{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:560px){.sockwall{grid-template-columns:repeat(2,1fr)}}
+.roleload{margin-top:18px;border-top:1px dashed var(--brand-border);padding-top:16px}
+.roleload .rl-head{font:600 10.5px var(--font-mono);letter-spacing:.2em;text-transform:uppercase;color:var(--brand-text-secondary);margin-bottom:14px}
+.roleload .rl-zn{font-weight:400;letter-spacing:.04em;text-transform:none;color:var(--brand-text-dim);margin-left:8px}
+.roleload .rl-sec{margin-bottom:13px}
+.roleload .rl-k{font:600 10px var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--brand-primary);display:block;margin-bottom:5px}
+.roleload .rl-scope{font-size:13px;color:var(--brand-text);margin-bottom:13px}
+.roleload .rl-scope .rl-k{display:inline;margin-right:8px}
+.roleload .rl-list{margin:0;padding-left:18px;color:var(--brand-text-secondary);font-size:12.5px;line-height:1.55}
+.roleload .rl-list li{margin-bottom:3px}
 .sgroup{min-width:0}
 .sglabel{font:500 8.5px var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--brand-text-dim);
   margin-bottom:8px;text-align:center}
@@ -2682,6 +2691,27 @@ function sockwallHtml(m, opts){
   ).join('');
 }
 
+/* Game-role loadout (dnd-table: scope/duties/sanctioned_commands/style/policies).
+   Renders only the dimensions that are present — a tool-socket firm gets '' and
+   sees only its equip sockets; a game-role member sees its real authored config
+   (the same config _render_contract now boots) instead of five empty sockets. */
+function roleLoadoutHtml(m){
+  const rl = m.role_loadout || {};
+  const list = (label, arr) => (arr && arr.length)
+    ? `<div class="rl-sec"><div class="rl-k">${esc(label)}</div><ul class="rl-list">${
+        arr.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '';
+  const body = [
+    rl.scope ? `<div class="rl-scope"><span class="rl-k">Scope</span>${esc(rl.scope)}</div>` : '',
+    list('Sanctioned commands', rl.sanctioned_commands),
+    list('Duties', rl.duties),
+    list('Style contract', rl.style_contract),
+    list('Policies', rl.policies),
+  ].filter(Boolean).join('');
+  if(!body) return '';
+  return `<div class="roleload"><div class="rl-head">Contract loadout
+    <span class="rl-zn">authored config · exactly what this member boots</span></div>${body}</div>`;
+}
+
 function sheetHtml(m){
   // One cascade counter across the contract zone — the 40ms reveal.
   let slot = 0;
@@ -2776,7 +2806,7 @@ function sheetHtml(m){
       </div>
     </div>
     <div class="szone"><div class="zlabel">Loadout <span class="zn">wired at Train · carried on every run · click + to equip</span></div>
-      <div class="sockwall" id="sockwall">${sockwallHtml(m)}</div></div>
+      <div class="sockwall" id="sockwall">${sockwallHtml(m)}</div>${roleLoadoutHtml(m)}</div>
     <div class="szone"><div class="zlabel">Contract <span class="zn">gates need your sign-off · deny rules are enforced</span></div>
       ${oaths}${seals}${dial}</div>
     <div class="zsplit">

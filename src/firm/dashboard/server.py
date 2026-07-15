@@ -1162,6 +1162,18 @@ def floor_state(
                     for c in loadout_raw.get("cli") or []],
             "knowledge": knowledge,
         }
+        # Game-role contracts (dnd-table) author a different loadout shape —
+        # scope / duties / sanctioned_commands / style_contract / policies — that
+        # the five tool sockets can't represent. Surface it so the sheet renders
+        # it as a first-class panel instead of five empty sockets. Board-facing;
+        # it is the same authored config _render_contract now boots (no drift).
+        role_loadout = {
+            "scope": str(loadout_raw.get("scope") or "").strip(),
+            "duties": [str(x) for x in loadout_raw.get("duties") or []],
+            "sanctioned_commands": [str(x) for x in loadout_raw.get("sanctioned_commands") or []],
+            "style_contract": [str(x) for x in loadout_raw.get("style_contract") or []],
+            "policies": [str(x) for x in loadout_raw.get("policies") or []],
+        }
         validation = _json_dict(contract.get("validation_config"))
         seals = [
             {"match": str(d.get("match") or ""), "reason": str(d.get("reason") or ""),
@@ -1189,6 +1201,7 @@ def floor_state(
             "budget": {"model": pulse.get("model"),
                        "timeout_sec": pulse.get("timeout_sec")},
             "loadout": loadout,
+            "role_loadout": role_loadout,
             "oaths": oaths,
             "seals": seals,
             "stats": stats,

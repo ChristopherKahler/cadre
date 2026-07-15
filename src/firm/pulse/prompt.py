@@ -235,10 +235,23 @@ def _render_contract(conn: sqlite3.Connection, member_id: str) -> str | None:
     if not isinstance(loadout, dict):
         loadout = {}
 
+    scope = loadout.get("scope")
+    if isinstance(scope, str) and scope.strip():
+        lines.append(f"- Scope: {scope.strip()}")
+
     stages = loadout.get("stages")
     if isinstance(stages, dict) and stages:
         lines.append("\n### Sanctioned commands — use these, do not improvise tooling")
         lines.extend(f"- {stage}: {cmd}" for stage, cmd in stages.items())
+
+    # Game-role contracts author sanctioned_commands as a flat list (the exact
+    # invocations). Render them so the config -> prompt chain carries every
+    # authored dimension — they used to reach the Member only if a duty happened
+    # to restate them (the loadout-consolidation source-of-truth gap).
+    sanctioned = loadout.get("sanctioned_commands")
+    if isinstance(sanctioned, list) and sanctioned:
+        lines.append("\n### Sanctioned commands — use these exact invocations")
+        lines.extend(f"- {c}" for c in sanctioned)
 
     tools = loadout.get("tools")
     if isinstance(tools, list) and tools:
@@ -249,6 +262,11 @@ def _render_contract(conn: sqlite3.Connection, member_id: str) -> str | None:
     if isinstance(duties, list) and duties:
         lines.append("\n### Duties")
         lines.extend(f"- {d}" for d in duties)
+
+    style = loadout.get("style_contract")
+    if isinstance(style, list) and style:
+        lines.append("\n### Style contract — every deliverable honors these")
+        lines.extend(f"- {s}" for s in style)
 
     policies = loadout.get("policies")
     if isinstance(policies, list) and policies:
