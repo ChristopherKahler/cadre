@@ -86,6 +86,27 @@ def test_equip_cli_presence_checked_like_the_preflight(tmp_path):
                          {"kind": "cli", "name": "ghost-tool"})
 
 
+def test_equip_base_ext_cli_stores_invocation_and_probes_base(tmp_path):
+    """A base extension equips as `base <ext>`: the preflight probes the base
+    binary (first token), and the loadout carries the full invocation string so
+    a Member runs exactly that — never a bare name that isn't on PATH."""
+    conn, ws = _fresh(tmp_path)
+
+    def fake_which(binp):
+        return "/home/x/.local/bin/base" if binp == "base" else None
+
+    with mock.patch("firm.dashboard.server.shutil.which", side_effect=fake_which):
+        out = equip_member(conn, ws, "chrisai", "MEM-001",
+                           {"kind": "cli", "name": "base nano-banana"})
+    assert out["name"] == "base nano-banana"
+    assert _loadout(conn)["cli"] == ["base nano-banana"]
+    # a base ext whose base binary is absent fails loudly, naming what it searched
+    with mock.patch("firm.dashboard.server.shutil.which", return_value=None):
+        with pytest.raises(ValueError, match="base"):
+            equip_member(conn, ws, "chrisai", "MEM-001",
+                         {"kind": "cli", "name": "base ghost-ext"})
+
+
 def test_equip_command_stores_bare_name(tmp_path):
     conn, ws = _fresh(tmp_path)
     equip_member(conn, ws, "chrisai", "MEM-001",

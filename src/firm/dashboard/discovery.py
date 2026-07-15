@@ -428,6 +428,33 @@ _cli_cache: tuple[float, list[dict[str, Any]]] | None = None
 _CLI_CACHE_TTL = 180.0   # verify probes hit real APIs; Equip reloads shouldn't
 
 
+def _base_ext_clis() -> list[dict[str, Any]]:
+    """Base CLI extensions as equippable CLI tools.
+
+    ``base <ext>`` runs headlessly (base is on PATH), so every extension is a
+    Member-usable CLI. base_survey already enumerates them via ``base ext list``;
+    surface them here tagged ``source: 'base-ext'`` and prefixed ``base <name>``
+    so a loadout entry carries the exact invocation string, never a bare name
+    that isn't on PATH. Absent BASE -> empty (host CLIs still stand). The
+    operator can still hide any of these via exclusions.json like any CLI.
+    """
+    survey = base_survey()
+    if not survey.get("present"):
+        return []
+    out: list[dict[str, Any]] = []
+    for ext in survey.get("extensions") or []:
+        name = str(ext.get("name") or "").strip()
+        if not name:
+            continue
+        out.append({
+            "name": f"base {name}", "ext": name, "source": "base-ext",
+            "what": str(ext.get("description") or "").strip() or f"base extension ({name})",
+            "present": True, "path": "", "live": None, "detail": "",
+            "version": str(ext.get("version") or ""),
+        })
+    return out
+
+
 def cli_survey() -> list[dict[str, Any]]:
     """What's actually on PATH — and, for account-connected CLIs, whether the
     account is LIVE right now.
@@ -447,7 +474,7 @@ def cli_survey() -> list[dict[str, Any]]:
         if name in seen:
             continue
         path = shutil.which(name)
-        seen[name] = {"name": name, "what": what,
+        seen[name] = {"name": name, "what": what, "source": "host",
                       "present": path is not None, "path": path or "",
                       "live": None, "detail": "",
                       "_verify": verify if path else None}
@@ -470,6 +497,9 @@ def cli_survey() -> list[dict[str, Any]]:
         e.pop("_verify", None)
 
     result = list(seen.values())
+    # Base extensions are CLI tools too — append them (tagged) so the equip
+    # picker, founding arsenal, and Train all see the operator's real toolkit.
+    result.extend(_base_ext_clis())
     _cli_cache = (time.monotonic(), result)
     return result
 

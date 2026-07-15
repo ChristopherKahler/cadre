@@ -2075,12 +2075,13 @@ def equip_member(
             raise ValueError("name is required")
         if name in [str(x).lstrip("/") for x in loadout[kind]]:
             raise ValueError(f"{name} is already equipped")
-        if kind == "cli" and shutil.which(name) is None:
+        if kind == "cli" and shutil.which(name.split()[0]) is None:
             # Same honesty contract as the pulse preflight (fork 014):
             # presence is the one thing we can assert about an uncataloged
-            # tool — and a failure names what it searched.
+            # tool. Probe the FIRST token so a base extension equipped as
+            # `base <ext>` verifies the `base` binary, not the two-word string.
             raise ValueError(
-                f"`{name}` did not resolve on this process's PATH — "
+                f"`{name.split()[0]}` did not resolve on this process's PATH — "
                 "install it or check the name before equipping")
         if kind == "mcp":
             from firm.dashboard import discovery
