@@ -1916,6 +1916,34 @@ def _venv_python(workspace: Path) -> str:
     return sys.executable
 
 
+def _pulse_path(workspace: Path) -> str:
+    """A full PATH for the dispatched pulse.
+
+    systemd ``--user`` starts with a BARE PATH (no ``~/.local/bin``, no
+    ``.firm/bin``). After a host/WSL restart the detached pulse then can't
+    resolve firm tools and every member skips (ESC-008/009/010/015), with the
+    only unblock being a manual ``systemctl --user import-environment PATH``.
+    Carry a real PATH onto the dispatch so neither the preflight nor the member
+    spawns ever run bare — firm-local dirs first, then the inherited PATH, then a
+    system floor in case the hub's own PATH was thin.
+    """
+    home = Path.home()
+    lead = [str(home / ".local" / "bin"), str(workspace / ".firm" / "bin")]
+    base_bin = shutil.which("base")
+    if base_bin:
+        lead.insert(0, str(Path(base_bin).parent))
+    floor = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin",
+             "/sbin", "/bin"]
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for chunk in lead + [os.environ.get("PATH") or ""] + floor:
+        for seg in chunk.split(os.pathsep):
+            if seg and seg not in seen:
+                seen.add(seg)
+                ordered.append(seg)
+    return os.pathsep.join(ordered)
+
+
 def _fire_pulse(
     workspace: Path, firm_id: str, only: str | None = None,
 ) -> dict[str, Any]:
@@ -1936,6 +1964,10 @@ def _fire_pulse(
     token = _slack_token_from_workspace(workspace)
     if token:
         env["CADRE_SLACK_TOKEN"] = token
+    # systemd --user starts with a bare PATH — carry a full one so the dispatched
+    # pulse (preflight + member spawns) resolves firm tools without a manual
+    # `systemctl --user import-environment PATH` after a host restart.
+    env["PATH"] = _pulse_path(workspace)
 
     pulse_argv = [
         _venv_python(workspace), "-m", "firm", "pulse",

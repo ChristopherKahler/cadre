@@ -111,13 +111,36 @@ def block_blind_members(
     return sighted, blocked
 
 
+def _fix_for(why: str) -> str:
+    """The CORRECT remediation for a dead surface — never a blanket 're-login'.
+
+    A PATH miss and a dead credential need opposite fixes; conflating them
+    (ESC-015: a PATH problem told to 'usually a re-login') sent the operator
+    down the wrong road for days while the tool sat installed in ~/.local/bin.
+    The ``why`` string already encodes the cause; route the fix on it.
+    """
+    w = why.lower()
+    if "not signed in" in w or "identity probe failed" in w:
+        return ("Fix — CREDENTIAL: the tool is installed and on PATH but its "
+                "account is dead. Re-authenticate it (usually a re-login); no "
+                "PATH or install work is needed.")
+    if "did not resolve" in w or "path" in w or "not installed" in w:
+        return ("Fix — ENVIRONMENT, not a credential (this is NOT a login "
+                "problem): the tool did not resolve on the pulse's PATH. Confirm "
+                "it is installed (commonly ~/.local/bin) and reachable on the "
+                "pulse PATH. The pulse dispatch now carries a full PATH, so a "
+                "stale systemd --user env after a host restart is the culprit.")
+    return "Fix: resolve the surface named above, then re-pulse."
+
+
 def raise_escalations(
     conn: sqlite3.Connection, firm_id: str, dead: dict[str, str],
 ) -> None:
     """One deduped escalation per dead surface, raised by the lead.
 
     Deduped on the tool name: a dead credential stays one escalation no
-    matter how many pulses trip over it.
+    matter how many pulses trip over it. The body names the ACCURATE fix for
+    the cause (env/install vs re-login) — see ``_fix_for``.
     """
     from firm.services import escalation as escalation_svc
 
@@ -133,11 +156,12 @@ def raise_escalations(
             "title": f"The firm has gone blind: {tool} is {why}",
             "body": (
                 f"The pulse preflight probed `{tool}` before spawning and it "
-                f"failed: {why}. Every Member whose loadout carries it was "
-                "held back from running — they cannot read their inputs, and "
-                "a run without inputs produces confident, empty output.\n\n"
-                "Fix the credential (usually a re-login), and the next pulse "
-                "clears this on its own. No Member was spawned blind."
+                f"failed: {why}. Every Member whose loadout carries it was held "
+                "back from running — they cannot read their inputs, and a run "
+                "without inputs produces confident, empty output.\n\n"
+                f"{_fix_for(why)}\n\n"
+                "No Member was spawned blind; the next pulse clears this on its "
+                "own once resolved."
             ),
             "dedupe_key": f"preflight:{tool}",
         })
