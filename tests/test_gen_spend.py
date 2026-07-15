@@ -56,3 +56,53 @@ def test_adapter_cost_and_registration() -> None:
     a = gen_adapters.get("x-tts")
     assert a.cost(100) == 0.1
     assert a.display() == "X voice"
+
+
+# ---------------------------------------------------------------------------
+# Run attribution (fork cadre-calibration-run-scoring sibling: gen_spend.run_id)
+# ---------------------------------------------------------------------------
+
+def test_run_id_column_and_explicit_attribution() -> None:
+    c = _conn()
+    cols = {r[1] for r in c.execute("PRAGMA table_info(gen_spend)")}
+    assert "run_id" in cols
+    gen_spend.record(c, "f", platform="nano-banana", units=1,
+                     member_id="MEM-1", run_id="RUN-9", ref="entity:x")
+    h = gen_spend.history(c, "f", "nano-banana")
+    assert h[0]["member_id"] == "MEM-1"
+    assert h[0]["run_id"] == "RUN-9"
+
+
+def test_attribution_falls_back_to_run_env(monkeypatch) -> None:
+    """The framework fix: a tool that logs a generation inside a Member run is
+    attributed from CADRE_MEMBER_ID / CADRE_RUN_ID even when it passes neither —
+    so no firm has to thread the ids through its own scripts."""
+    c = _conn()
+    monkeypatch.setenv("CADRE_MEMBER_ID", "MEM-5")
+    monkeypatch.setenv("CADRE_RUN_ID", "RUN-42")
+    gen_spend.record(c, "f", platform="nano-banana", units=1, ref="entity:y")
+    h = gen_spend.history(c, "f", "nano-banana")
+    assert h[0]["member_id"] == "MEM-5"
+    assert h[0]["run_id"] == "RUN-42"
+
+
+def test_explicit_attribution_wins_over_env(monkeypatch) -> None:
+    c = _conn()
+    monkeypatch.setenv("CADRE_MEMBER_ID", "MEM-env")
+    monkeypatch.setenv("CADRE_RUN_ID", "RUN-env")
+    gen_spend.record(c, "f", platform="nano-banana", units=1,
+                     member_id="MEM-explicit", run_id="RUN-explicit")
+    h = gen_spend.history(c, "f", "nano-banana")
+    assert h[0]["member_id"] == "MEM-explicit"
+    assert h[0]["run_id"] == "RUN-explicit"
+
+
+def test_out_of_run_generation_stays_unattributed(monkeypatch) -> None:
+    """A manual CLI / Board-side call has no run env → NULL is honest, not a gap."""
+    c = _conn()
+    monkeypatch.delenv("CADRE_MEMBER_ID", raising=False)
+    monkeypatch.delenv("CADRE_RUN_ID", raising=False)
+    gen_spend.record(c, "f", platform="nano-banana", units=1)
+    h = gen_spend.history(c, "f", "nano-banana")
+    assert h[0]["member_id"] is None
+    assert h[0]["run_id"] is None

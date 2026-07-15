@@ -484,7 +484,7 @@ def _execute_run(
     member_id = member["id"]
 
     # 5. Invoke via Contract interface
-    result = runtime.invoke(conn, contract or {}, member, unit, cwd=cwd)
+    result = runtime.invoke(conn, contract or {}, member, unit, cwd=cwd, run_id=run_id)
 
     # 6. Store prompt snapshot
     repo.update(conn, "member_run", run_id, {

@@ -146,6 +146,7 @@ def spawn_member_run(
     model: str | None = None,
     member_id: str | None = None,
     firm_id: str | None = None,
+    run_id: str | None = None,
 ) -> SpawnResult:
     """Spawn a ``claude --print`` process and capture output on completion.
 
@@ -160,6 +161,8 @@ def spawn_member_run(
             tools the Member shells out to (e.g. squad) resolve the acting
             member deterministically instead of trusting a claimed name.
         firm_id: Exported as ``FIRM_ID`` alongside it.
+        run_id: Exported as ``CADRE_RUN_ID`` so those tools attribute their
+            spend/output to THIS run (gen_spend.record reads it as a fallback).
 
     Returns:
         SpawnResult with captured stdout/stderr and process metadata.
@@ -200,6 +203,10 @@ def spawn_member_run(
         env["CADRE_MEMBER_ID"] = member_id
     if firm_id:
         env["FIRM_ID"] = firm_id
+    if run_id:
+        # Tools the Member shells out to (gen_spend loggers, squad) attribute
+        # their work to THIS run without threading the id through every call.
+        env["CADRE_RUN_ID"] = run_id
 
     try:
         proc = subprocess.Popen(

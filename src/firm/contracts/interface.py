@@ -75,6 +75,7 @@ class ContractRuntime(Protocol):
         unit: dict[str, Any],
         *,
         cwd: str,
+        run_id: str | None = None,
     ) -> InvokeResult:
         """Start execution of a Member on a Unit.
 
@@ -84,6 +85,10 @@ class ContractRuntime(Protocol):
             member: The Member row dict.
             unit: The Unit row dict.
             cwd: Working directory for the execution environment.
+            run_id: The member_run id for this invocation. Runtimes should make
+                it available to the execution environment (e.g. exported as
+                ``CADRE_RUN_ID``) so tools the Member shells out to can attribute
+                their spend/output to the run without threading the id.
 
         Returns:
             InvokeResult with process output and metadata.

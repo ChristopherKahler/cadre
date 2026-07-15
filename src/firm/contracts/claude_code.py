@@ -26,6 +26,7 @@ class ClaudeCodeRuntime:
         unit: dict[str, Any],
         *,
         cwd: str,
+        run_id: str | None = None,
     ) -> InvokeResult:
         firm_id = member["firm_id"]
         member_id = member["id"]
@@ -39,11 +40,12 @@ class ClaudeCodeRuntime:
         prompt = assemble_prompt(conn, firm_id, member_id, unit_id, cwd=cwd)
         spawn_result = spawn_member_run(
             prompt, timeout_sec=timeout, cwd=cwd, model=model,
-            member_id=member_id, firm_id=firm_id,
+            member_id=member_id, firm_id=firm_id, run_id=run_id,
         )
 
         return InvokeResult(
             handle=RunHandle(
+                run_id=run_id,
                 pid=spawn_result.pid,
                 metadata={"timeout_sec": timeout, "model": model},
             ),

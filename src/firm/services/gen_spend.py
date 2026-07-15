@@ -11,6 +11,7 @@ Works over sqlite and the libsql compat shim (Turso firms) — plain
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -31,11 +32,21 @@ def record(
     member_id: str | None = None,
     ref: str | None = None,
     meta: dict[str, Any] | None = None,
+    run_id: str | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
     """Append one generation to the ledger. `units` is raw (chars/images/…);
     the adapter derives kind, unit_label, and cost. Unknown platforms still
-    log (cost 0, kind 'unknown') so nothing is silently dropped."""
+    log (cost 0, kind 'unknown') so nothing is silently dropped.
+
+    Attribution is framework-level, not caller-dependent: an explicit
+    `member_id` / `run_id` wins, but when omitted they fall back to the acting
+    run's environment (`CADRE_MEMBER_ID` / `CADRE_RUN_ID`, which the pulse spawn
+    exports). So a generation produced inside a Member run is attributed even
+    when the tool that logged it never threaded the ids — no per-firm patch. A
+    call made outside any run legitimately records NULL (honest, not a gap)."""
+    member_id = member_id or os.environ.get("CADRE_MEMBER_ID") or None
+    run_id = run_id or os.environ.get("CADRE_RUN_ID") or None
     a = gen_adapters.get(platform)
     kind = a.kind if a else "unknown"
     unit_label = a.unit_label if a else None
@@ -43,11 +54,12 @@ def record(
     conn.execute(
         "INSERT INTO gen_spend "
         "(firm_id, platform, kind, units, unit_label, cost_usd, asset_path, "
-        " member_id, ref, meta, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " member_id, ref, meta, run_id, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (firm_id, platform, kind, float(units), unit_label, cost, asset_path,
-         member_id, ref, json.dumps(meta) if meta else None, now or _now()))
-    return {"platform": platform, "kind": kind, "units": units, "cost_usd": cost}
+         member_id, ref, json.dumps(meta) if meta else None, run_id, now or _now()))
+    return {"platform": platform, "kind": kind, "units": units, "cost_usd": cost,
+            "member_id": member_id, "run_id": run_id}
 
 
 _SUMMARY_COLS = ["platform", "kind", "unit_label", "events", "units",
@@ -79,14 +91,14 @@ def summary(conn: Any, firm_id: str, *, since: str | None = None,
 
 
 _HISTORY_COLS = ["id", "kind", "units", "unit_label", "cost_usd",
-                 "asset_path", "member_id", "ref", "created_at"]
+                 "asset_path", "member_id", "run_id", "ref", "created_at"]
 
 
 def history(conn: Any, firm_id: str, platform: str, *, limit: int = 200) -> list[dict[str, Any]]:
-    """Per-platform event log for the drill-down (roster attribution + the
-    actual asset paths → the operator's library)."""
+    """Per-platform event log for the drill-down (roster + run attribution +
+    the actual asset paths → the operator's library)."""
     rows = conn.execute(
         "SELECT id, kind, units, unit_label, cost_usd, asset_path, member_id, "
-        "ref, created_at FROM gen_spend WHERE firm_id = ? AND platform = ? "
+        "run_id, ref, created_at FROM gen_spend WHERE firm_id = ? AND platform = ? "
         "ORDER BY id DESC LIMIT ?", (firm_id, platform, int(limit))).fetchall()
     return [dict(zip(_HISTORY_COLS, tuple(r))) for r in rows]

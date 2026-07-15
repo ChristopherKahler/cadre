@@ -317,11 +317,12 @@ class TestSpawnCommand:
                 "firm.pulse.spawn.subprocess.Popen", return_value=mock_proc,
             ) as mock_popen,
         ):
-            spawn_member_run("p", member_id="MEM-007", firm_id="lab")
+            spawn_member_run("p", member_id="MEM-007", firm_id="lab", run_id="RUN-3")
 
         env = mock_popen.call_args.kwargs["env"]
         assert env["CADRE_MEMBER_ID"] == "MEM-007"
         assert env["FIRM_ID"] == "lab"
+        assert env["CADRE_RUN_ID"] == "RUN-3"
 
     def test_default_cwd_is_none(self):
         mock_proc = mock.MagicMock()

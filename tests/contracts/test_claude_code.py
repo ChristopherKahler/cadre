@@ -108,7 +108,7 @@ class TestInvoke:
         )
         mock_spawn.assert_called_once_with(
             "assembled prompt", timeout_sec=120, cwd="/tmp", model=None,
-            member_id="MEM-001", firm_id="chrisai",
+            member_id="MEM-001", firm_id="chrisai", run_id=None,
         )
 
         assert isinstance(result, InvokeResult)
