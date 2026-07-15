@@ -44,6 +44,7 @@ from firm.services import gate as gate_svc
 from firm.services import goal as goal_svc
 from firm.services import member as member_svc
 from firm.services import run as run_svc
+from firm.services import tagging as tagging_svc
 from firm.services import unit as unit_svc
 from firm.services._records import log_event
 from firm.secrets.vault import VaultError
@@ -746,6 +747,10 @@ def assemble_state(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
             "nudge_enabled": bool(_json_dict(firm.get("notify_config")).get("run_review_nudge")),
             "unrated_count": unrated_runs,
         },
+        # Businesses already tagged on this firm's entities — the filter/chip
+        # suggestion set (self-populating; escalation/gate/unit rows carry their
+        # own `business` via repo.find already).
+        "businesses": tagging_svc.firm_businesses(conn, firm_id),
     }
 
 
@@ -1443,6 +1448,15 @@ def perform_action(
             details={entity_id: cfg[entity_id]},
         )
         return {"firm_id": setting_firm_id, "key": entity_id, "value": cfg[entity_id]}
+    if action == "entity-business":
+        # Board tags a firm entity with the business it belongs to (mixed-business
+        # firms — the ESC-012 gap). entity_id = the entity id; body carries the
+        # entity_type (escalation|gate|unit) and the business tag.
+        return tagging_svc.set_business(
+            conn, str(body.get("entity_type") or ""), entity_id,
+            str(body.get("business") or ""),
+            actor={"type": "board", "id": None},
+        )
     raise ValueError(f"Unknown action {action!r}")
 
 
