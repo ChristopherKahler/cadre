@@ -1923,12 +1923,19 @@ def _firm_get(
 
 
 def _slack_token_from_workspace(workspace: Path) -> str | None:
-    """Best-effort CADRE_SLACK_TOKEN — the vault is the home for it now;
-    the .mcp.json regex remains as the legacy fallback for firms that
-    predate the vault and still carry the token inline."""
+    """Best-effort Slack bot token for Board notifications — the vault is the
+    home for it now; the .mcp.json regex remains as the legacy fallback for
+    firms that predate the vault and still carry the token inline.
+
+    The vault's canonical key is ``CADRE_SLACK_BOT_TOKEN`` (the ``xoxb`` bot
+    token ``chat.postMessage`` needs); ``CADRE_SLACK_TOKEN`` is the legacy
+    inline name. Resolving only the legacy key left chief-of-staff's Board
+    notify pipe dark across 20 escalations — the token was in the vault the
+    whole time, under the name this never looked for. Try both."""
     try:
         from firm.secrets.provider import resolve_provider
-        token = resolve_provider().resolve(workspace).get("CADRE_SLACK_TOKEN")
+        env = resolve_provider().resolve(workspace)
+        token = env.get("CADRE_SLACK_BOT_TOKEN") or env.get("CADRE_SLACK_TOKEN")
         if token:
             return token
     except Exception:
@@ -1937,7 +1944,7 @@ def _slack_token_from_workspace(workspace: Path) -> str | None:
     if not mcp.exists():
         return None
     m = re.search(
-        r"CADRE_SLACK_TOKEN=([^\s\"']+)",
+        r"CADRE_SLACK_(?:BOT_)?TOKEN=([^\s\"']+)",
         mcp.read_text(encoding="utf-8", errors="replace"),
     )
     return m.group(1) if m else None

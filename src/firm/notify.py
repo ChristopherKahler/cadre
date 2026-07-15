@@ -106,7 +106,9 @@ def send_board_dm(
             user_id = cfg.get("slack_user_id")
             if not user_id:
                 return {"sent": False, "reason": "notify_config.slack_user_id missing"}
-            token_env = cfg.get("token_env", DEFAULT_TOKEN_ENV)
+            # `token_env` is the documented key; firms seeded with `slack_token_env`
+            # (chief-of-staff among them) had their override silently ignored — accept both.
+            token_env = cfg.get("token_env") or cfg.get("slack_token_env") or DEFAULT_TOKEN_ENV
             token = os.environ.get(token_env)
             if not token:
                 return {"sent": False, "reason": f"token env {token_env} unset in this process"}

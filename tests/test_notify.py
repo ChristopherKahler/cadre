@@ -77,6 +77,27 @@ def test_slack_api_error_soft_fails(mock_open, monkeypatch):
 
 
 @mock.patch("firm.notify.urllib.request.urlopen")
+def test_slack_honors_slack_token_env_config_key(mock_open, monkeypatch):
+    # Firms seeded with `slack_token_env` (not the documented `token_env`) had
+    # their override silently dropped — chief-of-staff's Board pipe stayed dark
+    # across 20 escalations because the token lived in the vault under
+    # CADRE_SLACK_BOT_TOKEN and nothing pointed there. Both keys resolve now.
+    monkeypatch.delenv("CADRE_SLACK_TOKEN", raising=False)
+    monkeypatch.setenv("CADRE_SLACK_BOT_TOKEN", "xoxb-bot")
+    mock_open.return_value = _FakeResponse(json.dumps({"ok": True}).encode())
+    conn = _conn_with_firm(
+        {"provider": "slack", "slack_user_id": "U9",
+         "slack_token_env": "CADRE_SLACK_BOT_TOKEN"}
+    )
+
+    result = send_board_dm(conn, "chrisai", "hi board")
+
+    assert result["sent"] is True
+    req = mock_open.call_args.args[0]
+    assert req.get_header("Authorization") == "Bearer xoxb-bot"
+
+
+@mock.patch("firm.notify.urllib.request.urlopen")
 def test_webhook_provider(mock_open, monkeypatch):
     monkeypatch.setenv("CADRE_NOTIFY_WEBHOOK", "https://hooks.slack.com/services/T/B/x")
     mock_open.return_value = _FakeResponse(b"ok")
