@@ -783,17 +783,24 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .mgrid{display:grid;grid-template-columns:1fr 1fr;gap:2px 28px}
 .mgrid .field.wide{grid-column:1 / -1}
 @media(max-width:720px){.mgrid{grid-template-columns:1fr}}
+/* Sections wrap as panels; values sit in quiet inset wells — no rules, no
+   underlines. The only line on this tab is the panel edge itself. */
+.mpanel{border:1px solid var(--brand-border);border-radius:12px;padding:16px 18px 6px;
+  margin-bottom:14px;background:color-mix(in srgb, var(--brand-surface) 55%, transparent)}
+.mp-head{display:flex;align-items:baseline;gap:10px;margin-bottom:13px;
+  font:600 10px var(--font-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--brand-text-secondary)}
+.mp-head .zn{font-weight:400;font-size:9px;letter-spacing:.04em;color:var(--brand-text-dim);text-transform:none}
 .stab-sec .field{margin-bottom:14px}
 .stab-sec .field label{font:600 9.5px var(--font-mono);letter-spacing:.18em;color:var(--brand-text-dim)}
 .stab-sec .field input,.stab-sec .field select,.stab-sec .field textarea{
-  background:transparent;border:0;border-bottom:1px solid var(--brand-border);border-radius:0;
-  padding:7px 2px;font:500 13.5px var(--font-body);color:var(--brand-text)}
-.stab-sec .field select{appearance:none;-webkit-appearance:none;padding-right:22px;cursor:pointer;
+  width:100%;background:var(--brand-elevated);border:1px solid transparent;border-radius:9px;
+  padding:8px 12px;font:500 13.5px var(--font-body);color:var(--brand-text)}
+.stab-sec .field select{appearance:none;-webkit-appearance:none;padding-right:26px;cursor:pointer;
   background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" fill="none" stroke="%23808a84" stroke-width="1.5" stroke-linecap="round"/></svg>');
-  background-repeat:no-repeat;background-position:right 4px center}
+  background-repeat:no-repeat;background-position:right 10px center}
 .stab-sec .field input:focus,.stab-sec .field select:focus,.stab-sec .field textarea:focus{
-  outline:none;border-bottom-color:var(--brand-primary);
-  box-shadow:0 8px 16px -10px rgba(var(--brand-primary-rgb),.45)}
+  outline:none;border-color:rgba(var(--brand-primary-rgb),.55);
+  box-shadow:0 0 0 3px rgba(var(--brand-primary-rgb),.10)}
 .stab-sec .field textarea{min-height:60px;resize:vertical}
 .stab-sec .field textarea.script{min-height:210px;font:400 12px/1.6 var(--font-mono);
   background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:10px;padding:14px 16px}
@@ -3113,28 +3120,32 @@ function profManageHtml(P){
     ? `Next: T${nx.needed_tier}${needs.rated ? ` — ${needs.rated} rated run${needs.rated === 1 ? '' : 's'}${needs.avg ? ` at ≥${needs.avg}` : ''}` : (needs.avg ? ` — average ≥${needs.avg}` : '')}.`
     : 'Top tier — full earned trust.';
   return `
-    <div class="seclabel">Designation</div>
-    <div class="mgrid">
-      <div class="field"><label>Role</label><input id="fRole" value="${esc(m.role || '')}"></div>
-      <div class="field"><label>Status</label><select id="fStatus">
-        ${['active','paused','offboarded'].map(x => `<option ${x === m.status ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
-      <div class="field"><label>Reports to</label><select id="fMgr">${mgrOpts}</select></div>
-      <div class="field"><label>Contract</label><select id="fContract">${contractOpts}</select></div>
-      <div class="field wide"><label>Description</label><textarea id="fDesc">${esc(m.description || '')}</textarea></div>
+    <div class="mpanel">
+      <div class="mp-head">Designation</div>
+      <div class="mgrid">
+        <div class="field"><label>Role</label><input id="fRole" value="${esc(m.role || '')}"></div>
+        <div class="field"><label>Status</label><select id="fStatus">
+          ${['active','paused','offboarded'].map(x => `<option ${x === m.status ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+        <div class="field"><label>Reports to</label><select id="fMgr">${mgrOpts}</select></div>
+        <div class="field"><label>Contract</label><select id="fContract">${contractOpts}</select></div>
+        <div class="field wide"><label>Description</label><textarea id="fDesc">${esc(m.description || '')}</textarea></div>
+      </div>
     </div>
-    <div class="zfoot"><button class="btn primary sm" onclick="saveMember()">Save changes</button></div>
-    <div class="seclabel">Calibration <span class="zn" style="text-transform:none;letter-spacing:.02em">Board-only · the member never sees it</span></div>
-    <div class="tiertrack" role="img" aria-label="trust tier ${cal.tier} of 4">
-      ${[0,1,2,3,4].map(t => `<span class="tseg${t <= cal.tier ? ' lit' : ''}${t === cal.tier ? ' cur' : ''}" title="T${t}"></span>`).join('')}
-      <span class="tlabel">T${cal.tier} · ${esc(cal.tier_label)}</span>
+    <div class="mpanel">
+      <div class="mp-head">Calibration <span class="zn">Board-only · the member never sees it</span></div>
+      <div class="tiertrack" role="img" aria-label="trust tier ${cal.tier} of 4">
+        ${[0,1,2,3,4].map(t => `<span class="tseg${t <= cal.tier ? ' lit' : ''}${t === cal.tier ? ' cur' : ''}" title="T${t}"></span>`).join('')}
+        <span class="tlabel">T${cal.tier} · ${esc(cal.tier_label)}</span>
+      </div>
+      <div class="thint">${esc(nextHint)} Earned autonomy gates which enforced seals may loosen.</div>
+      <div class="field"><label>Sovereign override — capabilities, or * for blanket</label>
+        <input id="fSovereign" value="${esc((cal.sovereign || []).join(', '))}" placeholder="e.g. network, shell — empty means the ladder gates every loosening"></div>
     </div>
-    <div class="thint">${esc(nextHint)} Earned autonomy gates which enforced seals may loosen.</div>
-    <div class="field"><label>Sovereign override — capabilities, or * for blanket</label>
-      <input id="fSovereign" value="${esc((cal.sovereign || []).join(', '))}" placeholder="e.g. network, shell — empty means the ladder gates every loosening"></div>
-    <div class="zfoot"><button class="btn primary sm" onclick="saveSovereign()">Save override</button></div>
-    <div class="seclabel">Standing instructions <span class="zn" style="text-transform:none;letter-spacing:.02em">appended to every prompt</span></div>
-    <div class="field"><textarea id="fInstructions" class="script">${esc(P.instructions)}</textarea></div>
-    <div class="zfoot" style="margin-bottom:6px"><button class="btn primary sm" onclick="saveInstructions()">Save instructions</button></div>`;
+    <div class="mpanel">
+      <div class="mp-head">Standing instructions <span class="zn">appended to every prompt</span></div>
+      <div class="field"><textarea id="fInstructions" class="script">${esc(P.instructions)}</textarea></div>
+    </div>
+    <div class="zfoot" style="margin-bottom:6px"><button class="btn primary" onclick="saveManage(this)">Save changes</button></div>`;
 }
 
 async function postCommission(){
@@ -3191,6 +3202,33 @@ async function saveSovereign(){
     toast(caps.length ? 'Sovereign override set — bypasses the ladder' : 'Override cleared — the ladder gates again');
     lastHash = null; poll(); floorFetchedAt = 0; loadFloor(); refreshSheetProfile();
   } else toast(out.error || 'Save failed', true);
+}
+
+/* One save for the whole Manage tab — designation, calibration override,
+   and standing instructions land together, one toast, one refresh. */
+async function saveManage(btn){
+  if(!profileCtx) return;
+  if(btn) btn.disabled = true;
+  const raw = document.getElementById('fSovereign').value.trim();
+  const caps = raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : [];
+  const outs = [
+    await postAction('member-update/' + encodeURIComponent(profileCtx), {
+      role: document.getElementById('fRole').value.trim(),
+      description: document.getElementById('fDesc').value.trim(),
+      status: document.getElementById('fStatus').value,
+      reports_to_member_id: document.getElementById('fMgr').value || null,
+      contract_id: document.getElementById('fContract').value || null,
+    }),
+    await postAction('member-sovereign/' + encodeURIComponent(profileCtx), {capabilities: caps}),
+    await postAction('member-instructions/' + encodeURIComponent(profileCtx), {
+      content: document.getElementById('fInstructions').value,
+    }),
+  ];
+  if(btn) btn.disabled = false;
+  const bad = outs.find(o => !o.ok);
+  if(bad){ toast(bad.error || 'Save failed', true); return; }
+  toast('Member updated — next run picks it up');
+  lastHash = null; poll(); floorFetchedAt = 0; loadFloor(); refreshSheetProfile();
 }
 
 function renderPipeline(S){
