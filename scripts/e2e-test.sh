@@ -186,10 +186,10 @@ step "8. MCP server surface (import + tool count)"
 python3 <<PY
 from firm.mcp.tools import mcp
 count = len(mcp._tool_manager._tools)
-assert count == 33, f'expected 33 MCP tools, got {count}'
-print(f'  33 MCP tools registered')
+assert count == 37, f'expected 37 MCP tools, got {count}'
+print(f'  37 MCP tools registered')
 PY
-pass "MCP surface intact (33 tools)"
+pass "MCP surface intact (37 tools)"
 
 # ---------------------------------------------------------------------------
 # Done
