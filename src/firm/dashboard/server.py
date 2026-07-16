@@ -45,6 +45,7 @@ from firm.services import escalation as escalation_svc
 from firm.services import gate as gate_svc
 from firm.services import goal as goal_svc
 from firm.services import member as member_svc
+from firm.services import posture as posture_svc
 from firm.services import run as run_svc
 from firm.services import tagging as tagging_svc
 from firm.services import unit as unit_svc
@@ -592,8 +593,18 @@ def _load_firm_env(workspace: Path) -> None:
         pass
 
 
-def assemble_state(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
-    """Build the full dashboard payload from the firm DB."""
+def assemble_state(
+    conn: sqlite3.Connection, firm_id: str, workspace: Path | None = None,
+) -> dict[str, Any]:
+    """Build the full dashboard payload from the firm DB.
+
+    ``workspace`` is optional and only the loadout-posture block needs it: the
+    legacy ``.firm/spawn.json`` default lives on disk, so without it a firm
+    running FULL from its founding file reads as "Lean". The HTTP route always
+    passes it — that is what makes the Settings switch honest. Callers that
+    omit it (tests) get the DB-stated answer only, and must not treat the
+    resulting `lean` as proof a legacy file is absent.
+    """
     firm = repo.get(conn, "firm", firm_id) or {"id": firm_id, "name": firm_id}
 
     members = repo.find(conn, "member", firm_id=firm_id)
@@ -753,6 +764,15 @@ def assemble_state(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
         "cost_by_member": cost_by_member,
         "budget_periods": budget_periods,
         "notify_configured": bool(firm.get("notify_config")),
+        # Loadout posture — the firm default plus every member's EFFECTIVE
+        # answer. Board-facing only: it reaches no prompt renderer (Invariant
+        # #5). `overrides` carries just the members the Board explicitly moved,
+        # so Settings can say how many members are off the default without the
+        # SPA re-deriving the resolution rule (one resolver, one answer).
+        "loadout_posture": {
+            **posture_svc.firm_default(conn, firm_id, workspace),
+            "members": posture_svc.roster_postures(conn, firm_id, workspace),
+        },
         "run_review": {
             "nudge_enabled": bool(_json_dict(firm.get("notify_config")).get("run_review_nudge")),
             "unrated_count": unrated_runs,
@@ -924,6 +944,12 @@ def member_profile(
         # Derived live from the member record on every open — the badge must
         # never show a cached grant (honest-state rule).
         "authority": authority_svc.has_authority(conn, member_id),
+        # Resolved, not raw: the Manage switch shows what this member will
+        # ACTUALLY spawn with, including the firm default when it has no
+        # override of its own.
+        "posture": posture_svc.effective_for_member(
+            conn, firm_id, member_id, workspace,
+        ),
         "calibration": calibration,
         "contract": contract,
         "contracts": repo.find(conn, "contract", firm_id=firm_id),
@@ -1133,6 +1159,10 @@ def floor_state(
     # surface — see the member-blindness test.
     calibration = calibration_svc.calibration_aggregate(conn, firm_id)
 
+    # Resolved once for the whole roster — the legacy-file tier touches disk,
+    # and this runs on the floor-fetch cadence.
+    postures = posture_svc.roster_postures(conn, firm_id, workspace)
+
     cards = []
     for m in members:
         mine = [u for u in units
@@ -1239,6 +1269,9 @@ def floor_state(
             # Live from the member record on every floor fetch — the gold
             # badge must never outlive the grant (honest-state rule).
             "authority": authority_svc.has_authority(conn, m["id"]),
+            # Effective loadout posture — an over-privileged member has to be
+            # obvious at a glance, not one click deep.
+            "posture": postures.get(m["id"], {}),
             "lead": m["id"] in leads,
             "reports_to": m.get("reports_to_member_id"),
             "tenure": {"founding": founding, "since": m.get("created_at")},
@@ -1470,6 +1503,30 @@ def perform_action(
             caps = body.get("capability")
         return autonomy_svc.set_sovereign_override(
             conn, entity_id, caps, actor={"type": "board", "id": None},
+        )
+    if action == "firm-posture":
+        # Board sets the firm's DEFAULT loadout posture (Settings switch).
+        # entity_id is unused (the firm is the target); body.posture =
+        # "lean"|"full". FULL hands every non-overridden member the operator's
+        # whole connector fleet, so the SPA gates it behind the risk modal —
+        # but the gravity lives in the service + Records, not the UI: a modal
+        # is a courtesy to the Board, never the enforcement.
+        return posture_svc.set_firm_posture(
+            conn, firm_id_of(conn, body), body.get("posture"),
+        )
+    if action == "member-posture":
+        # Board sets/clears ONE member's posture override (Floor Manage
+        # switch). entity_id = member id; body.posture = "lean"|"full", or an
+        # EXPLICIT null to clear the override and inherit the firm default.
+        # The key must be present: a body that simply forgot the field would
+        # otherwise read as "clear", silently re-inheriting a FULL firm default
+        # — a privilege change nobody asked for.
+        if "posture" not in body:
+            raise ValueError(
+                "posture required: 'lean', 'full', or null to inherit the firm default"
+            )
+        return posture_svc.set_member_posture(
+            conn, entity_id, body.get("posture"),
         )
     if action == "firm-setting":
         # Board toggles a per-firm boolean setting, persisted in
@@ -1828,7 +1885,7 @@ def _firm_get(
     if path == "/api/state":
         conn = connect(db_path)
         try:
-            _http_send(h, 200, assemble_state(conn, firm_id))
+            _http_send(h, 200, assemble_state(conn, firm_id, workspace))
         finally:
             conn.close()
         return

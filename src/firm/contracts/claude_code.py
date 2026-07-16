@@ -11,8 +11,9 @@ import sqlite3
 from typing import Any
 
 from firm.contracts.interface import InvokeResult, RunHandle, RunStatus
+from firm.core import repo
 from firm.pulse.prompt import assemble_prompt
-from firm.pulse.spawn import _active_pids, spawn_member_run
+from firm.pulse.spawn import _active_pids, resolve_posture, spawn_member_run
 
 
 class ClaudeCodeRuntime:
@@ -37,17 +38,27 @@ class ClaudeCodeRuntime:
         # IS, the Unit says what THIS work is worth. unit.model ?? contract
         # model ?? session default — the per-run half of the cost lever.
         model = str(unit.get("model") or "") or self._get_model(contract)
+        # Trust posture is per MEMBER, resolved against the firm default here —
+        # the one seam holding both rows. Passing it explicitly keeps spawn.py
+        # DB-free and means the boot command reflects THIS member's override,
+        # not just the firm's founding file (fork: loadout-posture-controls).
+        posture = resolve_posture(
+            member=member, firm=repo.get(conn, "firm", firm_id), cwd=cwd,
+        )
         prompt = assemble_prompt(conn, firm_id, member_id, unit_id, cwd=cwd)
         spawn_result = spawn_member_run(
             prompt, timeout_sec=timeout, cwd=cwd, model=model,
             member_id=member_id, firm_id=firm_id, run_id=run_id,
+            posture=posture,
         )
 
         return InvokeResult(
             handle=RunHandle(
                 run_id=run_id,
                 pid=spawn_result.pid,
-                metadata={"timeout_sec": timeout, "model": model},
+                # posture rides the handle so run forensics can answer "what
+                # was this member actually allowed to reach?" after the fact.
+                metadata={"timeout_sec": timeout, "model": model, "posture": posture},
             ),
             stdout=spawn_result.stdout,
             stderr=spawn_result.stderr,

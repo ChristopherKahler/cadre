@@ -761,6 +761,33 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .nameplate.authority{border:1.5px solid rgba(229,168,58,.8);box-shadow:0 0 10px rgba(229,168,58,.25)}
 .sbadge.lead{color:var(--brand-warning);border-color:color-mix(in srgb, var(--brand-warning) 45%, transparent)}
 .sbadge.burn b{color:var(--brand-primary);font-weight:600;margin-right:5px}
+/* Loadout posture. LEAN is the quiet default — it reads as ordinary because it
+   IS ordinary. FULL is the exception and must never blend in: an unbounded
+   member is a standing risk, so its tag carries the danger colour on every
+   surface that shows it. */
+.sbadge.lean{color:var(--brand-text-secondary)}
+.sbadge.full{color:var(--brand-danger);border-color:rgba(var(--brand-danger-rgb),.55);
+  background:rgba(var(--brand-danger-rgb),.10)}
+/* The risk gate's body — the sentence IS the control, so it gets room to be
+   read rather than the cramped line a confirm() would allow. */
+.riskbox{border:1px solid rgba(var(--brand-danger-rgb),.35);border-radius:10px;
+  background:rgba(var(--brand-danger-rgb),.07);padding:13px 15px;margin-bottom:16px}
+.riskbox p{font-size:12.5px;line-height:1.65;color:var(--brand-text-secondary);margin:0 0 9px}
+.riskbox p:last-child{margin-bottom:0}
+.riskbox b{color:var(--brand-text)}
+.riskonly{color:var(--brand-danger)!important;font-weight:600}
+/* Posture picker — two explicit choices, never a toggle. A checkbox implies a
+   symmetric flip; these two options are not symmetric. */
+.pstpick{display:flex;gap:8px;flex-wrap:wrap}
+.pstopt{flex:1;min-width:150px;text-align:left;border:1px solid var(--brand-border);
+  border-radius:10px;padding:10px 12px;background:var(--brand-surface);cursor:pointer;
+  color:var(--brand-text-secondary);font:inherit}
+.pstopt:hover{border-color:var(--brand-border-hover)}
+.pstopt.sel{border-color:var(--brand-primary);background:rgba(var(--brand-primary-rgb),.08)}
+.pstopt.sel.risk{border-color:var(--brand-danger);background:rgba(var(--brand-danger-rgb),.10)}
+.pstopt b{display:block;color:var(--brand-text);font-size:12.5px;margin-bottom:2px}
+.pstopt span{display:block;font-size:11px;line-height:1.5}
+.psteff{margin-top:10px;font-size:11.5px;color:var(--brand-text-dim);line-height:1.6}
 /* head: three columns — portrait + tab tiles / identity + description /
    progress bands. Desktop-locked layout; stacks to one column on mobile. */
 .headcols3{display:grid;grid-template-columns:190px minmax(0,1.55fr) minmax(0,1fr);
@@ -1429,6 +1456,10 @@ tr.flash td{animation:rowflash 2.2s ease-out}
         <div class="listcard" id="pulseCadence" style="padding:12px 14px">Loading…</div>
         </div>
         <div>
+        <div class="seclabel">Loadout posture — <span class="mono" style="font-size:11px">--strict-mcp-config on the member boot command</span>; the firm default, overridable per member on the Floor</div>
+        <div class="listcard" id="postureCard" style="padding:12px 14px">Loading…</div>
+        </div>
+        <div>
         <div class="seclabel">Member models — <span class="mono" style="font-size:11px">pulse_config.model → claude --model</span>; blank inherits your account default</div>
         <div class="listcard"><div class="tablewrap"><table id="settingsTable"></table></div></div>
         </div>
@@ -1511,6 +1542,32 @@ tr.flash td{animation:rowflash 2.2s ease-out}
     <div class="btn-row">
       <button class="btn" onclick="closeRate()">Cancel</button>
       <button class="btn primary" id="rateConfirm" onclick="submitRate()">Save rating</button>
+    </div>
+  </div>
+</div>
+
+<!-- Full-loadout risk gate. A real modal, never confirm(): the browser dialog
+     cannot carry the sentence that makes this decision informed, and this is
+     the one control in the boardroom that hands a member the operator's own
+     reach. Cancel is the default action; the commit button is danger-styled
+     and never focused. -->
+<div class="overlay" id="postureOverlay">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="postureTitle">
+    <h3 id="postureTitle">Full loadout — read this first</h3>
+    <div class="msub" id="postureSub"></div>
+    <div class="riskbox">
+      <p><b>This inherits your ENTIRE connected-tool fleet.</b> Every Cowork/claude.ai
+      connector you have — Gmail, Calendar, Drive, Slack, Canva, DocuSeal, Monday,
+      Zoom — with its full <b>write / send / publish / e-sign</b> power, on top of the
+      firm armory, under <span class="mono-ex">--dangerously-skip-permissions</span>.</p>
+      <p><b>The firm's loadout stops bounding what it can do.</b> The armory you
+      equipped is no longer the limit — it becomes a floor. Anything your operator
+      account can reach, this can reach, without asking you.</p>
+      <p class="riskonly">Only choose this for a trusted personal-proxy member.</p>
+    </div>
+    <div class="btn-row">
+      <button class="btn primary" id="postureCancel" onclick="closePostureRisk()">Cancel — stay Lean</button>
+      <button class="btn danger" id="postureConfirm" onclick="confirmPostureRisk()">I understand — go Full</button>
     </div>
   </div>
 </div>
@@ -3301,6 +3358,7 @@ function sheetHtml(m){
             <span class="sbadge${m.status === 'active' ? ' ok' : ''}">${esc(String(m.status || '').toUpperCase())}</span>
             ${m.lead ? '<span class="sbadge lead" title="Others on the roster report to this member">LEAD</span>' : ''}
             ${burn}
+            ${postureTag((m.posture || {}).posture || 'lean', {source: (m.posture || {}).source})}
           </div>
           ${m.owns ? `<div class="sowns">${esc(m.owns)}</div>` : ''}
         </div>
@@ -3579,11 +3637,63 @@ function profManageHtml(P){
         </button>
       </div>
     </div>
+    ${profPostureHtml(P)}
     <div class="mpanel">
       <div class="mp-head">Standing instructions <span class="zn">appended to every prompt</span></div>
       <div class="field"><textarea id="fInstructions" class="script">${esc(P.instructions)}</textarea></div>
     </div>
     <div class="zfoot" style="margin-bottom:6px"><button class="btn primary" onclick="saveManage(this)">Save changes</button></div>`;
+}
+
+/* Per-member loadout posture. Commits on click (like the management key, not
+   like the designation fields) — the modal already made it deliberate, and a
+   security posture sitting unsaved in a form is a posture you think you set. */
+function profPostureHtml(P){
+  const p = P.posture || {};
+  const eff = p.posture || 'lean';
+  const fd = p.firm_default || 'lean';
+  const cur = p.override || 'inherit';
+  const opt = (v, name, blurb) =>
+    `<button type="button" class="pstopt${v === cur ? ' sel' : ''}${v === 'full' ? ' risk' : ''}"
+       aria-pressed="${v === cur}" onclick="setMemberPosture('${v}')">
+       <b>${name}</b><span>${blurb}</span></button>`;
+  return `
+    <div class="mpanel">
+      <div class="mp-head">Loadout posture <span class="zn">Board-only · what this member can reach · the member never sees it</span></div>
+      <p class="calintro">Lean means this member reaches <b>exactly the firm armory</b> and nothing else. Full means it also inherits <b>your entire connected-tool fleet</b> — every connector you hold, with its write and send power. Lean unless you have a reason.</p>
+      <div class="pstpick">
+        ${opt('inherit', `Inherit the firm default (${fd.toUpperCase()})`,
+              'Follows Settings. Change the firm default and this member follows it.')}
+        ${opt('lean', 'Lean — firm armory only',
+              'Pin this member to the armory even if the firm default goes Full.')}
+        ${opt('full', 'Full — inherit my connectors',
+              'Unbounds this member from the firm loadout. Personal-proxy only.')}
+      </div>
+      <div class="psteff">Effective now: ${postureTag(eff, {source: p.source})} —
+        ${p.source === 'member' ? 'set on this member, overriding the firm default.'
+          : p.source === 'legacy_file' ? 'from the firm&rsquo;s founding <span class="mono-ex">.firm/spawn.json</span> — no Board decision behind it.'
+          : p.source === 'firm' ? 'inherited from the firm default.' : 'the default.'}
+      </div>
+    </div>`;
+}
+function setMemberPosture(choice){
+  if(!profileCtx) return;
+  const p = (sheetProfile && sheetProfile.posture) || {};
+  if(choice === (p.override || 'inherit')) return;
+  const fd = p.firm_default || 'lean';
+  // What the member will ACTUALLY run with after this click. "Inherit" under a
+  // FULL firm default is an escalation to full even though the word says
+  // inherit — gate on the outcome, never the label.
+  const effective = choice === 'inherit' ? fd : choice;
+  const who = memberName(profileCtx);
+  requestPosture({
+    scope: 'member', id: profileCtx, value: choice === 'inherit' ? null : choice,
+    gate: effective === 'full' && (p.posture || 'lean') !== 'full',
+    sub: `${who} — this member's loadout, on its next spawn.`,
+    toast: choice === 'inherit'
+      ? `${who} follows the firm default (${fd.toUpperCase()}) again`
+      : `${who} pinned to ${choice.toUpperCase()} — applies on the next spawn`,
+  });
 }
 
 async function postCommission(){
@@ -4100,6 +4210,7 @@ async function loadPulseCadence(){
 }
 
 function renderSettings(S){
+  renderPosture(S);
   // Keep the run-review toggle in sync — but never clobber it mid-click.
   const nudge = document.getElementById('setRunNudge');
   if(nudge && nudge !== document.activeElement){
@@ -4136,6 +4247,107 @@ async function setContractModel(contractId, sel){
     toast(out.error || 'Model update failed', true);
   }
   sel.disabled = false;
+}
+
+/* ---- Loadout posture: the firm default + per-member overrides ----
+   LEAN = --strict-mcp-config: the member's MCP surface is exactly the firm
+   armory. FULL = it also inherits the operator's whole connector fleet.
+   Every route to FULL passes through the risk modal — including "inherit"
+   when the firm default IS full, because that raises the member's reach just
+   as surely as picking full outright. The gate is on the RESULTING effective
+   posture, never on the literal value clicked. */
+let postureCtx = null;
+
+function postureTag(p, opts){
+  const o = opts || {};
+  const full = p === 'full';
+  const why = o.source === 'member' ? 'set on this member'
+    : o.source === 'legacy_file' ? 'inherited from .firm/spawn.json — never reviewed in the boardroom'
+    : o.source === 'firm' ? 'inherited from the firm default'
+    : 'the default';
+  const title = full
+    ? `FULL loadout — inherits your entire connector fleet on top of the firm armory (${why})`
+    : `LEAN loadout — MCP surface is exactly the firm armory (${why})`;
+  return `<span class="sbadge ${full ? 'full' : 'lean'}" title="${esc(title)}">${full ? 'FULL' : 'LEAN'}</span>`;
+}
+
+/* The single gate. `ctx.gate` is computed by the caller from what the click
+   would ACTUALLY produce — never from the literal value clicked. Lean is never
+   gated: the safe direction must stay one click away. */
+function requestPosture(ctx){
+  if(!ctx.gate){ commitPosture(ctx); return; }
+  postureCtx = ctx;
+  document.getElementById('postureSub').textContent = ctx.sub;
+  document.getElementById('postureOverlay').classList.add('show');
+  document.getElementById('postureCancel').focus();
+}
+function closePostureRisk(){
+  document.getElementById('postureOverlay').classList.remove('show');
+  postureCtx = null;
+  // Cancel leaves posture untouched; re-render so the picker snaps back to
+  // what is actually stored rather than the choice we just declined.
+  refreshSheetProfile(); lastHash = null; poll();
+}
+async function confirmPostureRisk(){
+  const ctx = postureCtx;
+  document.getElementById('postureOverlay').classList.remove('show');
+  postureCtx = null;
+  if(ctx) await commitPosture(ctx);
+}
+async function commitPosture(ctx){
+  const out = ctx.scope === 'firm'
+    ? await postAction('firm-posture/default', {posture: ctx.value})
+    : await postAction('member-posture/' + encodeURIComponent(ctx.id), {posture: ctx.value});
+  if(!out.ok){ toast(out.error || 'Posture update failed', true); refreshSheetProfile(); return; }
+  toast(ctx.toast);
+  lastHash = null; poll(); floorFetchedAt = 0; loadFloor(); refreshSheetProfile();
+}
+
+function renderPosture(S){
+  const el = document.getElementById('postureCard');
+  if(!el || el.contains(document.activeElement)) return;
+  const P = S.loadout_posture || {};
+  const cur = P.posture || 'lean';
+  const members = P.members || {};
+  const overrides = Object.entries(members).filter(([, v]) => v.override);
+  const opt = (v, name, blurb) =>
+    `<button type="button" class="pstopt${v === cur ? ' sel' : ''}${v === 'full' ? ' risk' : ''}"
+       aria-pressed="${v === cur}" onclick="setFirmPosture('${v}')">
+       <b>${name}</b><span>${blurb}</span></button>`;
+  el.innerHTML = `
+    <div class="pstpick">
+      ${opt('lean', 'Lean — the loadout is the law',
+            'Members reach exactly the firm armory (<span class="mono-ex">--strict-mcp-config</span>). The safe default.')}
+      ${opt('full', 'Full — inherit my connectors',
+            'Members also inherit your entire Cowork/claude.ai fleet, with write/send power.')}
+    </div>
+    <div class="psteff">
+      Now: ${postureTag(cur, {source: P.source})} —
+      ${P.source === 'legacy_file'
+        ? 'set by this firm&rsquo;s founding <span class="mono-ex">.firm/spawn.json</span>, before there was a switch. Choosing above records the Board&rsquo;s own decision and takes over from the file.'
+        : P.source === 'firm' ? 'set by you, here.' : 'nothing set — Lean by default.'}
+      ${overrides.length
+        ? `<br>${overrides.length} member${overrides.length === 1 ? '' : 's'} override${overrides.length === 1 ? 's' : ''} this: ` +
+          overrides.map(([id, v]) => `${esc(memberName(id))} <b>${v.override.toUpperCase()}</b>`).join(' · ')
+        : '<br>No member overrides — every member runs the firm default.'}
+    </div>`;
+}
+function setFirmPosture(value){
+  const P = (STATE && STATE.loadout_posture) || {};
+  if(value === (P.posture || 'lean') && P.source !== 'legacy_file') return;
+  requestPosture({
+    scope: 'firm', value,
+    // Gate on full unless the Board has ALREADY deliberately chosen full.
+    // A firm running full off its founding file has never been shown this
+    // warning — ratifying that into a Board decision is the first real
+    // choice, and it reads the sentence like any other (ESC-086's whole
+    // point: nobody chose the posture it was running).
+    gate: value === 'full' && P.stated !== 'full',
+    sub: 'Firm default — applies to every member without an override of its own.',
+    toast: value === 'full'
+      ? 'Firm default is now FULL — members inherit your connectors on the next spawn'
+      : 'Firm default is now LEAN — the loadout is the law again',
+  });
 }
 
 /* ---- Run review: Board-only run scoring + the toggleable nudge ---- */
@@ -4181,6 +4393,9 @@ async function submitRate(){
   }
 }
 document.getElementById('rateOverlay').addEventListener('click', e => { if(e.target.id === 'rateOverlay') closeRate(); });
+// Backdrop dismiss = cancel = stay Lean. Every exit that isn't the danger
+// button leaves the posture alone.
+document.getElementById('postureOverlay').addEventListener('click', e => { if(e.target.id === 'postureOverlay') closePostureRisk(); });
 // Board-facing per-run rate control — a score chip once rated, a Rate button before.
 // Args are ids/numbers only, so the inline handler needs no string escaping.
 function runRateCtl(r){
@@ -4566,6 +4781,7 @@ function closeModal(){
 document.getElementById('overlay').addEventListener('click', e => { if(e.target.id === 'overlay') closeModal(); });
 document.addEventListener('keydown', e => {
   if(e.key !== 'Escape') return;
+  if(document.getElementById('postureOverlay').classList.contains('show')){ closePostureRisk(); return; }
   if(document.getElementById('rateOverlay').classList.contains('show')){ closeRate(); return; }
   if(document.getElementById('overlay').classList.contains('show')) closeModal();
   if(document.getElementById('docOverlay').classList.contains('show')) closeDoc();

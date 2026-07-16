@@ -60,16 +60,19 @@ _CLAUDE_FLAGS: list[str] = [
 ]
 
 
-def full_load(cwd: str | None) -> bool:
-    """Board-chosen trust posture: ``.firm/spawn.json`` → ``{"full": true}``.
+LEAN = "lean"
+FULL = "full"
 
-    A FULL-LOAD firm spawns members WITHOUT ``--strict-mcp-config`` — they
-    inherit the operator's user-scope/plugin MCP fleet on top of the firm
-    armory. That buys a personal-proxy firm (The Desk) the operator's own
-    reach, and costs exactly what the strict comment above describes: loadout
-    discipline, and a prompt-size tax (slower boot) on every run. Which is
-    why it is per-firm, chosen by the Board at founding (the Manifest step),
-    and the default — no file — is LEAN: the loadout is the law.
+
+def full_load(cwd: str | None) -> bool:
+    """LEGACY firm-default posture: ``.firm/spawn.json`` → ``{"full": true}``.
+
+    The original, firm-only posture store — kept as a READ-ONLY back-compat
+    fallback so firms founded with this file keep their chosen posture. It is
+    now the THIRD tier of :func:`resolve_posture`, consulted only when neither
+    the member nor the firm row states a posture. Nothing writes it anymore:
+    the Board's switches write ``firm.loadout_posture`` / ``member.loadout_posture``
+    through ``services/posture.py``, and an explicit DB posture shadows this file.
     """
     if not cwd:
         return False
@@ -78,6 +81,43 @@ def full_load(cwd: str | None) -> bool:
             return bool(json.load(f).get("full"))
     except (OSError, ValueError):
         return False
+
+
+def _stated(row: dict | None) -> str | None:
+    """The posture a firm/member row explicitly states, or None to inherit.
+
+    Anything unrecognised reads as None — an unparseable posture must inherit
+    the safe direction, never fall through to FULL.
+    """
+    if not row:
+        return None
+    value = row.get("loadout_posture")
+    return value if value in (LEAN, FULL) else None
+
+
+def resolve_posture(
+    member: dict | None = None,
+    firm: dict | None = None,
+    cwd: str | None = None,
+) -> str:
+    """Effective trust posture for ONE member run.
+
+    Resolution order — first explicit answer wins, and every fallthrough lands
+    on the safe direction:
+
+        1. ``member.loadout_posture``  — the Board's per-member override
+        2. ``firm.loadout_posture``    — the Board's firm default
+        3. ``.firm/spawn.json {"full": true}`` — legacy firm default (read-only)
+        4. LEAN                        — the default, and the safe path
+
+    FULL is only ever reached by an affirmative statement at some tier. There
+    is deliberately no path here where absent/malformed state yields FULL: the
+    whole point of this control is that the dangerous posture is deliberate.
+    """
+    stated = _stated(member) or _stated(firm)
+    if stated:
+        return stated
+    return FULL if full_load(cwd) else LEAN
 
 
 def mcp_config_path(cwd: str | None) -> str | None:
@@ -147,6 +187,7 @@ def spawn_member_run(
     member_id: str | None = None,
     firm_id: str | None = None,
     run_id: str | None = None,
+    posture: str | None = None,
 ) -> SpawnResult:
     """Spawn a ``claude --print`` process and capture output on completion.
 
@@ -154,6 +195,11 @@ def spawn_member_run(
         prompt: The assembled one-shot prompt string.
         timeout_sec: Maximum wall-clock seconds before SIGTERM.
         cwd: Working directory for the child process.
+        posture: Effective loadout posture for THIS member (``"lean"``/``"full"``),
+            resolved by the caller that holds the member + firm rows (the
+            ClaudeCodeRuntime adapter). ``None`` resolves the firm-level answer
+            from ``cwd`` alone — the back-compat path for callers with no
+            member context. Only ``"full"`` drops ``--strict-mcp-config``.
         model: Optional ``--model`` override from the Member's Contract
             (``pulse_config.model``) — the per-contract cost lever; cheap
             roles don't need the top model. None = runtime default.
@@ -178,7 +224,11 @@ def spawn_member_run(
         )
 
     cmd = [claude_bin, *_CLAUDE_FLAGS]
-    if full_load(cwd):
+    # Posture is resolved per MEMBER (override → firm default → legacy file →
+    # lean); only an affirmative FULL unbounds the loadout. An unresolved or
+    # unrecognised posture keeps strict — the flag comes off on purpose or not
+    # at all.
+    if (posture or resolve_posture(cwd=cwd)) == FULL:
         cmd.remove("--strict-mcp-config")
     mcp_config = mcp_config_path(cwd)
     if mcp_config:
