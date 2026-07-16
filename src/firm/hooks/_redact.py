@@ -10,11 +10,22 @@ from __future__ import annotations
 import re
 from typing import Any
 
-_KEY_PATTERN = re.compile(r"(?i)(token|key|secret|password)")
+# Dict-key words that mark a value as a credential. "authorization" is spelled
+# in full deliberately — a bare "auth" would also match author_id / author_type,
+# which the Records layer carries everywhere (a redactor that eats provenance is
+# its own bug). "bearer"/"credential"/"apikey" are safe, non-colliding adds.
+_KEY_PATTERN = re.compile(
+    r"(?i)(token|key|secret|password|authorization|bearer|credential|apikey)"
+)
 
 _STRING_PATTERN = re.compile(
     r"(?i)([\w-]*(?:token|key|secret|password)[\w-]*)(\s*[:=]\s*)(\S+)",
 )
+
+# `Authorization: Bearer <tok>` (audit A9) and any standalone `Bearer <tok>` —
+# the header key carries no credential word, so _STRING_PATTERN alone misses it.
+# Redacts the token, keeps the "Bearer " marker so the shape stays legible.
+_BEARER_PATTERN = re.compile(r"(?i)(bearer\s+)(\S+)")
 
 
 def redact(value: Any) -> Any:
@@ -40,5 +51,6 @@ def redact(value: Any) -> Any:
     if isinstance(value, list):
         return [redact(item) for item in value]
     if isinstance(value, str):
-        return _STRING_PATTERN.sub(r"\1\2[REDACTED]", value)
+        redacted = _STRING_PATTERN.sub(r"\1\2[REDACTED]", value)
+        return _BEARER_PATTERN.sub(r"\1[REDACTED]", redacted)
     return value
