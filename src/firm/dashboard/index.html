@@ -911,9 +911,36 @@ tr.flash td{animation:rowflash 2.2s ease-out}
   border-top:2px solid rgba(var(--brand-primary-rgb),.45);border-left:2px solid rgba(var(--brand-primary-rgb),.45)}
 .szone.loadout-bay::after{bottom:12px;right:14px;
   border-bottom:2px solid rgba(var(--brand-primary-rgb),.45);border-right:2px solid rgba(var(--brand-primary-rgb),.45)}
-.szone.loadout-bay .zlabel{font-size:13px;letter-spacing:.28em;color:var(--brand-primary)}
-.szone.loadout-bay .zlabel::before{content:'';display:inline-block;width:20px;height:2px;margin-right:11px;
+.szone.loadout-bay .zlabel,.console .zlabel{font-size:13px;letter-spacing:.28em;color:var(--brand-primary)}
+.szone.loadout-bay .zlabel::before,.console .zlabel::before{content:'';display:inline-block;width:20px;height:2px;margin-right:11px;
   vertical-align:middle;background:var(--brand-primary);box-shadow:0 0 9px rgba(var(--brand-primary-rgb),.6)}
+/* The commission console — the order-issuing surface, bay-styled */
+.console{position:relative;border:1px solid var(--brand-border);border-radius:12px;
+  padding:18px 20px 16px;margin-bottom:16px;
+  background:color-mix(in srgb, #000 30%, var(--brand-canvas));
+  background-image:radial-gradient(rgba(255,255,255,.022) 1px, transparent 1px);
+  background-size:20px 20px;
+  box-shadow:inset 0 2px 12px rgba(0,0,0,.4)}
+.console::before{content:'';position:absolute;top:10px;left:12px;width:14px;height:14px;pointer-events:none;
+  border-top:2px solid rgba(var(--brand-primary-rgb),.45);border-left:2px solid rgba(var(--brand-primary-rgb),.45)}
+.console::after{content:'';position:absolute;bottom:10px;right:12px;width:14px;height:14px;pointer-events:none;
+  border-bottom:2px solid rgba(var(--brand-primary-rgb),.45);border-right:2px solid rgba(var(--brand-primary-rgb),.45)}
+.console .zlabel{margin-bottom:13px}
+.console .cmdinput{width:100%;min-height:96px;background:var(--brand-elevated);border:1px solid var(--brand-border);
+  border-radius:8px;padding:12px 14px;font:400 12.5px/1.65 var(--font-mono);color:var(--brand-text);resize:vertical}
+.console .cmdinput:focus{outline:none;border-color:rgba(var(--brand-primary-rgb),.55);
+  box-shadow:0 0 0 3px rgba(var(--brand-primary-rgb),.1)}
+.console .commissionrow{display:flex;gap:10px;margin-top:12px}
+.console .commissionrow select{flex:1;min-width:0;background:var(--brand-elevated);border:1px solid var(--brand-border);
+  border-radius:8px;padding:8px 12px;font:500 13px var(--font-body);color:var(--brand-text)}
+.comment.order{border-left:2px solid rgba(var(--brand-primary-rgb),.35);padding-left:11px;margin-bottom:10px}
+.mpanel .commentbox input{background:var(--brand-elevated);border-radius:8px}
+/* Light theme: the bays stay recessed but read as warm gray wells with dark dots */
+[data-theme="light"] .szone.loadout-bay,[data-theme="light"] .console{
+  background:color-mix(in srgb, #000 6%, var(--brand-canvas));
+  background-image:radial-gradient(rgba(0,0,0,.07) 1px, transparent 1px);
+  background-size:20px 20px;
+  box-shadow:inset 0 2px 10px rgba(0,0,0,.10)}
 .szone{padding:22px 34px 26px;border-top:1px solid var(--brand-border);min-width:0;
   animation:zoneRise 280ms cubic-bezier(.16,1,.3,1) both}
 .szone:nth-of-type(2){animation-delay:70ms}
@@ -992,9 +1019,14 @@ tr.flash td{animation:rowflash 2.2s ease-out}
   background-image:radial-gradient(rgba(255,255,255,.022) 1px, transparent 1px);
   background-size:20px 20px;
   border:1px solid var(--brand-border-hover);border-radius:8px;
-  box-shadow:0 32px 80px rgba(0,0,0,.6), inset 0 2px 12px rgba(0,0,0,.35);
+  box-shadow:0 32px 80px rgba(0,0,0,.6), 0 0 0 200vmax rgba(3,8,6,.5), inset 0 2px 12px rgba(0,0,0,.35);
   display:flex;flex-direction:column;max-height:72vh;overflow:hidden;
   animation:palIn 180ms cubic-bezier(.16,1,.3,1) both}
+[data-theme="light"] .palette{
+  background:color-mix(in srgb, #000 6%, var(--brand-canvas));
+  background-image:radial-gradient(rgba(0,0,0,.07) 1px, transparent 1px);
+  background-size:20px 20px;
+  box-shadow:0 24px 64px rgba(0,0,0,.28), 0 0 0 200vmax rgba(20,26,22,.38), inset 0 2px 10px rgba(0,0,0,.08)}
 .palette::before{content:'';position:absolute;top:9px;left:10px;width:14px;height:14px;pointer-events:none;
   border-top:2px solid rgba(var(--brand-primary-rgb),.45);border-left:2px solid rgba(var(--brand-primary-rgb),.45)}
 .palette::after{content:'';position:absolute;bottom:9px;right:10px;width:14px;height:14px;pointer-events:none;
@@ -1012,6 +1044,13 @@ tr.flash td{animation:rowflash 2.2s ease-out}
   padding:8px 14px;color:var(--brand-text);font:400 13px var(--font-body)}
 .palette .psearch:focus{outline:none;border-color:var(--brand-primary)}
 .plist{overflow-y:auto;padding:0 8px 8px;min-height:56px}
+/* modal scrollers ride the house rail — thin, themed, quiet */
+.plist,.dwr-body,.promptpre{scrollbar-width:thin;
+  scrollbar-color:color-mix(in srgb, var(--brand-text) 18%, transparent) transparent}
+.plist::-webkit-scrollbar,.dwr-body::-webkit-scrollbar,.promptpre::-webkit-scrollbar{width:6px}
+.plist::-webkit-scrollbar-track,.dwr-body::-webkit-scrollbar-track,.promptpre::-webkit-scrollbar-track{background:transparent}
+.plist::-webkit-scrollbar-thumb,.dwr-body::-webkit-scrollbar-thumb,.promptpre::-webkit-scrollbar-thumb{
+  background:color-mix(in srgb, var(--brand-text) 18%, transparent);border-radius:3px}
 .prow{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:5px;min-width:0;
   border:1px solid transparent}
 .prow:hover{background:var(--brand-elevated);border-color:rgba(var(--brand-primary-rgb),.3)}
@@ -3224,32 +3263,39 @@ function profCommandHtml(P){
     ? (P.members.find(x => x.id === m.reports_to_member_id)?.name || m.reports_to_member_id)
     : 'THE BOARD';
   return `
-    <div class="statblock" style="grid-template-columns:1fr;margin-bottom:20px">
-      <div class="stl"><span class="sk">Contract</span><span class="dots"></span><span class="sv">${esc(P.contract ? P.contract.name : 'none')}</span></div>
-      <div class="stl"><span class="sk">Reports to</span><span class="dots"></span><span class="sv">${esc(mgr)}</span></div>
-      <div class="stl"><span class="sk">Last active</span><span class="dots"></span><span class="sv">${timeAgo(m.last_activated)}</span></div>
-    </div>
-    ${m.description ? `<div class="seclabel">About</div><p class="stab-about">${esc(m.description)}</p>` : ''}
-    ${P.current_units.length ? `<div class="seclabel">Currently on</div>
-      <div class="listcard" style="margin-bottom:18px">${P.current_units.map(u =>
-        `<div class="lrow"><span class="mono" style="font-size:11px;color:var(--brand-text-dim)">${esc(u.id)}</span><span class="grow">${esc(u.name)}</span>${pill(u.status)}</div>`).join('')}</div>` : ''}
-    <div class="seclabel">Commission — one-shot task, dispatched now</div>
-    <div class="commissionbox">
-      <textarea id="pCommText" placeholder="Direct instructions for ${esc(m.name)} — becomes a real Unit, runs immediately, logs like any pulse run…"></textarea>
+    <div class="console">
+      <div class="zlabel">Commission <span class="zn">one-shot order · dispatched now · logs like any pulse run</span></div>
+      <textarea id="pCommText" class="cmdinput" placeholder="Direct instructions for ${esc(m.name)} — becomes a real Unit, runs immediately…"></textarea>
       <div class="commissionrow">
         <select id="pCommProject">${((STATE || {}).projects || []).filter(p => ['in_progress','active'].includes(p.status)).map(p =>
           `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('') || '<option value="">No active project</option>'}</select>
-        <button class="btn primary sm" id="pCommBtn" onclick="postCommission()">Commission &amp; dispatch</button>
+        <button class="btn primary" id="pCommBtn" onclick="postCommission()">Commission &amp; dispatch</button>
       </div>
     </div>
-    <div class="seclabel">Standing notes — injected into every run</div>
-    <div id="pNotes">${P.notes.length ? P.notes.map(n => `
-      <div class="comment"><span class="cwho">${esc(n.author_type === 'board' && !n.author_id ? 'THE BOARD' : (n.author_id || n.author_type))}</span>
-      <span class="muted" style="margin-left:6px">${timeAgo(n.created_at)}</span>
-      <div class="cbody">${esc(n.body)}</div></div>`).join('') : '<div class="empty">No standing notes. Add one to tune how this member operates.</div>'}</div>
-    <div class="commentbox">
-      <input id="pNoteInput" placeholder="Standing direction for ${esc(m.name)}…">
-      <button class="btn primary sm" onclick="postMemberNote()">Add note</button>
+    <div class="mrow">
+      <div class="mpanel">
+        <div class="mp-head">Assignment</div>
+        <div class="statblock" style="grid-template-columns:1fr;margin-bottom:14px">
+          <div class="stl"><span class="sk">Contract</span><span class="dots"></span><span class="sv">${esc(P.contract ? P.contract.name : 'none')}</span></div>
+          <div class="stl"><span class="sk">Reports to</span><span class="dots"></span><span class="sv">${esc(mgr)}</span></div>
+          <div class="stl"><span class="sk">Last active</span><span class="dots"></span><span class="sv">${timeAgo(m.last_activated)}</span></div>
+        </div>
+        ${m.description ? `<p class="stab-about">${esc(m.description)}</p>` : ''}
+        ${P.current_units.length ? `<div class="seclabel">Currently on</div>
+          <div class="listcard" style="margin-bottom:12px">${P.current_units.map(u =>
+            `<div class="lrow"><span class="mono" style="font-size:11px;color:var(--brand-text-dim)">${esc(u.id)}</span><span class="grow">${esc(u.name)}</span>${pill(u.status)}</div>`).join('')}</div>` : ''}
+      </div>
+      <div class="mpanel">
+        <div class="mp-head">Standing orders <span class="zn">injected into every run</span></div>
+        <div id="pNotes">${P.notes.length ? P.notes.map(n => `
+          <div class="comment order"><span class="cwho">${esc(n.author_type === 'board' && !n.author_id ? 'THE BOARD' : (n.author_id || n.author_type))}</span>
+          <span class="muted" style="margin-left:6px">${timeAgo(n.created_at)}</span>
+          <div class="cbody">${esc(n.body)}</div></div>`).join('') : '<div class="empty">No standing orders. Add one to tune how this member operates.</div>'}</div>
+        <div class="commentbox">
+          <input id="pNoteInput" placeholder="Standing direction for ${esc(m.name)}…">
+          <button class="btn primary sm" onclick="postMemberNote()">Add note</button>
+        </div>
+      </div>
     </div>`;
 }
 
