@@ -12,9 +12,11 @@ firm workspace: ``cadre dashboard --workspace ~/firms/whatever``.
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import sqlite3
@@ -25,7 +27,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from firm.core import repo
 from firm.core.db import connect, db_is_remote, get_db_path, resolve_firm_id
@@ -152,114 +154,13 @@ def load_custom_blocks(workspace: Path) -> list[dict[str, Any]]:
     return blocks
 
 
-def install_extension(
-    workspace: Path, package: dict[str, Any], confirmed: bool,
-) -> dict[str, Any]:
-    """Install a drop-in extension package into this firm.
-
-    A package is a self-contained JSON object: {id, title, mode, fragment (inline
-    HTML), actions, requires[], install{cmd,description}}. Installing writes the
-    fragment + merges the view into ``views.json`` (so the tab auto-appears) and,
-    ONLY when *confirmed*, runs the package's declared install cmd (argv, no shell)
-    to make the tool's commands available. Uploaded code is executed only behind
-    that operator confirm — the whole point of the gate.
-    """
-    if not isinstance(package, dict):
-        raise ValueError("package must be a JSON object")
-    vid = str(package.get("id") or "")
-    if not _VIEW_ID_RE.fullmatch(vid):
-        raise ValueError("package 'id' must be a short slug [a-z0-9-]")
-    title = str(package.get("title") or vid)
-    mode = "fullscreen" if str(package.get("mode") or "").lower() == "fullscreen" else "embed"
-    fragment = package.get("fragment")
-    if not isinstance(fragment, str) or not fragment.strip():
-        raise ValueError("package must include a non-empty 'fragment' (HTML)")
-
-    dash = workspace / ".firm" / "dashboard"
-    (dash / "views").mkdir(parents=True, exist_ok=True)
-    frag_rel = f"dashboard/views/{vid}.html"
-    (dash / "views" / f"{vid}.html").write_text(fragment, encoding="utf-8")
-
-    entry: dict[str, Any] = {"id": vid, "title": title, "mode": mode, "fragment": frag_rel}
-    # Only accept action cmds that are argv LISTS — the seam never shells out.
-    clean_actions = {}
-    for k, a in (package.get("actions") or {}).items():
-        if isinstance(a, dict) and isinstance(a.get("cmd"), list):
-            clean_actions[str(k)] = {
-                "cmd": [str(x) for x in a["cmd"]],
-                "timeout": int(a.get("timeout", 60)),
-            }
-    if clean_actions:
-        entry["actions"] = clean_actions
-    # Read-only queries (SELECT/WITH only) — so blocks can read the firm DB.
-    clean_queries = {
-        str(k): q for k, q in (package.get("queries") or {}).items()
-        if isinstance(q, str) and re.match(r"^\s*(SELECT|WITH)\b", q, re.I)
-    }
-    if clean_queries:
-        entry["queries"] = clean_queries
-
-    # Extension-contributed blocks (optional): write each fragment + collect entries.
-    block_entries: list[dict[str, Any]] = []
-    (dash / "blocks").mkdir(parents=True, exist_ok=True)
-    for b in (package.get("blocks") or []):
-        if not isinstance(b, dict):
-            continue
-        b_id = str(b.get("id") or "")
-        b_frag = b.get("fragment")
-        if not _VIEW_ID_RE.fullmatch(b_id) or not isinstance(b_frag, str) or not b_frag.strip():
-            continue
-        b_mount = str(b.get("mount") or "dashboard")
-        if not _VIEW_ID_RE.fullmatch(b_mount):
-            b_mount = "dashboard"
-        (dash / "blocks" / f"{b_id}.html").write_text(b_frag, encoding="utf-8")
-        block_entries.append({"id": b_id, "title": str(b.get("title") or b_id),
-                              "mount": b_mount, "fragment": f"dashboard/blocks/{b_id}.html"})
-
-    manifest = dash / "views.json"
-    data: dict[str, Any] = {"views": [], "blocks": []}
-    if manifest.exists():
-        try:
-            data = json.loads(manifest.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            data = {"views": [], "blocks": []}
-    data["views"] = [v for v in data.get("views", []) if v.get("id") != vid] + [entry]
-    if block_entries:
-        new_ids = {be["id"] for be in block_entries}
-        data["blocks"] = [b for b in data.get("blocks", []) if b.get("id") not in new_ids] + block_entries
-    manifest.write_text(json.dumps(data, indent=2), encoding="utf-8")
-
-    requires = [str(c) for c in (package.get("requires") or []) if isinstance(c, str)]
-
-    install = package.get("install")
-    install_result: dict[str, Any] | None = None
-    if isinstance(install, dict) and isinstance(install.get("cmd"), list):
-        cmd = [str(x) for x in install["cmd"]]
-        if confirmed:
-            try:
-                proc = subprocess.run(
-                    cmd, cwd=workspace, capture_output=True, text=True,
-                    timeout=int(install.get("timeout", 120)),
-                )
-                install_result = {
-                    "ran": True, "returncode": proc.returncode,
-                    "output": (proc.stdout + proc.stderr).strip()[-2000:],
-                }
-            except subprocess.TimeoutExpired:
-                install_result = {"ran": True, "returncode": None, "output": "install timed out"}
-            except OSError as exc:
-                install_result = {"ran": False, "error": str(exc)}
-        else:
-            install_result = {
-                "ran": False, "skipped": True, "cmd": cmd,
-                "description": str(install.get("description") or ""),
-            }
-
-    req_status = [{"cmd": c, "present": shutil.which(c) is not None} for c in requires]
-    return {
-        "ok": True, "view_id": vid, "title": title, "mode": mode,
-        "requires": req_status, "install": install_result,
-    }
+#
+# `install_extension` (a POST-reachable installer that ran an uploaded
+# package's declared shell command) was REMOVED in the M3 hardening pass —
+# audit A4: an unauthenticated CSRF POST to /api/extensions/install was a
+# remote-code-execution path. Extensions are a rare, Board-level operation;
+# per the Board decision (2026-07-16) they are managed from the CLI, never
+# from a browser-reachable endpoint. The route now returns 410 Gone.
 
 
 def _firm_file(workspace: Path, rel: str) -> Path:
@@ -1471,8 +1372,79 @@ def firm_id_of(conn: sqlite3.Connection, body: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# HTTP layer
+# HTTP layer — auth (audit A3 / A4 / B6)
+#
+# The dashboard binds to 127.0.0.1 only, so the real threats are (a) CSRF: a
+# web page the Board visits driving the firm's mutating API through the
+# browser, and (b) another local process hitting the port. Two complementary
+# controls close both, with no dependency beyond the stdlib:
+#
+#   1. Origin allow-list — a cross-site page's POST carries a foreign Origin
+#      (browsers set it and cannot be scripted to forge it); reject anything
+#      whose Origin/Referer host isn't loopback. This is the load-bearing CSRF
+#      defense and needs no change to the dashboard's own same-origin fetches.
+#   2. Capability token — a per-server secret in a 0600 file; required when no
+#      browser Origin is present (curl / CLI / another local process), which a
+#      process that can't read the 0600 file cannot supply.
+#
+# A request passes when it is same-origin-loopback OR carries the token. GETs
+# stay open except the sensitive sysconfig reads; all POSTs are gated.
 # ---------------------------------------------------------------------------
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_TOKEN_HEADER = "X-Cadre-Token"
+
+
+def _origin_is_loopback(origin: str) -> bool:
+    """True when an Origin/Referer header points at a loopback host. An empty
+    origin is not loopback (the caller decides what absence means)."""
+    if not origin:
+        return False
+    try:
+        return urlparse(origin).hostname in _LOOPBACK_HOSTS
+    except ValueError:
+        return False
+
+
+def _ensure_dashboard_token(token_path: Path) -> str:
+    """Return the server's capability token, minting a 0600 file if absent.
+    Idempotent — a restart reuses the existing token so open dashboards keep
+    working."""
+    try:
+        existing = token_path.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+    except OSError:
+        pass
+    token = secrets.token_urlsafe(32)
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(token_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(token)
+    return token
+
+
+def _request_authorized(h: BaseHTTPRequestHandler, token_path: Path) -> bool:
+    """Gate a mutating request. Same-origin-loopback passes; otherwise a valid
+    capability token is required. Never raises."""
+    origin = h.headers.get("Origin") or h.headers.get("Referer") or ""
+    if origin:
+        # A browser attached an origin — it must be loopback. A cross-site
+        # attacker's page fails here and never reaches the token branch.
+        return _origin_is_loopback(origin)
+    supplied = h.headers.get(_TOKEN_HEADER, "")
+    try:
+        expected = token_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        expected = ""
+    return bool(expected) and hmac.compare_digest(supplied, expected)
+
+
+def _reject_unauthorized(h: BaseHTTPRequestHandler) -> None:
+    _http_send(h, 403, {"ok": False, "error": (
+        "unauthorized: request must be same-origin (loopback) or carry the "
+        f"{_TOKEN_HEADER} capability token (see the dashboard.token file)")})
+
 
 def _http_send(
     h: BaseHTTPRequestHandler,
@@ -1677,6 +1649,12 @@ def _run_action_log(
 
 def _sysconfig_get(h: BaseHTTPRequestHandler, workspace: Path, path: str) -> None:
     """GET /api/sysconfig[/…] — platform-aware firm workspace config reads."""
+    # Sensitive reads (fs browse, var names, workspace files — audit B6). Gate
+    # on the same rule as mutations so a cross-site page can't read a firm's
+    # config through the Board's browser; same-origin dashboard fetches pass.
+    if not _request_authorized(h, workspace / ".firm" / "dashboard.token"):
+        _reject_unauthorized(h)
+        return
     route, _, qs = path.partition("?")
     parts = route.strip("/").split("/")   # api / sysconfig / ...
     try:
@@ -2278,20 +2256,14 @@ def _firm_post(
             return
         _sysconfig_post(h, workspace, db_path, firm_id, path, body)
         return
-    # Route: /api/extensions/install — drop-in extension package installer
+    # Route: /api/extensions/install — REMOVED (audit A4). It ran an uploaded
+    # package's install command from an unauthenticated body — a CSRF→RCE path.
+    # Extensions are managed from the CLI now, never a browser-reachable
+    # endpoint (Board decision 2026-07-16).
     if parts == ["api", "extensions", "install"]:
-        length = int(h.headers.get("Content-Length") or 0)
-        raw = h.rfile.read(length) if length else b"{}"
-        try:
-            body = json.loads(raw or b"{}")
-        except json.JSONDecodeError:
-            _http_send(h, 400, {"ok": False, "error": "invalid JSON body"})
-            return
-        try:
-            _http_send(h, 200, install_extension(
-                workspace, body.get("package") or {}, bool(body.get("confirmed"))))
-        except ValueError as exc:
-            _http_send(h, 400, {"ok": False, "error": str(exc)})
+        _http_send(h, 410, {"ok": False, "error": (
+            "extension install via HTTP was removed (audit A4). Manage "
+            "extensions from the cadre CLI.")})
         return
     # Routes: /api/views/<id>/action/<key> — firm-declared view actions
     if len(parts) == 5 and parts[:2] == ["api", "views"] and parts[3] == "action":
@@ -2409,6 +2381,8 @@ def _firm_post(
 
 def make_handler(workspace: Path, firm_id: str) -> type[BaseHTTPRequestHandler]:
     db_path = get_db_path(workspace)
+    token_path = workspace / ".firm" / "dashboard.token"
+    _ensure_dashboard_token(token_path)  # mint the 0600 capability token now
 
     class DashboardHandler(BaseHTTPRequestHandler):
         server_version = "CadreBoardroom/1.0"
@@ -2420,6 +2394,9 @@ def make_handler(workspace: Path, firm_id: str) -> type[BaseHTTPRequestHandler]:
             _firm_get(self, workspace, db_path, firm_id, self.path)
 
         def do_POST(self) -> None:
+            if not _request_authorized(self, token_path):
+                _reject_unauthorized(self)
+                return
             _firm_post(self, workspace, db_path, firm_id, self.path)
 
     return DashboardHandler
@@ -2461,6 +2438,7 @@ def run_dashboard(
         "url": f"http://{host}:{port}",
         "workspace": str(workspace),
         "firm_id": firm_id,
+        "token_file": str(workspace / ".firm" / "dashboard.token"),
     }))
     try:
         server.serve_forever()
@@ -2728,6 +2706,8 @@ load(); setInterval(load, 10000);
 
 def make_hub_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     registry: dict[str, dict[str, Any]] = discover_firms(root)
+    token_path = root / ".dashboard.token"
+    _ensure_dashboard_token(token_path)  # mint the hub's 0600 capability token
 
     def _resolve(fid: str) -> dict[str, Any] | None:
         if fid not in registry:
@@ -2892,6 +2872,9 @@ def make_hub_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             _http_send(self, 404, {"error": "not found"})
 
         def do_POST(self) -> None:
+            if not _request_authorized(self, token_path):
+                _reject_unauthorized(self)
+                return
             if self.path.startswith("/api/next/"):
                 from firm.dashboard import founding
                 length = int(self.headers.get("Content-Length") or 0)
@@ -3078,6 +3061,7 @@ def run_hub(
         "url": f"http://{host}:{port}",
         "root": str(root),
         "firms": sorted(firms),
+        "token_file": str(root / ".dashboard.token"),
     }))
     try:
         server.serve_forever()

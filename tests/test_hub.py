@@ -225,7 +225,7 @@ def test_pulse_action_dispatches_detached(hub_server: str, monkeypatch):
     req = urllib.request.Request(
         hub_server + "/f/alpha/api/action/pulse/now",
         data=b"{}", method="POST",
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Origin": "http://127.0.0.1"},
     )
     with urllib.request.urlopen(req) as resp:
         out = json.loads(resp.read())
@@ -271,7 +271,7 @@ def test_commission_creates_unit_and_dispatches(hub_server: str, firms_root: Pat
     req = urllib.request.Request(
         hub_server + "/f/alpha/api/action/member-commission/MEM-001",
         data=json.dumps({"instructions": "Render portraits for every registered NPC"}).encode(),
-        method="POST", headers={"Content-Type": "application/json"},
+        method="POST", headers={"Content-Type": "application/json", "Origin": "http://127.0.0.1"},
     )
     with urllib.request.urlopen(req) as resp:
         out = json.loads(resp.read())
@@ -358,7 +358,7 @@ def test_resolve_with_followup_commissions_raiser(hub_server: str, firms_root: P
     req = urllib.request.Request(
         hub_server + "/f/alpha/api/action/escalation-resolve/ESC-010",
         data=json.dumps({"resolution": "Hold and read it", "queue_followup": True}).encode(),
-        method="POST", headers={"Content-Type": "application/json"},
+        method="POST", headers={"Content-Type": "application/json", "Origin": "http://127.0.0.1"},
     )
     with urllib.request.urlopen(req) as resp:
         out = json.loads(resp.read())
