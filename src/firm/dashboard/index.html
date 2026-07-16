@@ -695,7 +695,7 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 /* ---- The Floor: character sheet (dossier plate) ---- */
 .sheet{background:var(--brand-canvas);border:1px solid var(--brand-border-hover);border-radius:16px;
   box-shadow:0 32px 80px rgba(0,0,0,.5);width:min(1020px,96vw);position:relative;overflow:hidden}
-.sheetscroll{max-height:92vh;overflow-y:auto;overscroll-behavior:contain;
+.sheetscroll{max-height:92vh;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;
   scrollbar-width:thin;scrollbar-color:transparent transparent}
 .sheetscroll:hover,.sheetscroll.scrolling{scrollbar-color:color-mix(in srgb, var(--brand-text) 22%, transparent) transparent}
 .sheetscroll::-webkit-scrollbar{width:6px}
@@ -709,6 +709,18 @@ tr.flash td{animation:rowflash 2.2s ease-out}
   font:400 15px/1 var(--font-body);transition:color 140ms,border-color 140ms}
 .sclose:hover{color:var(--brand-text);border-color:var(--brand-border-hover)}
 .sclose:focus-visible{outline:2px solid var(--brand-primary);outline-offset:2px}
+/* roster cycling — arrows live outside the sheet, on the room's edges */
+.snav{position:absolute;top:50%;transform:translateY(-50%);z-index:4;width:48px;height:48px;
+  border-radius:9999px;border:1px solid var(--brand-border-hover);background:var(--brand-elevated);
+  color:var(--brand-text-secondary);font:300 28px/1 var(--font-display);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;padding-bottom:3px;
+  transition:color .15s,border-color .15s,box-shadow .15s}
+.snav:hover{color:var(--brand-primary);border-color:rgba(var(--brand-primary-rgb),.5);
+  box-shadow:0 0 18px rgba(var(--brand-primary-rgb),.25)}
+.snav:focus-visible{outline:2px solid var(--brand-primary);outline-offset:2px}
+.snav.prev{left:22px}
+.snav.next{right:22px}
+@media(max-width:700px){.snav{display:none}}
 
 .sheethead{padding:30px 34px 24px;padding-right:60px;
   background-image:radial-gradient(var(--dot) 1px, transparent 1px);background-size:24px 24px}
@@ -742,11 +754,17 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .sbadge.ok{color:var(--brand-primary);border-color:rgba(var(--brand-primary-rgb),.4)}
 .sbadge.lead{color:var(--brand-warning);border-color:color-mix(in srgb, var(--brand-warning) 45%, transparent)}
 .sbadge.burn b{color:var(--brand-primary);font-weight:600;margin-right:5px}
-/* head columns: description owns 60%, the progress bands ride the right 40% */
+/* head columns: description owns 60%, the progress bands ride the right 40%.
+   The portrait floats in the left column so role, badges, and description
+   flow beside it and then wrap beneath — no dead room under the picture. */
 .headcols{flex:1;min-width:0;display:grid;grid-template-columns:3fr 2fr;gap:16px 32px;align-items:start}
 .hleft{min-width:0}
+.hleft .portrait{float:left;margin:4px 28px 24px 0}
+.hleft::after{content:'';display:table;clear:both}
 .hright{min-width:0}
-.hright .xpband{margin-top:0}
+.hright .xpband{margin-top:0;flex-wrap:wrap}
+.hright .xpband .xbar{flex:1;min-width:90px}
+.hright .xpband .xv{max-width:100%;white-space:normal;line-height:1.45}
 .hright .bandcell + .bandcell{margin-top:16px}
 .classline{margin-top:2px}
 @media(max-width:980px){.headcols{grid-template-columns:1fr}.hright{margin-top:6px}}
@@ -1399,6 +1417,8 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 </div>
 
 <div class="overlay" id="floorWrap">
+  <button class="snav prev" onclick="cycleSheet(-1)" aria-label="Previous member" title="Previous member (←)">‹</button>
+  <button class="snav next" onclick="cycleSheet(1)" aria-label="Next member" title="Next member (→)">›</button>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetName" id="floorSheet"></div>
   <div class="palette" id="equipPalette" hidden role="dialog" aria-modal="true" aria-labelledby="palTitle">
     <div class="phead"><span class="ptitle" id="palTitle"></span>
@@ -2623,6 +2643,21 @@ document.getElementById('floorWrap').addEventListener('click', e => {
   else closeSheet();
 });
 
+/* Cycle the open sheet through the roster — wraps at both ends. */
+function cycleSheet(dir){
+  const ms = ((FLOOR || {}).members || []);
+  if(!ms.length || !sheetCtx) return;
+  const i = ms.findIndex(x => x.id === sheetCtx);
+  const next = ms[((i < 0 ? 0 : i) + dir + ms.length) % ms.length];
+  if(next) openSheet(next.id);
+}
+document.addEventListener('keydown', e => {
+  if(e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  if(!document.getElementById('floorWrap').classList.contains('show')) return;
+  if(/INPUT|TEXTAREA|SELECT/.test((e.target || {}).tagName || '')) return;
+  cycleSheet(e.key === 'ArrowLeft' ? -1 : 1);
+});
+
 /* ---- the armory picker: search the machine's inventory, one click equips ---- */
 let palCtx = null;      // {memberId, kind}
 let palItems = [];
@@ -2955,24 +2990,23 @@ function sheetHtml(m){
 
   return `
     <div class="sheethead">
-      <div class="plateline">
-        <div class="portrait">${esc(initials(m.name))}${avatarImg(m.name)}
-          <span class="lvplate">LV ${m.level}</span>
-          <div class="nameplate"><h3 id="sheetName">${esc(m.name)}</h3></div>
-        </div>
-        <div class="headcols">
-          <div class="hleft">
-            <div class="classline">${esc(m.role || 'unassigned')}</div>
-            <div class="badgerow">
-              <span class="sbadge id">${esc(m.id)}</span>
-              ${tenure}
-              <span class="sbadge${m.status === 'active' ? ' ok' : ''}">${esc(String(m.status || '').toUpperCase())}</span>
-              ${m.lead ? '<span class="sbadge lead" title="Others on the roster report to this member">LEAD</span>' : ''}
-              ${burn}
-            </div>
-            ${m.owns ? `<div class="sowns">${esc(m.owns)}</div>` : ''}
+      <div class="headcols">
+        <div class="hleft">
+          <div class="portrait">${esc(initials(m.name))}${avatarImg(m.name)}
+            <span class="lvplate">LV ${m.level}</span>
+            <div class="nameplate"><h3 id="sheetName">${esc(m.name)}</h3></div>
           </div>
-          <div class="hright">
+          <div class="classline">${esc(m.role || 'unassigned')}</div>
+          <div class="badgerow">
+            <span class="sbadge id">${esc(m.id)}</span>
+            ${tenure}
+            <span class="sbadge${m.status === 'active' ? ' ok' : ''}">${esc(String(m.status || '').toUpperCase())}</span>
+            ${m.lead ? '<span class="sbadge lead" title="Others on the roster report to this member">LEAD</span>' : ''}
+            ${burn}
+          </div>
+          ${m.owns ? `<div class="sowns">${esc(m.owns)}</div>` : ''}
+        </div>
+        <div class="hright">
             <div class="bandcell">
               <div class="xpband">
                 <span class="xk">LEVEL ${m.level}</span>
@@ -2981,8 +3015,7 @@ function sheetHtml(m){
               </div>
               <div class="xwhy">${esc(XP_WHY)}</div>
             </div>
-            <div class="bandcell">${tierBand(m)}</div>
-          </div>
+          <div class="bandcell">${tierBand(m)}</div>
         </div>
       </div>
       <div class="sheetlive" id="sheetLive" hidden aria-live="polite">
