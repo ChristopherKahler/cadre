@@ -712,22 +712,26 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 
 .sheethead{padding:30px 34px 24px;padding-right:60px;
   background-image:radial-gradient(var(--dot) 1px, transparent 1px);background-size:24px 24px}
-.plateline{display:flex;gap:22px;align-items:flex-start}
-.portrait{width:150px;height:150px;flex:none;border-radius:16px;position:relative;
+.plateline{display:flex;gap:28px;align-items:flex-start;padding-bottom:14px}
+.portrait{width:190px;height:190px;flex:none;border-radius:18px;position:relative;
   display:flex;align-items:center;justify-content:center;
   background:var(--brand-gradient);background-size:300% 100%;
   border:1px solid var(--brand-border-hover);box-shadow:inset 0 0 0 1px rgba(0,0,0,.25), 0 8px 24px rgba(0,0,0,.35);
   font:800 50px var(--font-display);color:#fff;letter-spacing:-.02em}
-.lvplate{position:absolute;bottom:-12px;left:50%;transform:translateX(-50%);white-space:nowrap;
+.lvplate{position:absolute;top:-10px;right:-10px;white-space:nowrap;
   background:var(--brand-elevated);border:1px solid var(--brand-border-hover);border-radius:7px;
   font:700 12px/1 var(--font-mono);letter-spacing:.14em;color:var(--brand-text);padding:6px 13px;
   box-shadow:0 4px 12px rgba(0,0,0,.35)}
+/* the name rides the portrait's lower edge — a name badge, not a headline */
+.nameplate{position:absolute;left:50%;bottom:-16px;transform:translateX(-50%);white-space:nowrap;
+  background:var(--brand-elevated);border:1px solid var(--brand-border-hover);border-radius:10px;
+  padding:7px 18px;box-shadow:0 6px 18px rgba(0,0,0,.4)}
 .swho{flex:1;min-width:0}
 .serial{font:500 9.5px var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--brand-text-dim);
   display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}
 .serial .burn{color:var(--brand-text-secondary)}
 .serial .burn b{color:var(--brand-primary);font-weight:600;margin-right:3px}
-.sheethead h3{font:800 42px/1.02 var(--font-display);letter-spacing:-.02em;color:var(--brand-text);margin-top:2px}
+.sheethead h3{font:800 24px/1.05 var(--font-display);letter-spacing:-.01em;color:var(--brand-text);margin:0}
 .classline{font:600 13px var(--font-mono);letter-spacing:.22em;text-transform:uppercase;color:var(--brand-warning);margin-top:7px}
 .sowns{color:var(--brand-text-secondary);font-size:13.5px;line-height:1.6;margin-top:12px;max-width:64ch}
 /* identity badges — chips, not a caption line */
@@ -738,10 +742,14 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .sbadge.ok{color:var(--brand-primary);border-color:rgba(var(--brand-primary-rgb),.4)}
 .sbadge.lead{color:var(--brand-warning);border-color:color-mix(in srgb, var(--brand-warning) 45%, transparent)}
 .sbadge.burn b{color:var(--brand-primary);font-weight:600;margin-right:5px}
-/* the two progress bands share a row; they stack on narrow sheets */
-.bandrow{display:grid;grid-template-columns:1fr 1fr;gap:10px 28px;margin-top:24px}
-.bandrow .xpband{margin-top:0}
-@media(max-width:880px){.bandrow{grid-template-columns:1fr}}
+/* head columns: description owns 60%, the progress bands ride the right 40% */
+.headcols{flex:1;min-width:0;display:grid;grid-template-columns:3fr 2fr;gap:16px 32px;align-items:start}
+.hleft{min-width:0}
+.hright{min-width:0}
+.hright .xpband{margin-top:0}
+.hright .bandcell + .bandcell{margin-top:16px}
+.classline{margin-top:2px}
+@media(max-width:980px){.headcols{grid-template-columns:1fr}.hright{margin-top:6px}}
 .xpband{display:flex;align-items:center;gap:14px;margin-top:20px}
 .xpband .xk{font:600 11.5px var(--font-mono);letter-spacing:.16em;color:var(--brand-text);flex:none}
 .xbar{flex:1;height:9px;border-radius:5px;background:var(--brand-tint-1);
@@ -1024,8 +1032,8 @@ tr.flash td{animation:rowflash 2.2s ease-out}
   .sheethead{padding:24px 20px 20px;padding-right:54px}
   .szone{padding:18px 20px 22px}
   .plateline{gap:16px}
-  .portrait{width:104px;height:104px;font-size:34px;border-radius:12px}
-  .sheethead h3{font-size:30px}
+  .portrait{width:128px;height:128px;font-size:40px;border-radius:14px}
+  .sheethead h3{font-size:19px}
 }
 
 /* ---- mobile ---- */
@@ -2948,30 +2956,34 @@ function sheetHtml(m){
   return `
     <div class="sheethead">
       <div class="plateline">
-        <div class="portrait">${esc(initials(m.name))}${avatarImg(m.name)}<span class="lvplate">LV ${m.level}</span></div>
-        <div class="swho">
-          <h3 id="sheetName">${esc(m.name)}</h3>
-          <div class="classline">${esc(m.role || 'unassigned')}</div>
-          <div class="badgerow">
-            <span class="sbadge id">${esc(m.id)}</span>
-            ${tenure}
-            <span class="sbadge${m.status === 'active' ? ' ok' : ''}">${esc(String(m.status || '').toUpperCase())}</span>
-            ${m.lead ? '<span class="sbadge lead" title="Others on the roster report to this member">LEAD</span>' : ''}
-            ${burn}
-          </div>
-          ${m.owns ? `<div class="sowns">${esc(m.owns)}</div>` : ''}
+        <div class="portrait">${esc(initials(m.name))}${avatarImg(m.name)}
+          <span class="lvplate">LV ${m.level}</span>
+          <div class="nameplate"><h3 id="sheetName">${esc(m.name)}</h3></div>
         </div>
-      </div>
-      <div class="bandrow">
-        <div class="bandcell">
-          <div class="xpband">
-            <span class="xk">LEVEL ${m.level}</span>
-            <div class="xbar" role="img" aria-label="${m.xp} XP, ${pct.toFixed(0)}% toward the next level"><div style="width:${pct}%"></div></div>
-            <span class="xv">${m.xp}${m.level_next_at != null ? ' / ' + m.level_next_at + ' XP' : ' XP · CAP'}</span>
+        <div class="headcols">
+          <div class="hleft">
+            <div class="classline">${esc(m.role || 'unassigned')}</div>
+            <div class="badgerow">
+              <span class="sbadge id">${esc(m.id)}</span>
+              ${tenure}
+              <span class="sbadge${m.status === 'active' ? ' ok' : ''}">${esc(String(m.status || '').toUpperCase())}</span>
+              ${m.lead ? '<span class="sbadge lead" title="Others on the roster report to this member">LEAD</span>' : ''}
+              ${burn}
+            </div>
+            ${m.owns ? `<div class="sowns">${esc(m.owns)}</div>` : ''}
           </div>
-          <div class="xwhy">${esc(XP_WHY)}</div>
+          <div class="hright">
+            <div class="bandcell">
+              <div class="xpband">
+                <span class="xk">LEVEL ${m.level}</span>
+                <div class="xbar" role="img" aria-label="${m.xp} XP, ${pct.toFixed(0)}% toward the next level"><div style="width:${pct}%"></div></div>
+                <span class="xv">${m.xp}${m.level_next_at != null ? ' / ' + m.level_next_at + ' XP' : ' XP · CAP'}</span>
+              </div>
+              <div class="xwhy">${esc(XP_WHY)}</div>
+            </div>
+            <div class="bandcell">${tierBand(m)}</div>
+          </div>
         </div>
-        <div class="bandcell">${tierBand(m)}</div>
       </div>
       <div class="sheetlive" id="sheetLive" hidden aria-live="polite">
         <span class="fdot"></span><span>Working</span>
