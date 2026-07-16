@@ -2,11 +2,18 @@
 
 A spawned Member could otherwise mark its own Unit done, resolve the
 Escalation raised about its own work, or rewrite the Goals it is measured
-against. This module gates those actions on a Board-granted key living on
-the Member record (``member.autonomy["authority"]``).
+against. This module gates those actions on a Board-granted capability
+carried in the Member's autonomy block.
 
-Identity comes from the process environment (``CADRE_MEMBER_ID``), stamped
-by :func:`firm.pulse.spawn.spawn_member_run`. The firm MCP server is a stdio
+Storage is the sovereign-override contract from :mod:`firm.services.autonomy`
+— ``member.autonomy`` = ``{"sovereign": ["*"] | [capability, ...]}``. The
+authority key is the ``"authority"`` token in that list; ``"*"`` (blanket
+sovereignty) implies it. Sharing that block rather than forking a sibling key
+keeps this schema-compatible with the Calibration Ladder, which derives trust
+tiers from the same override.
+
+Identity comes from the process environment (``CADRE_MEMBER_ID``), stamped by
+:func:`firm.pulse.spawn.spawn_member_run`. The firm MCP server is a stdio
 server spawned per-client, so it inherits the Member's env; a Bash subshell
 inside a Member run inherits it too. One env read therefore covers every way
 a Member reaches the service layer.
@@ -20,15 +27,16 @@ Three caller classes:
 Gate decisions and grant/revoke are *board-only*: the key does NOT unlock
 them. Grant/revoke is deliberately absent from the MCP surface, and
 :func:`require_board_only` closes the CLI path too — otherwise an authority
-holder could shell out and mint its own authority, which is the same hole
-one level up.
+holder could shell out and mint its own authority, which is the same hole one
+level up.
 
 Scope, honestly: Members run with ``--dangerously-skip-permissions``, so a
 determined one can bypass all of this by opening the SQLite file directly.
 This gates the *tool surface* — the path a model actually reaches for. It is
 a guardrail against overreach, not a sandbox against an adversary.
 
-Records events: member.authority_granted, member.authority_revoked
+Records events: member.authority_granted, member.authority_revoked (plus
+member.autonomy_updated from the shared autonomy write path).
 """
 
 from __future__ import annotations
@@ -42,9 +50,17 @@ from typing import Any, Iterator
 from firm.core import repo
 from firm.services._records import log_event
 from firm.services._validate import require_exists
+from firm.services.autonomy import _load, set_sovereign_override
 
 #: Env var carrying the acting Member's ID into a spawned run.
 MEMBER_ID_ENV = "CADRE_MEMBER_ID"
+
+#: The capability token that unlocks the gated management tools.
+AUTHORITY_CAPABILITY = "authority"
+
+#: Blanket sovereignty — the Board granting everything at once. Implies the
+#: authority key without naming it.
+BLANKET = "*"
 
 #: True while the harness is acting on its own behalf inside a Member run's
 #: process tree. See :func:`system_context`.
@@ -93,17 +109,29 @@ def caller_member_id() -> str | None:
     return os.environ.get(MEMBER_ID_ENV, "").strip() or None
 
 
-def has_authority(conn: sqlite3.Connection, member_id: str) -> bool:
-    """Whether *member_id* holds the authority key. Unknown member → False."""
+def sovereign_capabilities(
+    conn: sqlite3.Connection, member_id: str,
+) -> list[str]:
+    """The Board's authored override list for *member_id*.
+
+    ``["*"]`` = blanket sovereignty; else the capabilities granted directly.
+    ``[]`` = no override. Mirrors ``dashboard.calibration.sovereign_capabilities``
+    on the read side; a malformed block grants nothing rather than crashing.
+    """
     member = repo.get(conn, "member", member_id)
     if not member:
-        return False
-    autonomy = member.get("autonomy")
-    # repo keeps the raw string when a JSON column fails to parse — a
-    # malformed autonomy blob grants nothing rather than crashing the run.
-    if not isinstance(autonomy, dict):
-        return False
-    return autonomy.get("authority") is True
+        return []
+    sov = _load(member.get("autonomy")).get("sovereign")
+    return [str(s) for s in sov] if isinstance(sov, list) else []
+
+
+def _holds(capabilities: list[str]) -> bool:
+    return BLANKET in capabilities or AUTHORITY_CAPABILITY in capabilities
+
+
+def has_authority(conn: sqlite3.Connection, member_id: str) -> bool:
+    """Whether *member_id* holds the authority key. Unknown member → False."""
+    return _holds(sovereign_capabilities(conn, member_id))
 
 
 def require_authority(conn: sqlite3.Connection, action: str) -> str | None:
@@ -170,7 +198,14 @@ def revoke_authority(
     *,
     comment: str | None = None,
 ) -> dict[str, Any]:
-    """Revoke the authority key from a Member. Board-only. Idempotent."""
+    """Revoke the authority key from a Member. Board-only. Idempotent.
+
+    Raises:
+        ValueError: The Member holds blanket sovereignty (``"*"``). Dropping
+            the ``authority`` token would leave the key in force via the
+            blanket grant, so this refuses rather than report a revoke that
+            did not happen.
+    """
     return _set_authority(conn, member_id, False, comment=comment)
 
 
@@ -186,27 +221,36 @@ def _set_authority(
         hint=_GRANT_HINT,
     )
     member = require_exists(conn, "member", member_id)
+    caps = sovereign_capabilities(conn, member_id)
 
-    autonomy = member.get("autonomy")
-    if not isinstance(autonomy, dict):
-        autonomy = {}
+    if not granted and BLANKET in caps:
+        raise ValueError(
+            f"{member_id} holds blanket sovereignty ('*'), which grants "
+            f"authority regardless of the '{AUTHORITY_CAPABILITY}' token — "
+            "dropping the token would revoke nothing. Clear the sovereign "
+            "override instead."
+        )
 
-    if (autonomy.get("authority") is True) == granted:
+    if _holds(caps) == granted:
         return member  # no state change is not a governance event
 
-    updated = repo.update(
-        conn, "member", member_id, {"autonomy": {**autonomy, "authority": granted}},
-    )
-    assert updated is not None, "member disappeared after require_exists"
+    if granted:
+        caps = [*caps, AUTHORITY_CAPABILITY]
+    else:
+        caps = [c for c in caps if c != AUTHORITY_CAPABILITY]
 
-    # Logged only on a real transition, matching update_member's
-    # status_transition convention — the Records trail carries changes.
+    # The shared autonomy write path: normalizes, persists, and records
+    # member.autonomy_updated. The authority event below rides on top of it
+    # because that one carries the Board's reason, which the audit trail and
+    # board pack need and the generic autonomy event has no field for.
+    updated = set_sovereign_override(conn, member_id, caps)
+
     log_event(
         conn,
         firm_id=member["firm_id"],
         event_type="member.authority_granted" if granted else "member.authority_revoked",
         actor={"type": "board", "id": None},
         target_ref={"type": "member", "id": member_id},
-        details={"authority": granted, "comment": comment},
+        details={"authority": granted, "comment": comment, "sovereign": caps},
     )
     return updated

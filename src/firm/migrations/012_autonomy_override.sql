@@ -1,0 +1,24 @@
+-- 012_autonomy_override: sovereign Board override for the Calibration Ladder.
+-- Spec source: fork cadre-calibration-ladder (2026-07-15).
+--
+-- The Calibration Ladder derives a per-Member trust TIER (T0-T4) at read time
+-- from the run-score aggregate — there is NO stored tier (Floor law 2: derived,
+-- never authored). The ONE piece of authored state the Ladder adds is this
+-- override: the Board directly grants a Member a capability, bypassing the
+-- earned tier (the Board owns the risk).
+--
+-- member.autonomy is a JSON block: {"sovereign": ["*"] | [capability, ...]}.
+--   '*'          = blanket sovereignty (every seal loosenable at will)
+--   [cap, ...]   = exactly those capabilities / risk-classes granted directly
+-- Additive, nullable — NULL = no override, the guardrail default (the ladder
+-- gates every loosening). Written ONLY via services/autonomy.py (Invariant #2);
+-- read ONLY by dashboard/calibration.py. Board config, never member-authored,
+-- never member-read (Invariant #5) — it reaches no MCP tool and no pulse/prompt
+-- renderer.
+--
+-- Named 'autonomy' (not 'sovereign_override') deliberately: loadout-
+-- consolidation v2 unifies a member-level autonomy block, and it extends THIS
+-- same column rather than forking a sibling.
+
+ALTER TABLE member ADD COLUMN autonomy TEXT;
+-- JSON autonomy block. NULL = no sovereign override (guardrail default).

@@ -34,6 +34,7 @@ from firm.pulse.orchestrator import (
     _contract_timeout_sec,
     compute_load,
 )
+from firm.services import authority as authority_svc
 from firm.services import comment as comment_svc
 from firm.services import document as document_svc
 from firm.services import escalation as escalation_svc
@@ -691,6 +692,10 @@ def member_profile(
         "instructions": instructions,
         "current_units": current,
         "prompt_preview": prompt_preview,
+        # Derived live from the member record on every open — the badge must
+        # never show a cached grant (honest-state rule).
+        "authority": authority_svc.has_authority(conn, member_id),
+        "sovereign": authority_svc.sovereign_capabilities(conn, member_id),
     }
 
 
@@ -760,6 +765,19 @@ def perform_action(
             "body": body.get("body"),
             "author_type": "board",
         })
+    if action == "member-authority":
+        # The Board's grant toggle. Calls the SAME service the CLI verb
+        # (`firm member grant|revoke authority`) calls — one code path, so the
+        # two surfaces cannot drift. Never an MCP tool: an authority holder
+        # able to mint authority is the same hole one level up. Auth is the
+        # HTTP boundary's job, not this action's, so a token gate composes in
+        # front without touching either.
+        grant = bool(body.get("grant"))
+        fn = (
+            authority_svc.grant_authority if grant
+            else authority_svc.revoke_authority
+        )
+        return fn(conn, entity_id, comment=body.get("comment") or None)
     if action == "member-update":
         data = {
             k: body[k]

@@ -1535,8 +1535,23 @@ function renderProfile(P){
     ? (P.members.find(x => x.id === m.reports_to_member_id)?.name || m.reports_to_member_id)
     : 'THE BOARD';
   const statusDot = m.status === 'active' ? 'ok' : 'warn';
+  // Authority badge — gold border on the name + a key beside the ID pill.
+  // Read straight off this payload, which recomputes from the member record
+  // on every open; never cached, so the badge cannot outlive the grant.
+  const blanket = (P.sovereign || []).includes('*');
+  document.getElementById('pName').style.borderBottom =
+    P.authority ? '2px solid var(--brand-accent)' : '';
+  document.getElementById('pName').title =
+    P.authority
+      ? (blanket ? 'Holds blanket sovereignty (*) — authority implied' : 'Holds the authority key')
+      : '';
+  const keyChip = P.authority
+    ? `<span class="chip" style="border-color:var(--brand-accent);color:var(--brand-accent)"
+         title="${blanket ? 'Blanket sovereignty (*)' : 'Board-granted authority'}">🔑 authority</span>`
+    : '';
   document.getElementById('pMeta').innerHTML = `
     <span class="chip"><span class="cl">ID</span> <span class="mono" style="font-size:11px">${esc(m.id)}</span></span>
+    ${keyChip}
     <span class="chip"><span class="sdot ${statusDot}"></span> ${esc(m.status)}</span>
     <span class="chip"><span class="cl">Contract</span> ${esc(P.contract ? P.contract.name : 'none')}</span>
     <span class="chip"><span class="cl">Reports to</span> ${esc(mgr)}</span>`;
@@ -1631,6 +1646,24 @@ function renderProfile(P){
     <div class="field"><label>Reports to</label><select id="fMgr">${mgrOpts}</select></div>
     <div class="field"><label>Contract</label><select id="fContract">${contractOpts}</select></div>
     <div class="btn-row" style="margin-bottom:26px"><button class="btn primary" onclick="saveMember()">Save changes</button></div>
+    <div class="seclabel">Authority key — lets this member self-govern: create/update members, complete units, resolve escalations, update goals</div>
+    <div class="field" style="margin-bottom:26px">
+      <div style="font-size:12px;color:var(--brand-text-secondary);margin-bottom:8px">
+        ${P.authority
+          ? (blanket
+              ? 'Held via blanket sovereignty (<span class="mono">*</span>) — revoke by clearing the sovereign override, not here.'
+              : 'Held. Gate decisions stay with the Board regardless.')
+          : 'Not held. Denied management calls are told to escalate instead.'}
+      </div>
+      <input id="fAuthComment" placeholder="Why (recorded on the audit row)" style="margin-bottom:8px">
+      <div class="btn-row">
+        <button class="btn ${P.authority ? '' : 'primary'}"
+                onclick="setAuthority(${P.authority ? 'false' : 'true'})"
+                ${P.authority && blanket ? 'disabled' : ''}>
+          ${P.authority ? 'Revoke authority' : 'Grant authority'}
+        </button>
+      </div>
+    </div>
     <div class="seclabel">Standing instructions file — appended to the identity section of every prompt</div>
     <div class="field"><textarea id="fInstructions" style="min-height:160px;font-family:var(--font-mono);font-size:12px">${esc(P.instructions)}</textarea></div>
     <div class="btn-row"><button class="btn primary" onclick="saveInstructions()">Save instructions</button></div>`;
@@ -1672,6 +1705,18 @@ async function saveMember(){
   });
   if(out.ok){ toast('Member updated'); lastHash = null; poll(); openProfile(profileCtx); }
   else toast(out.error || 'Update failed', true);
+}
+async function setAuthority(grant){
+  if(!profileCtx) return;
+  const out = await postAction('member-authority/' + encodeURIComponent(profileCtx), {
+    grant: grant,
+    comment: document.getElementById('fAuthComment').value.trim(),
+  });
+  if(out.ok){
+    toast(grant ? 'Authority granted — takes effect on the next run' : 'Authority revoked');
+    lastHash = null; poll(); openProfile(profileCtx);
+  }
+  else toast(out.error || 'Failed', true);
 }
 async function saveInstructions(){
   if(!profileCtx) return;
