@@ -65,9 +65,58 @@ def _build_parser() -> argparse.ArgumentParser:
 
     unit_parser = subparsers.add_parser(
         "unit",
-        help="Unit lifecycle operations (complete, ...).",
+        help="Unit lifecycle operations (create, complete).",
     )
     unit_sub = unit_parser.add_subparsers(dest="unit_command", metavar="<unit-command>")
+
+    create_parser = unit_sub.add_parser(
+        "create",
+        help="Queue a new Unit of work; prints the new unit id.",
+    )
+    create_parser.add_argument(
+        "--name", required=True,
+        help="What the Unit is (required).",
+    )
+    create_parser.add_argument(
+        "--project", dest="project_id", required=True,
+        help="Project the Unit belongs to (e.g., PRJ-010).",
+    )
+    create_parser.add_argument(
+        "--description", default="",
+        help="The why and the context the assignee needs.",
+    )
+    create_parser.add_argument(
+        "--assignee", default=None,
+        help="Member to assign (e.g., MEM-004). Defaults to the calling member "
+             "($CADRE_MEMBER_ID); omitted entirely for a Board call.",
+    )
+    create_parser.add_argument(
+        "--priority", default="medium",
+        choices=["urgent", "high", "medium", "low"],
+        help="Queue priority (default: medium).",
+    )
+    create_parser.add_argument(
+        "--depends-on", dest="depends_on", action="append", default=None,
+        metavar="UNIT_ID",
+        help="Unit this one is blocked by. Repeatable.",
+    )
+    create_parser.add_argument(
+        "--ac", dest="acceptance_criteria", action="append", default=None,
+        metavar="TEXT",
+        help="Acceptance criterion for the Unit. Repeatable.",
+    )
+    create_parser.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
+    create_parser.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. Defaults to the firm this workspace's db holds.",
+    )
+    create_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Print the planned changes without writing to the DB.",
+    )
 
     complete_parser = unit_sub.add_parser(
         "complete",
@@ -83,6 +132,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional member_run id linking the transition to a Run.",
     )
     complete_parser.add_argument(
+        "--outputs", action="append", default=None, metavar="PATH",
+        help="Produced file to register as a Document against the Unit and "
+             "record on unit.outputs. Repeatable. A path that isn't on disk "
+             "aborts without completing.",
+    )
+    complete_parser.add_argument(
         "--workspace", type=Path, default=None,
         help="Workspace containing .firm/firm.db (defaults to current directory).",
     )
@@ -93,6 +148,47 @@ def _build_parser() -> argparse.ArgumentParser:
     complete_parser.add_argument(
         "--dry-run", action="store_true",
         help="Print the planned changes without writing to the DB.",
+    )
+
+    # ---- doc subparser: the Member's deliverable-registration surface ----
+    doc_parser = subparsers.add_parser(
+        "doc",
+        help="Deliverable operations (register).",
+    )
+    doc_sub = doc_parser.add_subparsers(dest="doc_command", metavar="<doc-command>")
+
+    doc_register_parser = doc_sub.add_parser(
+        "register",
+        help="Register a produced file as a Unit's deliverable (Document + outputs).",
+    )
+    doc_register_parser.add_argument(
+        "--unit", dest="unit_id", required=True,
+        help="Unit the deliverable belongs to (e.g., UNIT-012).",
+    )
+    doc_register_parser.add_argument(
+        "--path", required=True,
+        help="Path to the produced file. Must exist on disk.",
+    )
+    doc_register_parser.add_argument(
+        "--name", default=None,
+        help="Document name (defaults to the filename).",
+    )
+    doc_register_parser.add_argument(
+        "--type", dest="doc_type", default="draft",
+        help="Document type (default: draft).",
+    )
+    doc_register_parser.add_argument(
+        "--member", dest="member_id", default=None,
+        help="Member registering it (actor on the records row). Defaults to "
+             "$CADRE_MEMBER_ID.",
+    )
+    doc_register_parser.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
+    doc_register_parser.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. Defaults to the firm this workspace's db holds.",
     )
 
     # ---- escalation subparser (MCP->CLI write-surface migration) ----
@@ -616,6 +712,23 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.command == "unit":
+        if args.unit_command == "create":
+            from firm.cli.unit import run_unit_create
+
+            workspace = args.workspace if args.workspace is not None else Path.cwd()
+            firm_id = args.firm_id or None
+            return run_unit_create(
+                workspace=workspace,
+                name=args.name,
+                project_id=args.project_id,
+                description=args.description,
+                assignee=args.assignee,
+                priority=args.priority,
+                depends_on=args.depends_on,
+                acceptance_criteria=args.acceptance_criteria,
+                dry_run=args.dry_run,
+                firm_id=firm_id,
+            )
         if args.unit_command == "complete":
             from firm.cli.unit import run_unit_complete
 
@@ -626,10 +739,29 @@ def main(argv: list[str] | None = None) -> int:
                 unit_id=args.unit_id,
                 member_id=args.member_id,
                 run_id=args.run_id,
+                outputs=args.outputs,
                 dry_run=args.dry_run,
                 firm_id=firm_id,
             )
         parser.parse_args(["unit", "--help"])
+        return 0
+
+    if args.command == "doc":
+        if args.doc_command == "register":
+            from firm.cli.unit import run_doc_register
+
+            workspace = args.workspace if args.workspace is not None else Path.cwd()
+            firm_id = args.firm_id or None
+            return run_doc_register(
+                workspace=workspace,
+                unit_id=args.unit_id,
+                path=args.path,
+                member_id=args.member_id,
+                name=args.name,
+                doc_type=args.doc_type,
+                firm_id=firm_id,
+            )
+        parser.parse_args(["doc", "--help"])
         return 0
 
     if args.command == "escalation":

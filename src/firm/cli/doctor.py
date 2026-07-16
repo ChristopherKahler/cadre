@@ -221,6 +221,40 @@ def diagnose(workspace: Path, firm_id: str, *,
             f"{backlog} denial(s) not yet on Records" if backlog else "none",
             fix="ingest into Records + escalations"))
 
+        # 10b. deliverables reach Records — train (registering needs the file
+        #      mapping, which is judgment; the doctor names, it does not guess).
+        #
+        # The rule says the artifact must exist and be REGISTERED before the
+        # Unit closes. Nothing checked, and nothing a Member could call did it:
+        # chief-of-staff closed 26 Units and registered 3 Documents, with
+        # unit.outputs NULL firm-wide (ESC-026). The Board reviews Documents, so
+        # 23 finished deliverables were invisible while every other check
+        # reported green.
+        #
+        # Deliberately NOT anchored on the contract's `file_exists
+        # require_written` opt-in, tempting as that is: not one chief-of-staff
+        # contract declares it, so that check would have passed on the firm that
+        # defined the defect — ESC-021's "aimed at nothing" rebuilt. A done Unit
+        # with no Document AND no outputs means the firm has no record of what it
+        # produced, which is the harm itself, stated in a way no opt-in can hide.
+        unregistered = [
+            u["id"] for u in repo.find(conn, "unit", firm_id=firm_id, status="done")
+            if not repo.find(conn, "document", firm_id=firm_id,
+                             parent_entity_type="unit", parent_entity_id=u["id"])
+            and not (u.get("outputs") or [])
+        ]
+        shown = ", ".join(unregistered[:8])
+        more = f" (+{len(unregistered) - 8} more)" if len(unregistered) > 8 else ""
+        checks.append(_check(
+            "deliverables", "Done Units have a registered deliverable",
+            not unregistered, "train",
+            f"{len(unregistered)} done Unit(s) with no Document and no outputs — "
+            f"the Board cannot review what Records never saw: {shown}{more}"
+            if unregistered else "every done Unit's product is on Records",
+            fix="register each Unit's file with `firm doc register --unit <id> "
+                "--path <file>`; a Unit that legitimately produces no file "
+                "should say so in its outputs"))
+
         # 11. the proving run — train (its absence means wiring predates it).
         #    A pending unit is the DESIGNED state right after wiring, not
         #    drift; only a wired firm with no proving unit at all is behind.

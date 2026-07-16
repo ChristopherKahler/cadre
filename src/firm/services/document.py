@@ -1,4 +1,4 @@
-"""Document entity service — create, list, view, update.
+"""Document entity service — create, list, view, update, register.
 
 Documents are named file references attached to any entity via polymorphic
 parent_entity_type + parent_entity_id. Track version history via auto-
@@ -10,6 +10,8 @@ Records events: document.created, document.status_transition, document.updated
 
 from __future__ import annotations
 
+import os
+import re
 import sqlite3
 from typing import Any
 
@@ -27,6 +29,10 @@ DOCUMENT_STATUSES = ["active", "archived", "deprecated"]
 DOCUMENT_AUTHOR_TYPES = ["member", "board"]
 
 
+#: A deliverable's version marker: ``triage-rules-v3.md`` → head + 3.
+_VERSION_RE = re.compile(r"^(?P<head>.*?)-v(?P<n>\d+)$")
+
+
 def _next_version_path(content_path: str, current_version: int) -> str:
     """Compute the next never-overwrite version path for a deliverable.
 
@@ -35,12 +41,9 @@ def _next_version_path(content_path: str, current_version: int) -> str:
     as v1 and becomes ``foo-v2.md``. This keeps every version on disk so the
     Board can diff v1↔v2. Directory and extension are preserved.
     """
-    import os
-    import re
-
     directory, base = os.path.split(content_path)
     stem, ext = os.path.splitext(base)
-    m = re.search(r"^(?P<head>.*?)-v(?P<n>\d+)$", stem)
+    m = _VERSION_RE.search(stem)
     if m:
         nxt = int(m.group("n")) + 1
         new_stem = f"{m.group('head')}-v{nxt}"
@@ -48,6 +51,30 @@ def _next_version_path(content_path: str, current_version: int) -> str:
         nxt = max(current_version, 1) + 1
         new_stem = f"{stem}-v{nxt}"
     return os.path.join(directory, f"{new_stem}{ext}") if directory else f"{new_stem}{ext}"
+
+
+def _version_family(content_path: str) -> str:
+    """The de-versioned identity of a deliverable path.
+
+    ``d/rules-v3.md`` and ``d/rules.md`` are the same document at different
+    versions, so both reduce to ``d/rules.md``. Matching on the family rather
+    than on ``_next_version_path``'s single step is what lets a v1→v3 jump land
+    as a version bump instead of forking a sibling row — the live
+    chief-of-staff DOC-001 case, where v3 arrived with no v2 registered.
+    """
+    directory, base = os.path.split(content_path)
+    stem, ext = os.path.splitext(base)
+    m = _VERSION_RE.search(stem)
+    if m:
+        stem = m.group("head")
+    return os.path.join(directory, f"{stem}{ext}") if directory else f"{stem}{ext}"
+
+
+def _version_of(content_path: str) -> int:
+    """The version a path declares. No ``-vN`` marker means v1."""
+    stem, _ext = os.path.splitext(os.path.basename(content_path))
+    m = _VERSION_RE.search(stem)
+    return int(m.group("n")) if m else 1
 
 
 def create_document(
@@ -218,6 +245,136 @@ def update_document(
         )
 
     return updated
+
+
+def register_deliverable(
+    conn: sqlite3.Connection,
+    firm_id: str,
+    unit_id: str,
+    path: str,
+    *,
+    member_id: str,
+    name: str | None = None,
+    doc_type: str = "draft",
+    cwd: str | None = None,
+) -> dict[str, Any]:
+    """Register a produced file as *unit_id*'s deliverable. The one audited path.
+
+    The firm's rules say the artifact must exist and be REGISTERED before the
+    Unit closes, but nothing a Member could call did it: Records saw 3 of 26
+    chief-of-staff deliverables and ``unit.outputs`` was NULL firm-wide even
+    where a Document row existed (ESC-026). Both member-facing surfaces
+    (``firm doc register``, ``firm unit complete --outputs``) and the pulse
+    runner's seam-4 registration route here, so the version and ownership rules
+    are decided once instead of drifting across three call sites.
+
+    Resolution order, and why each rule is here:
+
+    1. **The file must exist.** Registering a path that is not on disk records a
+       deliverable the Board cannot open — worse than no row, because it reads
+       as done.
+    2. **Exact path already registered → no move.** Idempotent for the caller's
+       own retries; for anyone else's unit it is a ``conflict``, reported rather
+       than performed. A Member must never overwrite another Member's Document
+       by naming its path.
+    3. **Same version family, same unit → bump that row.** A revision writes
+       ``foo-v2.md`` beside ``foo.md``; forking a sibling DOC row there loses
+       the Board's v1↔v2 diff. Family matching is *unit-scoped* precisely
+       because the unscoped form is the clobber vector: MEM-002 writing
+       ``foo-v2.md`` next to MEM-001's registered ``foo.md`` would silently
+       drag MEM-001's row onto MEM-002's file.
+    4. **An older version of a family we already carry → superseded, no write.**
+       The live file is the newest one; re-registering v1 must not drag the
+       Document backwards.
+    5. Otherwise create a row parented to the caller's unit.
+
+    Every path but ``conflict`` records ``path`` in ``unit.outputs``.
+
+    Args:
+        member_id: The producing Member. Rides onto Records as the actor — the
+            Board default would credit every Member's deliverable to the Board.
+        cwd: Root the stored ``content_path`` is made relative to (the firm
+            workspace). Absolute paths in the DB do not survive a move.
+
+    Returns:
+        ``{"action": "created"|"versioned"|"existing"|"superseded"|"conflict",
+        "document": row, "content_path": str}``
+
+    Raises:
+        ValueError: Unknown unit, or the file is not on disk.
+    """
+    unit = require_exists(conn, "unit", unit_id)
+
+    abspath = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isfile(abspath):
+        raise ValueError(
+            f"deliverable not found on disk: {path} — the artifact must exist "
+            "before it can be registered"
+        )
+    rel = os.path.relpath(abspath, os.path.abspath(cwd)) if cwd else abspath
+
+    siblings = repo.find(conn, "document", firm_id=firm_id)
+
+    exact = next((d for d in siblings if d.get("content_path") == rel), None)
+    if exact is not None:
+        if exact.get("parent_entity_id") != unit_id:
+            return {
+                "action": "conflict",
+                "document": exact,
+                "content_path": rel,
+            }
+        _append_output(conn, unit, rel)
+        return {"action": "existing", "document": exact, "content_path": rel}
+
+    family = _version_family(rel)
+    kin = next(
+        (
+            d for d in siblings
+            if d.get("parent_entity_type") == "unit"
+            and d.get("parent_entity_id") == unit_id
+            and _version_family(d.get("content_path") or "") == family
+        ),
+        None,
+    )
+    if kin is not None:
+        if _version_of(rel) <= _version_of(kin.get("content_path") or ""):
+            return {"action": "superseded", "document": kin, "content_path": rel}
+        updated = update_document(
+            conn, kin["id"], {"content_path": rel},
+            actor={"type": "member", "id": member_id},
+        )
+        _append_output(conn, unit, rel)
+        return {"action": "versioned", "document": updated, "content_path": rel}
+
+    created = create_document(conn, firm_id, {
+        "name": name or os.path.basename(abspath),
+        "type": doc_type,
+        "content_path": rel,
+        "parent_entity_type": "unit",
+        "parent_entity_id": unit_id,
+        "author_type": "member",
+        "author_id": member_id,
+    })
+    _append_output(conn, unit, rel)
+    return {"action": "created", "document": created, "content_path": rel}
+
+
+def _append_output(
+    conn: sqlite3.Connection, unit: dict[str, Any], rel: str,
+) -> None:
+    """Record *rel* on the unit's ``outputs``, idempotently.
+
+    A Document row alone left ``outputs`` NULL firm-wide (ESC-026), so the
+    Unit — the thing the Board reads — carried no trace of what it produced.
+    """
+    from firm.services.unit import update_unit
+
+    current = unit.get("outputs") or []
+    if not isinstance(current, list):
+        current = []
+    if rel in current:
+        return
+    update_unit(conn, unit["id"], {"outputs": [*current, rel]})
 
 
 def request_revision(
