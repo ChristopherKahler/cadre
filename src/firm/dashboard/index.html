@@ -787,6 +787,10 @@ tr.flash td{animation:rowflash 2.2s ease-out}
    underlines. The only line on this tab is the panel edge itself. */
 .mpanel{border:1px solid var(--brand-border);border-radius:12px;padding:16px 18px 6px;
   margin-bottom:14px;background:color-mix(in srgb, var(--brand-surface) 55%, transparent)}
+.mrow{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:stretch;margin-bottom:14px}
+.mrow .mpanel{margin-bottom:0}
+.mrow .mgrid{grid-template-columns:1fr}
+@media(max-width:860px){.mrow{grid-template-columns:1fr}}
 .mp-head{display:flex;align-items:baseline;gap:10px;margin-bottom:13px;
   font:600 10px var(--font-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--brand-text-secondary)}
 .mp-head .zn{font-weight:400;font-size:9px;letter-spacing:.04em;color:var(--brand-text-dim);text-transform:none}
@@ -801,6 +805,17 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .stab-sec .field input:focus,.stab-sec .field select:focus,.stab-sec .field textarea:focus{
   outline:none;border-color:rgba(var(--brand-primary-rgb),.55);
   box-shadow:0 0 0 3px rgba(var(--brand-primary-rgb),.10)}
+/* Customizable select picker (Chromium base-select): the option list drops the
+   OS blue for the house palette — the active row runs dark green into slate.
+   Browsers without support keep the native picker untouched. */
+.stab-sec select,.stab-sec select::picker(select){appearance:base-select}
+.stab-sec select::picker(select){background:var(--brand-elevated);border:1px solid var(--brand-border);
+  border-radius:10px;box-shadow:0 14px 34px rgba(0,0,0,.45);padding:4px;margin-top:4px}
+.stab-sec select option{padding:8px 12px;border-radius:7px;font:500 13px var(--font-body);color:var(--brand-text)}
+.stab-sec select option:hover,.stab-sec select option:focus,.stab-sec select option:checked{
+  background:linear-gradient(90deg, color-mix(in srgb, var(--brand-primary) 26%, var(--brand-elevated)) 0%, #333d48 100%)}
+.stab-sec select option:checked{color:var(--brand-primary)}
+.stab-sec select::picker-icon{display:none}
 .stab-sec .field textarea{min-height:60px;resize:vertical}
 .stab-sec .field textarea.script{min-height:210px;font:400 12px/1.6 var(--font-mono);
   background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:10px;padding:14px 16px}
@@ -3120,6 +3135,7 @@ function profManageHtml(P){
     ? `Next: T${nx.needed_tier}${needs.rated ? ` — ${needs.rated} rated run${needs.rated === 1 ? '' : 's'}${needs.avg ? ` at ≥${needs.avg}` : ''}` : (needs.avg ? ` — average ≥${needs.avg}` : '')}.`
     : 'Top tier — full earned trust.';
   return `
+    <div class="mrow">
     <div class="mpanel">
       <div class="mp-head">Designation</div>
       <div class="mgrid">
@@ -3140,6 +3156,7 @@ function profManageHtml(P){
       <div class="thint">${esc(nextHint)} Earned autonomy gates which enforced seals may loosen.</div>
       <div class="field"><label>Sovereign override — capabilities, or * for blanket</label>
         <input id="fSovereign" value="${esc((cal.sovereign || []).join(', '))}" placeholder="e.g. network, shell — empty means the ladder gates every loosening"></div>
+    </div>
     </div>
     <div class="mpanel">
       <div class="mp-head">Standing instructions <span class="zn">appended to every prompt</span></div>
