@@ -86,7 +86,16 @@ def ensure(conn: Any, entity: str, data: dict[str, Any],
             print(f"  created {entity} {data['id']}")
         return "created"
 
-    changed = {f: data[f] for f in resync if norm(row[f]) != norm(data[f])}
+    # Only resync fields this call actually provides a value for. A resync
+    # field absent from `data` means the seed isn't managing it this run —
+    # skip it, don't KeyError (field failure 2026-07-16: a unit dict that
+    # named `depends_on` in resync but omitted it from the payload crashed
+    # the whole seed). row.get guards the column side symmetrically.
+    changed = {
+        f: data[f]
+        for f in resync
+        if f in data and norm(row.get(f)) != norm(data[f])
+    }
     if changed:
         repo.update(conn, entity, data["id"], changed)
         if not quiet:

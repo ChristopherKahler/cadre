@@ -60,6 +60,27 @@ def test_ensure_creates_then_amends(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_ensure_skips_resync_field_absent_from_payload(tmp_path: Path) -> None:
+    """A resync field the payload omits is skipped, not a KeyError.
+
+    Field failure 2026-07-16: a unit dict naming `depends_on` in resync but
+    omitting it from the payload crashed the whole seed on re-run."""
+    ws = _ws(tmp_path)
+    conn = connect(get_db_path(ws))
+    try:
+        _scaffold(conn)
+        ensure(conn, "unit", _unit(), resync=("description",), quiet=True)
+        # Re-run naming depends_on in resync but NOT providing it — must not raise.
+        result = ensure(conn, "unit", _unit("v2"),
+                        resync=("description", "depends_on"), quiet=True)
+        assert result == "resynced"  # description changed; depends_on skipped
+        live = conn.execute(
+            "SELECT description FROM unit WHERE id = 'UNT-001'").fetchone()[0]
+        assert live == "v2"
+    finally:
+        conn.close()
+
+
 def test_ensure_never_touches_runtime_state(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     conn = connect(get_db_path(ws))
