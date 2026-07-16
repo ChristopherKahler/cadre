@@ -512,6 +512,24 @@ def _build_parser() -> argparse.ArgumentParser:
             help="Workspace containing .firm/firm.db (defaults to current directory).",
         )
 
+    # ---- board subparser ----
+    board_parser = subparsers.add_parser(
+        "board",
+        help="Board credentials (the boardroom's human password).",
+    )
+    board_sub = board_parser.add_subparsers(
+        dest="board_command", metavar="<board-command>",
+    )
+    board_pw = board_sub.add_parser(
+        "password",
+        help="Set the board password the boardroom modal asks for "
+             "(stored as a salted hash, typed interactively).",
+    )
+    board_pw.add_argument(
+        "--clear", action="store_true",
+        help="Remove the password; the machine token stays the only credential.",
+    )
+
     # ---- roll subparser ----
     roll_parser = subparsers.add_parser(
         "roll",
@@ -827,6 +845,14 @@ def main(argv: list[str] | None = None) -> int:
                 comment=args.comment,
             )
         parser.parse_args(["member", "--help"])
+        return 0
+
+    if args.command == "board":
+        if args.board_command == "password":
+            from firm.cli.board import run_board_password
+
+            return run_board_password(clear=args.clear)
+        parser.parse_args(["board", "--help"])
         return 0
 
     if args.command == "doctor":

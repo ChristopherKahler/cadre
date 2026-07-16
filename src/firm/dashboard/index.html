@@ -3978,11 +3978,11 @@ function askBoardToken(){
     wrap.style.cssText = 'position:fixed;inset:0;z-index:200;display:grid;place-items:center;background:rgba(0,0,0,.55)';
     wrap.innerHTML = `
       <div style="background:var(--brand-elevated);border:1px solid var(--brand-border);border-radius:12px;padding:20px;max-width:460px;width:92%">
-        <h3 style="margin:0 0 8px">Board token required</h3>
+        <h3 style="margin:0 0 8px">Board password</h3>
         <p style="margin:0 0 12px;font-size:13px;color:var(--brand-text-secondary)">
-          Board actions are token-gated so member runs can't reach this surface.
-          Paste the token from <code>~/.cadre/board.token</code> — asked once, remembered by this browser.</p>
-        <input id="boardTokenInput" type="password" placeholder="board token" autocomplete="off"
+          Board actions are locked to you — member runs can't reach this surface.
+          Enter your board password (set once with <code>firm board password</code>) — asked once, remembered by this browser.</p>
+        <input id="boardTokenInput" type="password" placeholder="board password" autocomplete="off"
                style="width:100%;box-sizing:border-box;margin-bottom:12px;border:1px solid var(--brand-border);border-radius:8px;padding:8px 10px">
         <div style="display:flex;gap:8px;justify-content:flex-end">
           <button class="btn" id="boardTokenCancel">Cancel</button>

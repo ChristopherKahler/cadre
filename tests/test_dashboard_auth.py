@@ -178,6 +178,56 @@ class TestHubVerbsGate:
         assert out["ok"] is True
 
 
+class TestBoardPassword:
+    def test_password_round_trips_and_stores_only_a_hash(self, hub):
+        url, ws = hub
+        board_auth.set_board_password("correct horse battery staple")
+
+        stored = board_auth.board_password_path().read_text()
+        assert "correct horse battery staple" not in stored
+        assert stored.startswith(board_auth.PASSWORD_SCHEME + "$")
+        assert (board_auth.board_password_path().stat().st_mode & 0o777) == 0o600
+
+        status, _ = _request(f"{url}/f/alpha/api/action/member-authority/MEM-001",
+                             "POST", {"grant": True},
+                             token="correct horse battery staple")
+        assert status == 200
+        assert "authority" in _member_sovereign(ws)
+
+    def test_wrong_password_401(self, hub):
+        url, ws = hub
+        board_auth.set_board_password("correct horse battery staple")
+        status, _ = _request(f"{url}/f/alpha/api/action/member-authority/MEM-001",
+                             "POST", {"grant": True}, token="hunter2")
+        assert status == 401
+        assert _member_sovereign(ws) == []
+
+    def test_password_change_revokes_the_old_one(self, hub):
+        url, _ = hub
+        board_auth.set_board_password("first-password")
+        status, _ = _request(f"{url}/api/next/prefs", "POST", {"notes": "x"},
+                             token="first-password")
+        assert status == 200
+        board_auth.set_board_password("second-password")
+        status, _ = _request(f"{url}/api/next/prefs", "POST", {"notes": "x"},
+                             token="first-password")
+        assert status == 401
+        status, _ = _request(f"{url}/api/next/prefs", "POST", {"notes": "x"},
+                             token="second-password")
+        assert status == 200
+
+    def test_machine_token_still_accepted_alongside(self, hub):
+        url, _ = hub
+        board_auth.set_board_password("correct horse battery staple")
+        status, _ = _request(f"{url}/api/next/prefs", "POST", {"notes": "x"},
+                             token=board_auth.board_token())
+        assert status == 200
+
+    def test_empty_password_refused(self, cadre_home):
+        with pytest.raises(ValueError):
+            board_auth.set_board_password("")
+
+
 class TestSpawnNeverHandsTokenToMembers:
     def test_board_token_stripped_from_member_env(self, monkeypatch, tmp_path):
         from firm.pulse import spawn as spawn_mod
