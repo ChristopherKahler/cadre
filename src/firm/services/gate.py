@@ -20,6 +20,16 @@ from firm.core import repo
 from firm.services._id import next_id
 from firm.services._records import log_event
 from firm.services._validate import require_exists, validate_parent_ref
+from firm.services.authority import require_board_only
+
+#: Gate decisions are the Board's alone. The authority key deliberately does
+#: NOT unlock these: a Member deciding its own approval request would make the
+#: Gate ceremony rather than control. Members request (request_gate) and raise
+#: blockers (firm_escalate); the Board decides.
+_GATE_DECISION_HINT = (
+    "gate decisions are the Board's alone — the authority key does not unlock "
+    "them; use firm_request_gate to ask, or firm_escalate to raise a blocker"
+)
 
 GATE_STATUSES = ["pending", "approved", "rejected", "expired", "revoked"]
 
@@ -118,7 +128,9 @@ def approve_gate(
 
     Raises:
         ValueError: If gate not found or not in pending status.
+        AuthorityError: If any identified Member calls it — key or not.
     """
+    require_board_only("gate.approve", hint=_GATE_DECISION_HINT)
     return _resolve_gate(conn, gate_id, "approved", data)
 
 
@@ -130,8 +142,10 @@ def reject_gate(
     """Reject a pending Gate.
 
     Raises:
+        AuthorityError: If any identified Member calls it — key or not.
         ValueError: If gate not found or not in pending status.
     """
+    require_board_only("gate.reject", hint=_GATE_DECISION_HINT)
     return _resolve_gate(conn, gate_id, "rejected", data)
 
 

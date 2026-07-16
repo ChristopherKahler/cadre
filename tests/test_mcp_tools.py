@@ -179,6 +179,9 @@ class TestWriteTools:
         assert "error" not in gate
         assert gate["id"].startswith("GATE-")
         from firm.services import gate as gate_svc
+        # Approval is the Board acting — drop the member identity first, or
+        # the authority gate (correctly) refuses the identified caller.
+        monkeypatch.delenv("CADRE_MEMBER_ID", raising=False)
         approved = gate_svc.approve_gate(mcp_tools._get_conn(), gate["id"])
         assert approved["goal"]["id"].startswith("GOAL-")
         assert approved["goal"]["target"] == "Publish 10 blog posts"
@@ -201,6 +204,8 @@ class TestWriteTools:
             reasoning="sandbagging",
         ))
         from firm.services import gate as gate_svc
+        # Rejection is the Board acting — drop the member identity first.
+        monkeypatch.delenv("CADRE_MEMBER_ID", raising=False)
         gate_svc.reject_gate(mcp_tools._get_conn(), gate["id"],
                              {"approver_comment": "set a real bar"})
         assert len(json.loads(mcp_tools.firm_list_goals())) == before
@@ -299,6 +304,9 @@ class TestUpdateGoalMetric:
             target, "operation", ops[0]["id"],
             reasoning="test", metric=metric,
         ))
+        # Approval and the metric refresh that follows are Board/harness
+        # surfaces — drop the member identity or the authority gate refuses.
+        monkeypatch.delenv("CADRE_MEMBER_ID", raising=False)
         return gate_svc.approve_gate(mcp_tools._get_conn(), gate["id"])["goal"]
 
     def test_shapes_metric_json(self, monkeypatch):

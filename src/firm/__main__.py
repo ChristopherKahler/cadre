@@ -382,6 +382,39 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Port to serve on (default 8484).",
     )
 
+    # ---- member subparser ----
+    member_parser = subparsers.add_parser(
+        "member",
+        help="Member management (grant/revoke authority, ...).",
+    )
+    member_sub = member_parser.add_subparsers(
+        dest="member_command", metavar="<member-command>",
+    )
+
+    # The canonical grant surface. Deliberately CLI-only and never an MCP
+    # tool: an authority holder able to mint authority is the same hole one
+    # level up. Coboard and the dashboard toggle call the same service.
+    for verb, blurb in (
+        ("grant", "Grant a capability to a Member (Board action)."),
+        ("revoke", "Revoke a capability from a Member (Board action)."),
+    ):
+        vp = member_sub.add_parser(verb, help=blurb)
+        vp.add_argument(
+            "capability", choices=["authority"],
+            help="Capability to %s. 'authority' unlocks the self-govern "
+                 "management tools (create/update member, complete unit, "
+                 "resolve escalation, update goal)." % verb,
+        )
+        vp.add_argument("member_id", help="ID of the Member (e.g., MEM-003).")
+        vp.add_argument(
+            "--comment", default=None,
+            help="Why — recorded on the audit row and surfaced in the board pack.",
+        )
+        vp.add_argument(
+            "--workspace", type=Path, default=None,
+            help="Workspace containing .firm/firm.db (defaults to current directory).",
+        )
+
     # ---- roll subparser ----
     roll_parser = subparsers.add_parser(
         "roll",
@@ -647,6 +680,20 @@ def main(argv: list[str] | None = None) -> int:
                 trend=args.trend,
             )
         parser.parse_args(["goal", "--help"])
+        return 0
+
+    if args.command == "member":
+        if args.member_command in ("grant", "revoke"):
+            from firm.cli.member import run_member_authority
+
+            workspace = args.workspace if args.workspace is not None else Path.cwd()
+            return run_member_authority(
+                workspace=workspace,
+                member_id=args.member_id,
+                grant=args.member_command == "grant",
+                comment=args.comment,
+            )
+        parser.parse_args(["member", "--help"])
         return 0
 
     if args.command == "doctor":

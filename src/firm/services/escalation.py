@@ -30,6 +30,7 @@ from firm.core import repo
 from firm.services._id import next_id
 from firm.services._records import log_event
 from firm.services._validate import require_exists, validate_parent_ref
+from firm.services.authority import require_authority
 
 ESCALATION_STATUSES = ["open", "acknowledged", "resolved"]
 ESCALATION_SEVERITIES = ["low", "normal", "high", "critical"]
@@ -238,7 +239,12 @@ def resolve_escalation(
 
     Raises:
         ValueError: If not found or invalid status.
+        AuthorityError: If an identified Member caller lacks the authority key
+            — without it a Member could close the Escalation raised about its
+            own work.
     """
+    require_authority(conn, "escalation.resolve")
+
     existing = require_exists(conn, "escalation", escalation_id)
     if status not in ("acknowledged", "resolved"):
         raise ValueError("status must be 'acknowledged' or 'resolved'")

@@ -19,6 +19,7 @@ from firm.hooks.unit_completion import on_unit_done
 from firm.services._id import next_id
 from firm.services._records import log_event
 from firm.services._validate import require_exists, validate_fk, validate_status
+from firm.services.authority import require_authority
 
 UNIT_STATUSES = [
     "pending", "in_progress", "blocked", "in_review", "done", "cancelled",
@@ -263,7 +264,12 @@ def complete_unit(
 
     Raises:
         ValueError: If unit not found.
+        AuthorityError: If an identified Member caller lacks the authority key.
+            The pulse runner completes validated Units under
+            authority.system_context() — the harness is not a Member.
     """
+    require_authority(conn, "unit.complete")
+
     existing = require_exists(conn, "unit", unit_id)
     prior_status = existing["status"]
 

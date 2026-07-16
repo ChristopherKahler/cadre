@@ -36,6 +36,7 @@ from firm.pulse.orchestrator import (
     _contract_timeout_sec,
     compute_load,
 )
+from firm.services import authority as authority_svc
 from firm.services import autonomy as autonomy_svc
 from firm.services import comment as comment_svc
 from firm.services import document as document_svc
@@ -911,6 +912,9 @@ def member_profile(
 
     return {
         "member": member,
+        # Derived live from the member record on every open — the badge must
+        # never show a cached grant (honest-state rule).
+        "authority": authority_svc.has_authority(conn, member_id),
         "calibration": calibration,
         "contract": contract,
         "contracts": repo.find(conn, "contract", firm_id=firm_id),
@@ -1223,6 +1227,9 @@ def floor_state(
             "role": m.get("role"),
             "status": m.get("status"),
             "owns": m.get("description") or "",
+            # Live from the member record on every floor fetch — the gold
+            # badge must never outlive the grant (honest-state rule).
+            "authority": authority_svc.has_authority(conn, m["id"]),
             "lead": m["id"] in leads,
             "reports_to": m.get("reports_to_member_id"),
             "tenure": {"founding": founding, "since": m.get("created_at")},
@@ -1314,6 +1321,19 @@ def perform_action(
             "body": body.get("body"),
             "author_type": "board",
         })
+    if action == "member-authority":
+        # The Board's grant toggle. Calls the SAME service the CLI verb
+        # (`firm member grant|revoke authority`) calls — one code path, so the
+        # two surfaces cannot drift. Never an MCP tool: an authority holder
+        # able to mint authority is the same hole one level up. Auth is the
+        # HTTP boundary's job, not this action's, so a token gate composes in
+        # front without touching either.
+        grant = bool(body.get("grant"))
+        fn = (
+            authority_svc.grant_authority if grant
+            else authority_svc.revoke_authority
+        )
+        return fn(conn, entity_id, comment=body.get("comment") or None)
     if action == "member-update":
         data = {
             k: body[k]

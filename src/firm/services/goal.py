@@ -17,6 +17,7 @@ from firm.core import repo
 from firm.services._id import next_id
 from firm.services._records import log_event
 from firm.services._validate import require_exists, validate_parent_ref, validate_status
+from firm.services.authority import require_authority
 
 GOAL_STATUSES = ["active", "achieved", "abandoned"]
 
@@ -142,7 +143,12 @@ def update_goal_metric(
 
     Raises:
         ValueError: If goal not found, or no metric field provided.
+        AuthorityError: If an identified Member caller lacks the authority key.
     """
+    # Gated independently of update_goal below: this is a public entry point,
+    # and the boundary must not vanish if the delegation is ever refactored.
+    require_authority(conn, "goal.update_metric")
+
     existing = require_exists(conn, "goal", goal_id)
 
     raw = existing.get("metric")
@@ -180,7 +186,10 @@ def update_goal(
 
     Raises:
         ValueError: If goal not found or invalid status.
+        AuthorityError: If an identified Member caller lacks the authority key.
     """
+    require_authority(conn, "goal.update")
+
     existing = require_exists(conn, "goal", goal_id)
 
     # Validate status if changing

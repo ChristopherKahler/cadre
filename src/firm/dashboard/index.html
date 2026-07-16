@@ -757,6 +757,8 @@ tr.flash td{animation:rowflash 2.2s ease-out}
   text-transform:uppercase;color:var(--brand-text-secondary);background:var(--brand-elevated);
   border:1px solid var(--brand-border);border-radius:8px;padding:5px 11px;white-space:nowrap}
 .sbadge.ok{color:var(--brand-primary);border-color:rgba(var(--brand-primary-rgb),.4)}
+.sbadge.key{color:#e5a83a;border-color:rgba(229,168,58,.55);text-shadow:0 0 8px rgba(229,168,58,.35)}
+.nameplate.authority{border:1.5px solid rgba(229,168,58,.8);box-shadow:0 0 10px rgba(229,168,58,.25)}
 .sbadge.lead{color:var(--brand-warning);border-color:color-mix(in srgb, var(--brand-warning) 45%, transparent)}
 .sbadge.burn b{color:var(--brand-primary);font-weight:600;margin-right:5px}
 /* head: three columns — portrait + tab tiles / identity + description /
@@ -3282,7 +3284,7 @@ function sheetHtml(m){
         <div class="hportrait">
           <div class="portrait">${esc(initials(m.name))}${avatarImg(m.name)}
             <span class="lvplate">LV ${m.level}</span>
-            <div class="nameplate"><h3 id="sheetName">${esc(m.name)}</h3></div>
+            <div class="nameplate${m.authority ? ' authority' : ''}"${m.authority ? ' title="Holds the management key"' : ''}><h3 id="sheetName">${esc(m.name)}</h3></div>
           </div>
           <div class="stabs-grid" role="tablist" aria-label="Member record sections">
             ${[['dossier','Dossier'],['command','Command'],['activity','Activity'],['artifacts','Artifacts'],['prompt','Prompt'],['manage','Manage']].map(([k, label]) =>
@@ -3294,6 +3296,7 @@ function sheetHtml(m){
           <div class="classline">${esc(m.role || 'unassigned')}</div>
           <div class="badgerow">
             <span class="sbadge id">${esc(m.id)}</span>
+            ${m.authority ? '<span class="sbadge key" title="Holds the management key — may self-govern: create/update members, complete units, resolve escalations, update goals. Granted by the Board; gates still need your sign-off.">🔑 KEY</span>' : ''}
             ${tenure}
             <span class="sbadge${m.status === 'active' ? ' ok' : ''}">${esc(String(m.status || '').toUpperCase())}</span>
             ${m.lead ? '<span class="sbadge lead" title="Others on the roster report to this member">LEAD</span>' : ''}
@@ -3561,6 +3564,22 @@ function profManageHtml(P){
     </div>
     </div>
     <div class="mpanel">
+      <div class="mp-head">Management key <span class="zn">Board-granted · gates still need your sign-off</span></div>
+      <p class="calintro">${P.authority
+        ? ((cal.sovereign || []).includes('*')
+            ? 'Held via blanket sovereignty (<span class="mono-ex">*</span>) — revoke by clearing "Skip the ladder" above, not here.'
+            : 'Holds the key: may create/update members, complete units, resolve escalations, and update goals on their own. Approving gates stays yours regardless.')
+        : 'Does not hold the key. Denied management calls are told to escalate to you instead.'}</p>
+      <div class="field"><label>Why (recorded on the audit row)</label>
+        <input id="fAuthComment" placeholder="e.g. GM drives the pulse"></div>
+      <div class="field">
+        <button class="btn${P.authority ? '' : ' primary'}" ${P.authority && (cal.sovereign || []).includes('*') ? 'disabled' : ''}
+                onclick="setAuthority(${P.authority ? 'false' : 'true'}, this)">
+          ${P.authority ? 'Revoke the key' : 'Grant the key'}
+        </button>
+      </div>
+    </div>
+    <div class="mpanel">
       <div class="mp-head">Standing instructions <span class="zn">appended to every prompt</span></div>
       <div class="field"><textarea id="fInstructions" class="script">${esc(P.instructions)}</textarea></div>
     </div>
@@ -3647,6 +3666,22 @@ async function saveManage(btn){
   const bad = outs.find(o => !o.ok);
   if(bad){ toast(bad.error || 'Save failed', true); return; }
   toast('Member updated — next run picks it up');
+  lastHash = null; poll(); floorFetchedAt = 0; loadFloor(); refreshSheetProfile();
+}
+
+/* The Board's key toggle — same service path as `firm member grant|revoke
+   authority` (CLI), so the two surfaces cannot drift. */
+async function setAuthority(grant, btn){
+  if(!profileCtx) return;
+  if(btn) btn.disabled = true;
+  const out = await postAction('member-authority/' + encodeURIComponent(profileCtx), {
+    grant: grant,
+    comment: (document.getElementById('fAuthComment') || {value:''}).value.trim(),
+  });
+  if(btn) btn.disabled = false;
+  if(!out.ok && out.error){ toast(out.error, true); return; }
+  if(out.reason){ toast(out.message || out.reason, true); return; }
+  toast(grant ? 'Key granted — takes effect on the next run' : 'Key revoked');
   lastHash = null; poll(); floorFetchedAt = 0; loadFloor(); refreshSheetProfile();
 }
 
