@@ -619,6 +619,9 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 /* ---- modal / toast ---- */
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:50}
 .overlay.show{display:flex}
+/* the doc reader opens FROM the sheet — it must sit above it (sheet overlay
+   is z-50, armory palette z-70, docs ride the top) */
+#docOverlay{z-index:80}
 .modal{background:var(--brand-elevated);border:1px solid var(--brand-border-hover);border-radius:14px;
   box-shadow:0 24px 64px rgba(0,0,0,.35);padding:28px;width:min(540px,92vw)}
 .modal h3{font-size:18px;margin-bottom:6px}
@@ -695,7 +698,7 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 /* ---- The Floor: character sheet (dossier plate) ---- */
 .sheet{background:var(--brand-canvas);border:1px solid var(--brand-border-hover);border-radius:16px;
   box-shadow:0 32px 80px rgba(0,0,0,.5);width:min(1020px,96vw);position:relative;overflow:hidden}
-.sheetscroll{max-height:92vh;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;
+.sheetscroll{min-height:72vh;max-height:92vh;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;
   scrollbar-width:thin;scrollbar-color:transparent transparent}
 .sheetscroll:hover,.sheetscroll.scrolling{scrollbar-color:color-mix(in srgb, var(--brand-text) 22%, transparent) transparent}
 .sheetscroll::-webkit-scrollbar{width:6px}
@@ -769,6 +772,13 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .hright .bandcell + .bandcell{margin-top:16px}
 .hright .sheetlive{flex-wrap:wrap;margin-top:18px}
 .hright .sheetlive .sltick{flex-basis:100%;text-align:left;margin-top:5px}
+.hright .dial{margin:0 0 16px;flex-wrap:wrap}
+.hright .dial .dhint{flex-basis:100%;margin-top:5px}
+/* contract splits: gates on the left, deny rules on the right */
+.contractcols{display:grid;grid-template-columns:1fr 1fr;gap:14px 30px;align-items:start}
+.contractcols .ccol{min-width:0}
+.contractcols .sealshelf{margin-top:0}
+@media(max-width:880px){.contractcols{grid-template-columns:1fr}}
 .classline{margin-top:2px}
 @media(max-width:980px){
   .headcols3{grid-template-columns:1fr}
@@ -3141,6 +3151,7 @@ function sheetHtml(m){
           ${m.owns ? `<div class="sowns">${esc(m.owns)}</div>` : ''}
         </div>
         <div class="hright">
+            ${dial}
             <div class="bandcell">
               <div class="xpband">
                 <span class="xk">LEVEL ${m.level}</span>
@@ -3162,7 +3173,10 @@ function sheetHtml(m){
       <div class="szone loadout-bay"><div class="zlabel">Loadout <span class="zn">wired at Train · carried on every run · click + to equip</span></div>
         <div class="sockwall" id="sockwall">${sockwallHtml(m)}</div>${roleLoadoutHtml(m)}</div>
       <div class="szone"><div class="zlabel">Contract <span class="zn">gates need your sign-off · deny rules are enforced</span></div>
-        ${oaths}${seals}${dial}</div>
+        <div class="contractcols">
+          <div class="ccol">${oaths}</div>
+          <div class="ccol">${seals}</div>
+        </div></div>
       <div class="zsplit">
         <div class="szone"><div class="zlabel">Record <span class="zn">derived from the ledger</span></div>
           <div class="statblock">${statblock}</div></div>
