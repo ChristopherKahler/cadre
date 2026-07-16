@@ -132,6 +132,39 @@ of what the Member decides, what the prompt got truncated to, or how close
 the timeout is. A rule that only works when the Member cooperates is not a
 rule, it is a hope (fork 009).
 
+What the rule is aimed AT (fork 015 — read this before widening it):
+
+The gate used to match every rule against the whole tool_input JSON. That
+one decision caused both live failure classes at once (chief-of-staff
+ESC-021/027/028): it could not block `slack_send_message` (the patterns were
+upstream API names that never appear in a tool call) but it DID block a
+Member writing a report that *quoted* the pattern. The aim now:
+
+- **The tool NAME is the action.** For a structured call, the name decides
+  what happens — `slack_send_message` sends, `slack_search_messages` reads.
+  The payload is data, and data is never consulted.
+- **Except for shells, where the command IS the action.** `Bash` says nothing
+  by itself, so its command string is matched — which is what catches
+  `curl ... chat.postMessage`, the reason the API-method patterns still earn
+  their place.
+- **Prose is never a haystack.** A `Write`'s content, an `Edit`'s strings, a
+  search `query` — none can trip a rule. Documentation about a NEVER must
+  never trip that NEVER, or the pressure to route around the gate lands on
+  the Member, which is how gates get quietly disabled.
+- **A rule's `tool` label (fork 014) does NOT scope enforcement.** It rides
+  along into the denial receipt so the Board can group rules by equipment,
+  and that is all. Scoping by it was tried and rejected here: the gate cannot
+  tell a label naming *other* equipment from a typo, so any label-based skip
+  lets one bad character silently disable a NEVER — ESC-021's exact defect,
+  rebuilt. Scope comes from the tool name, which cannot be misspelled into
+  a hole. The label narrows nothing; it explains.
+
+Known and accepted: a `Bash` command that merely *mentions* a forbidden verb
+(`grep chat.postMessage`) is denied. A shell is send-capable and its string is
+not parseable into intent, so the gate fails closed there. Prose belongs in
+`Write`/`Edit`, which are now clean — that is the supported path, not a
+heredoc through Bash.
+
 Contract:
 - Members only: no CADRE_MEMBER_ID in env means a Board session — allow.
 - Deny = JSON permissionDecision on stdout, exit 0. Every denial is appended
@@ -150,6 +183,29 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Fields whose value is an instruction to execute, not prose an author typed.
+# A shell command, a URL, an API method on a generic gateway tool. These are
+# the ONLY payload the gate reads — everything else is data (fork 015).
+ACTING_FIELDS = ("command", "cmd", "script", "shell", "url", "endpoint",
+                 "method", "api_method")
+
+
+def _acting_values(node, depth=0):
+    """Every acting-field value in the payload, nested ones included."""
+    if depth > 6:
+        return []
+    out = []
+    if isinstance(node, dict):
+        for key, val in node.items():
+            if str(key).lower() in ACTING_FIELDS and isinstance(val, (str, int, float)):
+                out.append(str(val))
+            else:
+                out.extend(_acting_values(val, depth + 1))
+    elif isinstance(node, list):
+        for item in node:
+            out.extend(_acting_values(item, depth + 1))
+    return out
 
 
 def main() -> int:
@@ -172,11 +228,9 @@ def main() -> int:
 
     tool = str(payload.get("tool_name") or "")
     tool_input = payload.get("tool_input") or {}
-    try:
-        blob = json.dumps(tool_input, sort_keys=True, default=str)
-    except Exception:
-        blob = str(tool_input)
-    hay = f"{tool} {blob}".lower()
+    acting = _acting_values(tool_input)
+    # The haystack: what this call DOES. Never what it says.
+    hay = " ".join([tool] + acting).lower()
 
     for rule in rules:
         pat = str(rule.get("match") or "").lower().strip()
@@ -195,8 +249,12 @@ def main() -> int:
                     "member_id": member_id,
                     "tool_name": tool,
                     "match": rule.get("match"),
+                    "equips": rule.get("tool") or "",
                     "reason": reason,
-                    "input_head": blob[:300],
+                    # What the gate actually read — the acting fields, not the
+                    # payload. A receipt that quoted a Write's body would put
+                    # the prose we refuse to match into the evidence log.
+                    "input_head": " ".join(acting)[:300],
                 }) + "\\n")
         except Exception:
             pass          # the denial still stands; only the receipt failed

@@ -97,8 +97,20 @@ def diagnose(workspace: Path, firm_id: str, *,
             checks.append(_check(
                 "charter", "Charter exists", False, "train", "no CLAUDE.md"))
 
-        # 3. policy gate installed + registered — mechanical
+        # 3. policy gate installed + registered + CURRENT — mechanical
+        #
+        # The hook is a copy, taken at install time. The framework upgrading
+        # itself does nothing for a firm already standing: `pip install -e`
+        # makes every firm's *library* live, but the gate on disk stays
+        # whatever it was the day it was written. Checking only that the file
+        # exists reports a firm running a gate with a known hole as armed —
+        # which is how a fixed gate quietly fails to ship (fork 015).
+        from firm.cli.install_hooks import _POLICY_HOOK_TEMPLATE
         hook_file = workspace / ".claude" / "hooks" / POLICY_HOOK_SCRIPT_NAME
+        try:
+            current = hook_file.read_text(encoding="utf-8") == _POLICY_HOOK_TEMPLATE
+        except OSError:
+            current = False
         registered = False
         try:
             settings = json.loads(
@@ -109,12 +121,14 @@ def diagnose(workspace: Path, firm_id: str, *,
                 for h in (e.get("hooks") or []) if isinstance(h, dict))
         except (OSError, json.JSONDecodeError):
             pass
+        armed = hook_file.is_file() and registered and current
         checks.append(_check(
-            "policy-gate", "NEVER-enforcement gate armed",
-            hook_file.is_file() and registered, "mechanical",
-            "installed and registered" if hook_file.is_file() and registered
-            else f"hook file: {hook_file.is_file()}, registered: {registered}",
-            fix="install + register the PreToolUse policy gate"))
+            "policy-gate", "NEVER-enforcement gate armed and current", armed,
+            "mechanical",
+            "installed, registered, matches the shipped gate" if armed
+            else (f"hook file: {hook_file.is_file()}, registered: {registered}, "
+                  f"matches shipped gate: {current}"),
+            fix="install + register the current PreToolUse policy gate"))
 
         # 4. policy materialized and fresh — mechanical
         want = policy_svc.member_denies(conn, firm_id)
@@ -129,6 +143,19 @@ def diagnose(workspace: Path, firm_id: str, *,
             "mechanical",
             "in sync" if fresh else "policy.json is stale or missing",
             fix="re-materialize .firm/policy.json"))
+
+        # 4b. the NEVERs can actually fire — train (re-patterning is judgment)
+        # A fresh, correctly-installed, correctly-registered gate enforcing
+        # rules aimed at nothing passes every check above it. chief-of-staff
+        # ran that way for its whole life (ESC-021). This is the check that
+        # would have said so on day one.
+        blind = policy_svc.unfireable_members(conn, firm_id)
+        checks.append(_check(
+            "policy-aim", "NEVERs match tools Members can call", not blind, "train",
+            "every rule can fire" if not blind else "; ".join(
+                f"{f['name']}: all {len(f['rules'])} rules are API-method names, "
+                f"unreachable from {'/'.join(f['servers'])}" for f in blind),
+            fix="re-run Train to re-pattern the deny rules against real tool names"))
 
         # 5. models — board (a model is a budget decision)
         modelless = [

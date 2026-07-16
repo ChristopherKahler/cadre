@@ -26,6 +26,7 @@ The pieces:
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -37,26 +38,83 @@ POLICY_FILE = "policy.json"
 DENIAL_LOG = "policy-denials.jsonl"
 DENIAL_CURSOR = "policy-denials.cursor"
 
+# An upstream API method name: `chat.postMessage`, `messages.send`. A dot
+# between word characters is the tell. No tool is ever NAMED this — the MCP
+# tool is `slack_send_message`, the CLI verb is `messages send` — so a rule
+# in this shape can only ever fire against a shell command that curls the
+# API directly. As the whole of a Member's policy it is a rule aimed at
+# nothing (fork 015 / chief-of-staff ESC-021).
+_API_METHOD_FORM = re.compile(r"\w\.\w")
 
-def _parse_vc(contract: dict[str, Any] | None) -> dict[str, Any]:
-    if not contract:
+
+def _is_api_method_form(pattern: str) -> bool:
+    return bool(_API_METHOD_FORM.search(pattern.strip("*?[] ")))
+
+
+def unfireable_members(conn: sqlite3.Connection, firm_id: str) -> list[dict[str, Any]]:
+    """Members whose every NEVER can only fire through a shell.
+
+    The ESC-021 signature, made detectable: a Member carrying MCP tools whose
+    deny rules are ALL upstream API method names has no rule that can match
+    any tool they can actually call. The policy reads as protection and
+    enforces nothing — the worst of both, because it stops anyone looking.
+
+    Re-patterning is judgment (which verbs, which routes), so this reports
+    and routes to Train; it never rewrites a Contract behind the Board.
+    """
+    contracts = {c["id"]: c for c in repo.find(conn, "contract", firm_id=firm_id)}
+    denies = member_denies(conn, firm_id)
+    findings: list[dict[str, Any]] = []
+    for member_id, rules in denies.items():
+        member = repo.get(conn, "member", member_id) or {}
+        contract = contracts.get(member.get("contract_id"))
+        loadout = _parse_json_col(contract, "skill_loadout")
+        servers = [s for s in (loadout.get("mcp") or []) if str(s).strip()]
+        if not servers:
+            continue          # no MCP route to leave unlocked
+        if any(not _is_api_method_form(r["match"]) for r in rules):
+            continue          # at least one rule can match a tool name
+        findings.append({
+            "member_id": member_id,
+            "name": member.get("name") or member_id,
+            "servers": servers,
+            "rules": [r["match"] for r in rules],
+        })
+    return findings
+
+
+def _parse_json_col(row: dict[str, Any] | None, col: str) -> dict[str, Any]:
+    """A JSON column, whether the repo handed it back parsed or raw."""
+    if not row:
         return {}
-    raw = contract.get("validation_config")
+    raw = row.get(col)
     try:
-        vc = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        val = json.loads(raw) if isinstance(raw, str) else (raw or {})
     except (json.JSONDecodeError, TypeError):
         return {}
-    return vc if isinstance(vc, dict) else {}
+    return val if isinstance(val, dict) else {}
+
+
+def _parse_vc(contract: dict[str, Any] | None) -> dict[str, Any]:
+    return _parse_json_col(contract, "validation_config")
 
 
 def member_denies(conn: sqlite3.Connection, firm_id: str) -> dict[str, list[dict[str, str]]]:
-    """member_id -> deny rules, read from each Member's Contract."""
+    """member_id -> deny rules, read from each Member's Contract.
+
+    ``tool`` (fork 014) is carried through: it names the equipment a rule
+    locks, which is how the Board reads a denial and how the Floor groups
+    the rules. It was silently dropped here, so a label the founding flow
+    took care to write never reached anything that could show it.
+    """
     contracts = {c["id"]: c for c in repo.find(conn, "contract", firm_id=firm_id)}
     out: dict[str, list[dict[str, str]]] = {}
     for m in repo.find(conn, "member", firm_id=firm_id):
         vc = _parse_vc(contracts.get(m.get("contract_id")))
         rules = [
-            {"match": str(r["match"]).strip(), "reason": str(r.get("reason") or "").strip()}
+            {"match": str(r["match"]).strip(),
+             "reason": str(r.get("reason") or "").strip(),
+             "tool": str(r.get("tool") or "").strip()}
             for r in (vc.get("deny") or [])
             if isinstance(r, dict) and str(r.get("match") or "").strip()
         ]

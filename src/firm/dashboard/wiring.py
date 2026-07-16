@@ -260,8 +260,31 @@ The Board also said this, in their own words:
   Member must ASK before doing — your `deny` rules are the LOCK for the subset a
   credential would let them do anyway. Deny rules are enforced at the tool
   boundary by the runtime; they hold even if the Member ignores every word of
-  the charter. Write them tight (match the forbidden verb, e.g. "messages.send"),
-  not broad (a deny that matches reads starves the role you just staffed).
+  the charter.
+
+- **A deny rule must match the CALL, not the API behind it.** This is the one
+  that has already cost a firm its central promise (chief-of-staff ESC-021:
+  every rule written as an upstream API name, not one of them capable of
+  firing, for the firm's whole lifetime). The runtime matches your pattern
+  against **the tool's name**, plus **the command string** for shell tools —
+  never against a file's contents. So write what the Member's own toolbox is
+  called:
+    - The tool you assigned is named `slack_send_message` — deny
+      `*slack_send_message*`. There is no `chat.postMessage` tool; that is
+      Slack's HTTP API, and it appears in a tool call only as raw `curl`
+      through Bash. Deny it too, for exactly that reason — never instead.
+    - A CLI spells its verbs with spaces: `gws-acct gmail users messages send`.
+      Deny `*messages send*`. `*messages.send*` matches nothing a CLI does.
+    - Cover every equipped route to the same act, or you have locked one door
+      in a room with three: the MCP tool name, the CLI's space form, and the
+      HTTP method a shell could curl.
+  **Name the deny after something in that Member's loadout above.** A pattern
+  naming a tool they were never issued is a rule that cannot fire, and a rule
+  that cannot fire is worse than no rule: it reads as protection.
+
+- Write them tight, not broad: a deny that matches reads starves the role you
+  just staffed. `*slack_send_message*` locks the send; `*slack*` would also
+  block reading the inbox the Member was hired to read.
 
 ## Output
 
