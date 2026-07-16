@@ -754,20 +754,28 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .sbadge.ok{color:var(--brand-primary);border-color:rgba(var(--brand-primary-rgb),.4)}
 .sbadge.lead{color:var(--brand-warning);border-color:color-mix(in srgb, var(--brand-warning) 45%, transparent)}
 .sbadge.burn b{color:var(--brand-primary);font-weight:600;margin-right:5px}
-/* head columns: description owns 60%, the progress bands ride the right 40%.
-   The portrait floats in the left column so role, badges, and description
-   flow beside it and then wrap beneath — no dead room under the picture. */
-.headcols{flex:1;min-width:0;display:grid;grid-template-columns:3fr 2fr;gap:16px 32px;align-items:start}
-.hleft{min-width:0}
-.hleft .portrait{float:left;margin:4px 28px 24px 0}
-.hleft::after{content:'';display:table;clear:both}
+/* head: three columns — portrait + tab tiles / identity + description /
+   progress bands. Desktop-locked layout; stacks to one column on mobile. */
+.headcols3{display:grid;grid-template-columns:190px minmax(0,1.55fr) minmax(0,1fr);
+  gap:18px 32px;align-items:start}
+.hportrait{min-width:0}
+.hmid{min-width:0}
 .hright{min-width:0}
 .hright .xpband{margin-top:0;flex-wrap:wrap}
 .hright .xpband .xbar{flex:1;min-width:90px}
 .hright .xpband .xv{max-width:100%;white-space:normal;line-height:1.45}
 .hright .bandcell + .bandcell{margin-top:16px}
 .classline{margin-top:2px}
-@media(max-width:980px){.headcols{grid-template-columns:1fr}.hright{margin-top:6px}}
+@media(max-width:980px){
+  .headcols3{grid-template-columns:1fr}
+  .hportrait{display:grid;grid-template-columns:auto minmax(0,1fr);gap:0 22px;align-items:start}
+  .stabs-grid{margin-top:6px;align-self:center}
+  .hright{margin-top:4px}
+}
+@media(max-width:560px){
+  .hportrait{grid-template-columns:1fr}
+  .stabs-grid{grid-template-columns:repeat(3,minmax(0,1fr));margin-top:30px}
+}
 .xpband{display:flex;align-items:center;gap:14px;margin-top:20px}
 .xpband .xk{font:600 11.5px var(--font-mono);letter-spacing:.16em;color:var(--brand-text);flex:none}
 .xbar{flex:1;height:9px;border-radius:5px;background:var(--brand-tint-1);
@@ -795,20 +803,21 @@ tr.flash td{animation:rowflash 2.2s ease-out}
   font-weight:400;letter-spacing:.03em;text-transform:none;color:var(--brand-text-secondary);text-align:right}
 #floorSheet.running .portrait{box-shadow:inset 0 0 0 1px rgba(0,0,0,.25), 0 0 26px rgba(var(--brand-primary-rgb),.4)}
 
-/* ---- sheet tabs: dossier sections on one rail. Filing-tab, not browser-tab —
-   the active label's emerald edge cuts through the hairline the sheet already
-   uses to separate zones, so switching sections reads as flipping the file. */
-.stabs{display:flex;gap:2px;margin:18px 30px 0;border-bottom:1px solid var(--brand-border);
-  overflow-x:auto;scrollbar-width:none}
-.stabs::-webkit-scrollbar{display:none}
-.stab{appearance:none;background:none;border:0;cursor:pointer;position:relative;flex:none;
-  font:600 10.5px var(--font-mono);letter-spacing:.16em;text-transform:uppercase;
-  color:var(--brand-text-dim);padding:9px 13px 12px;transition:color .15s}
-.stab:hover{color:var(--brand-text-secondary)}
-.stab.active{color:var(--brand-primary)}
-.stab.active::after{content:'';position:absolute;left:10px;right:10px;bottom:-1px;height:2px;
-  background:var(--brand-primary);box-shadow:0 0 10px rgba(var(--brand-primary-rgb),.5)}
-.stab:focus-visible{outline:2px solid var(--brand-primary);outline-offset:-2px}
+/* ---- sheet tabs: a 2×3 grid of gamified tiles under the portrait — menu
+   buttons on a character screen, not a browser tab rail. */
+.stabs-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:32px}
+.stab{appearance:none;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:5px;
+  padding:11px 6px 9px;border:1px solid var(--brand-border);border-radius:10px;background:var(--brand-elevated);
+  font:600 9px var(--font-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--brand-text-secondary);
+  transition:border-color .15s,color .15s,box-shadow .15s,transform .15s}
+.stab .sg{font-size:16px;line-height:1;color:var(--brand-text-dim);transition:color .15s}
+.stab:hover{border-color:var(--brand-border-hover);color:var(--brand-text);transform:translateY(-1px)}
+.stab:hover .sg{color:var(--brand-text-secondary)}
+.stab.active{border-color:var(--brand-primary);color:var(--brand-primary);
+  background:color-mix(in srgb, var(--brand-primary) 8%, var(--brand-elevated));
+  box-shadow:0 0 14px rgba(var(--brand-primary-rgb),.18)}
+.stab.active .sg{color:var(--brand-primary)}
+.stab:focus-visible{outline:2px solid var(--brand-primary);outline-offset:2px}
 .stab-sec{display:none}
 .stab-sec.active{display:block}
 .stab-sec:not(#s-tab-dossier).active{padding:20px 34px 28px}
@@ -2990,12 +2999,19 @@ function sheetHtml(m){
 
   return `
     <div class="sheethead">
-      <div class="headcols">
-        <div class="hleft">
+      <div class="headcols3">
+        <div class="hportrait">
           <div class="portrait">${esc(initials(m.name))}${avatarImg(m.name)}
             <span class="lvplate">LV ${m.level}</span>
             <div class="nameplate"><h3 id="sheetName">${esc(m.name)}</h3></div>
           </div>
+          <div class="stabs-grid" role="tablist" aria-label="Member record sections">
+            ${[['dossier','▤','Dossier'],['command','▸','Command'],['activity','◎','Activity'],['artifacts','◆','Artifacts'],['prompt','⬡','Prompt'],['manage','⚒','Manage']].map(([k, g, label]) =>
+              `<button class="stab${k === 'dossier' ? ' active' : ''}" data-stab="${k}" role="tab"
+                 aria-selected="${k === 'dossier'}" onclick="sheetTab('${k}')"><span class="sg">${g}</span>${label}</button>`).join('')}
+          </div>
+        </div>
+        <div class="hmid">
           <div class="classline">${esc(m.role || 'unassigned')}</div>
           <div class="badgerow">
             <span class="sbadge id">${esc(m.id)}</span>
@@ -3023,11 +3039,6 @@ function sheetHtml(m){
         <span data-run-started=""></span><span>·</span><span class="slunit"></span>
         <span class="sltick" id="sltick"></span>
       </div>
-    </div>
-    <div class="stabs" role="tablist" aria-label="Member record sections">
-      ${[['dossier','Dossier'],['command','Command'],['activity','Activity'],['artifacts','Artifacts'],['prompt','Prompt'],['manage','Manage']].map(([k,label]) =>
-        `<button class="stab${k === 'dossier' ? ' active' : ''}" data-stab="${k}" role="tab"
-           aria-selected="${k === 'dossier'}" onclick="sheetTab('${k}')">${label}</button>`).join('')}
     </div>
     <div class="stab-sec active" id="s-tab-dossier">
       <div class="szone"><div class="zlabel">Loadout <span class="zn">wired at Train · carried on every run · click + to equip</span></div>
