@@ -895,6 +895,21 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .calskip{font-size:11.5px;line-height:1.55;color:var(--brand-text-dim);margin:4px 0 8px}
 .calskip b{color:var(--brand-text-secondary)}
 .calskip .mono-ex{font:500 11px var(--font-mono);color:var(--brand-text-secondary)}
+/* The equip bay — the playable shelf. Recessed darker than its neighbors,
+   dot-textured like the floor canvas, cornered like a target zone. */
+.szone.loadout-bay{position:relative;
+  background:color-mix(in srgb, #000 30%, var(--brand-canvas));
+  background-image:radial-gradient(rgba(255,255,255,.022) 1px, transparent 1px);
+  background-size:20px 20px;
+  box-shadow:inset 0 2px 12px rgba(0,0,0,.4), inset 0 -1px 0 rgba(255,255,255,.02)}
+.szone.loadout-bay::before,.szone.loadout-bay::after{content:'';position:absolute;width:16px;height:16px;pointer-events:none}
+.szone.loadout-bay::before{top:12px;left:14px;
+  border-top:2px solid rgba(var(--brand-primary-rgb),.45);border-left:2px solid rgba(var(--brand-primary-rgb),.45)}
+.szone.loadout-bay::after{bottom:12px;right:14px;
+  border-bottom:2px solid rgba(var(--brand-primary-rgb),.45);border-right:2px solid rgba(var(--brand-primary-rgb),.45)}
+.szone.loadout-bay .zlabel{font-size:13px;letter-spacing:.28em;color:var(--brand-primary)}
+.szone.loadout-bay .zlabel::before{content:'';display:inline-block;width:20px;height:2px;margin-right:11px;
+  vertical-align:middle;background:var(--brand-primary);box-shadow:0 0 9px rgba(var(--brand-primary-rgb),.6)}
 .szone{padding:22px 34px 26px;border-top:1px solid var(--brand-border);min-width:0;
   animation:zoneRise 280ms cubic-bezier(.16,1,.3,1) both}
 .szone:nth-of-type(2){animation-delay:70ms}
@@ -3054,7 +3069,7 @@ function sheetHtml(m){
       </div>
     </div>
     <div class="stab-sec active" id="s-tab-dossier">
-      <div class="szone"><div class="zlabel">Loadout <span class="zn">wired at Train · carried on every run · click + to equip</span></div>
+      <div class="szone loadout-bay"><div class="zlabel">Loadout <span class="zn">wired at Train · carried on every run · click + to equip</span></div>
         <div class="sockwall" id="sockwall">${sockwallHtml(m)}</div>${roleLoadoutHtml(m)}</div>
       <div class="szone"><div class="zlabel">Contract <span class="zn">gates need your sign-off · deny rules are enforced</span></div>
         ${oaths}${seals}${dial}</div>
