@@ -10,6 +10,7 @@ function invoked from `firm unit complete` (Phase 2 decision).
 
 from __future__ import annotations
 
+import inspect
 import json
 import stat
 from pathlib import Path
@@ -158,12 +159,24 @@ Member writing a report that *quoted* the pattern. The aim now:
   lets one bad character silently disable a NEVER — ESC-021's exact defect,
   rebuilt. Scope comes from the tool name, which cannot be misspelled into
   a hole. The label narrows nothing; it explains.
+- **A mention is not an invocation** (fork: policy-noise-hardening). Fork 015
+  left shells matching on the whole command string and wrote the cost off as
+  accepted: "a shell is unparseable and send-capable, so it fails closed."
+  Half right. It is unparseable as *prose* — but the one question the gate
+  actually asks IS decidable: which programs does this string RUN? That is
+  the head of each segment (`firm.hooks.shell_intent`, spliced in below).
+  When every segment is an enumerated read-only head, the command is an
+  inspection and its arguments are data — exactly like a Write's body. When
+  ANY segment is a sender, an interpreter, or simply unknown, nothing
+  changes and the whole string is matched as before. This can only ever make
+  the gate quieter about `grep`; there is no path here that allows a `curl`.
 
-Known and accepted: a `Bash` command that merely *mentions* a forbidden verb
-(`grep chat.postMessage`) is denied. A shell is send-capable and its string is
-not parseable into intent, so the gate fails closed there. Prose belongs in
-`Write`/`Edit`, which are now clean — that is the supported path, not a
-heredoc through Bash.
+  It matters because the accepted cost was not theoretical: a Member greping
+  for `slack_send_message` to VERIFY the lock was blocked, and so was a
+  Member running `firm escalation raise --body "…slack_send_message…"` to
+  REPORT that the lock was open. That second one is ESC-021's inversion
+  rebuilt — the gate could not stop the send, but it stopped the report
+  about the send.
 
 Contract:
 - Members only: no CADRE_MEMBER_ID in env means a Board session — allow.
@@ -171,6 +184,13 @@ Contract:
   to .firm/policy-denials.jsonl; the next pulse turns it into Records + an
   escalation. This script NEVER opens the DB — it must not fight the pulse
   for locks on every tool call.
+- CADRE_POLICY_PROBE in env stamps `probe` on the receipt: a verify harness
+  firing every rule on purpose is not a Member drifting, and `ingest_denials`
+  must not escalate it (one verify run once became 34 Board escalations,
+  ESC-047…080). It marks the RECEIPT and never the DECISION — a probe is
+  blocked exactly like anything else. A Member cannot set it: this reads the
+  hook process's own environment, which a Member's Bash call cannot reach
+  (`CADRE_POLICY_PROBE=1 curl …` sets it for that subshell, not for us).
 - Any internal failure allows (exit 0): the gate guards Members, it must
   never brick a session. Stdlib only.
 """
@@ -184,22 +204,33 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# --- vendored from firm.hooks.shell_intent (spliced by install_hooks) -------
+# The gate runs under the system python3, where `firm` need not be importable
+# — and an ImportError must never disable a NEVER. So the resolver is spliced
+# in rather than imported. It has exactly one source: edit shell_intent.py,
+# never this copy, then `firm doctor --fix` every firm.
+__SHELL_INTENT__
+# --- end vendored ----------------------------------------------------------
+
+# Fields whose value is a shell command — a string that RUNS things. The only
+# payload `shell_intent` is asked about.
+SHELL_FIELDS = ("command", "cmd", "script", "shell")
+
 # Fields whose value is an instruction to execute, not prose an author typed.
 # A shell command, a URL, an API method on a generic gateway tool. These are
 # the ONLY payload the gate reads — everything else is data (fork 015).
-ACTING_FIELDS = ("command", "cmd", "script", "shell", "url", "endpoint",
-                 "method", "api_method")
+ACTING_FIELDS = SHELL_FIELDS + ("url", "endpoint", "method", "api_method")
 
 
 def _acting_values(node, depth=0):
-    """Every acting-field value in the payload, nested ones included."""
+    """Every (field, value) the payload asks to execute, nested ones included."""
     if depth > 6:
         return []
     out = []
     if isinstance(node, dict):
         for key, val in node.items():
             if str(key).lower() in ACTING_FIELDS and isinstance(val, (str, int, float)):
-                out.append(str(val))
+                out.append((str(key).lower(), str(val)))
             else:
                 out.extend(_acting_values(val, depth + 1))
     elif isinstance(node, list):
@@ -229,8 +260,31 @@ def main() -> int:
     tool = str(payload.get("tool_name") or "")
     tool_input = payload.get("tool_input") or {}
     acting = _acting_values(tool_input)
+
     # The haystack: what this call DOES. Never what it says.
-    hay = " ".join([tool] + acting).lower()
+    #
+    # A shell command whose every segment is an enumerated read-only head
+    # RUNS nothing that can send, so its arguments are data — `grep
+    # slack_send_message` names the verb the way a Write's body names it.
+    # Drop it. Anything else — a sender, an interpreter, an unknown binary,
+    # an unparseable string — is matched whole, exactly as before.
+    #
+    # The tool name is never dropped: the exemption narrows what the gate
+    # reads, never which calls it governs.
+    read = []
+    heads = []
+    for field, value in acting:
+        if field in SHELL_FIELDS:
+            heads.extend(command_heads(value))
+            if is_inspection(value):
+                continue
+        read.append(value)
+    hay = " ".join([tool] + read).lower()
+
+    # A verify harness fires every rule on purpose; that is not a Member
+    # drifting, and the Board must not be paged for it. Marks the receipt
+    # only — the decision below is untouched.
+    probe = bool(os.environ.get("CADRE_POLICY_PROBE"))
 
     for rule in rules:
         pat = str(rule.get("match") or "").lower().strip()
@@ -254,7 +308,12 @@ def main() -> int:
                     # What the gate actually read — the acting fields, not the
                     # payload. A receipt that quoted a Write's body would put
                     # the prose we refuse to match into the evidence log.
-                    "input_head": " ".join(acting)[:300],
+                    "input_head": " ".join(read)[:300],
+                    # The programs the command resolved to, and whether a
+                    # harness fired this on purpose. `ingest_denials` reads
+                    # `probe`; `heads` is for whoever debugs a mis-block.
+                    "heads": heads,
+                    "probe": probe,
                 }) + "\\n")
         except Exception:
             pass          # the denial still stands; only the receipt failed
@@ -280,6 +339,30 @@ if __name__ == "__main__":
     except Exception:
         sys.exit(0)
 '''
+
+
+def render_policy_hook() -> str:
+    """The gate, with `firm.hooks.shell_intent` spliced in.
+
+    The hook cannot import the resolver (system python3, no `firm`), and a
+    second hand-written copy of it would be ESC-021's offline replica: a
+    model of the gate that agrees with itself while the real gate does
+    something else. So there is one source, vendored at install time.
+
+    Every caller that needs the gate's text goes through here — installing
+    it AND the doctor's drift check — or the check would compare a firm's
+    hook against a template that is not what we install.
+    """
+    from firm.hooks import shell_intent
+
+    source = inspect.getsource(shell_intent)
+    # `from __future__` is only legal at the top of a file, and the gate
+    # already has its own.
+    body = "\n".join(
+        line for line in source.splitlines()
+        if not line.startswith("from __future__ import")
+    )
+    return _POLICY_HOOK_TEMPLATE.replace("__SHELL_INTENT__", body)
 
 
 def _load_settings(settings_path: Path) -> dict:
@@ -337,7 +420,7 @@ def install_policy_hook(workspace: Path) -> tuple[int, list[str]]:
     hooks_dir = workspace / ".claude" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
     dest = hooks_dir / POLICY_HOOK_SCRIPT_NAME
-    dest.write_text(_POLICY_HOOK_TEMPLATE, encoding="utf-8")
+    dest.write_text(render_policy_hook(), encoding="utf-8")
     dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     messages.append(f"Installed policy gate: {dest}")
 

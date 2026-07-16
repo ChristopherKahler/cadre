@@ -21,6 +21,13 @@ The pieces:
   turns new lines into Records + one deduped escalation per member+rule. A
   Member that tried to send is a signal — the briefing is wrong or the
   Member is drifting, and both are worth knowing.
+- **…but not every denial is that signal.** Records take everything;
+  escalations take what the Board should be interrupted for. A verify
+  harness firing all 34 rules on purpose is not 34 Members drifting, and one
+  Member hitting one rule twice is not two problems. ``_is_noise`` and the
+  per-window dedupe below draw that line — see ``ingest_denials``. A gate
+  that pages the Board for its own self-test trains the Board to stop
+  reading, which costs more than the noise does.
 """
 
 from __future__ import annotations
@@ -32,11 +39,17 @@ from pathlib import Path
 from typing import Any
 
 from firm.core import repo
+from firm.hooks.shell_intent import is_inspection
 from firm.services._records import log_event
 
 POLICY_FILE = "policy.json"
 DENIAL_LOG = "policy-denials.jsonl"
 DENIAL_CURSOR = "policy-denials.cursor"
+
+#: How much of the acting input the gate writes onto a receipt. A receipt at
+#: exactly this length is a FRAGMENT, and a fragment cannot be judged — see
+#: ``_is_noise``.
+INPUT_HEAD_LIMIT = 300
 
 # An upstream API method name: `chat.postMessage`, `messages.send`. A dot
 # between word characters is the tell. No tool is ever NAMED this — the MCP
@@ -136,6 +149,40 @@ def materialize(conn: sqlite3.Connection, workspace: Path, firm_id: str) -> Path
     return path
 
 
+def _is_noise(evt: dict[str, Any]) -> bool:
+    """A denial that cannot mean a Member tried to send.
+
+    Two kinds, and neither is worth a Board escalation:
+
+    - **A harness probe.** A verify run fires every rule on purpose. The gate
+      stamps ``probe`` when it was spawned with ``CADRE_POLICY_PROBE`` set —
+      which only whoever spawns the session can do, never the Member inside
+      it. One verify run once became 34 escalations (ESC-047…080).
+    - **An inspection.** ``grep slack_send_message`` names the verb, it does
+      not perform it. The current gate never denies these at all — this is
+      the second control, and it is what makes the receipts the OLD gate
+      already wrote (a `grep` that was verifying the lock; a Member blocked
+      from `firm escalation raise`-ing about it) ingest quietly.
+
+    Read against the same resolver the gate enforces with, never a local
+    re-implementation of it (ESC-021: the replica agreed with itself).
+
+    The receipt is a 300-char HEAD of the input, and a fragment cannot be
+    judged: `grep …<300 chars>… | curl -d @secrets api/chat.postMessage`
+    truncates to something that reads exactly like an honest `grep`. The
+    gate sees the whole string and blocks it either way — but suppressing
+    the escalation on the strength of the fragment would hand every Member
+    an opt-out from being reported, by padding. So a full-length head is
+    never quiet. Truncation can only ever make this louder.
+    """
+    if evt.get("probe"):
+        return True
+    head = str(evt.get("input_head") or "")
+    if len(head) >= INPUT_HEAD_LIMIT:
+        return False
+    return is_inspection(head)
+
+
 def ingest_denials(conn: sqlite3.Connection, workspace: Path, firm_id: str) -> int:
     """Turn new denial-log lines into Records + deduped escalations.
 
@@ -143,6 +190,14 @@ def ingest_denials(conn: sqlite3.Connection, workspace: Path, firm_id: str) -> i
     pulse carries the lines the rest of the way. Cursor = line count already
     ingested, in a sidecar; malformed lines are skipped (the log is boundary
     input written by a hook, not trusted internal state).
+
+    **Every denial becomes a Records row; only some become escalations.** A
+    denial is evidence and the audit trail is the product — so the log_event
+    below is unconditional. An escalation is an interrupt, and the Board's
+    attention is the scarce thing: a harness probe, an inspection, and the
+    2nd..Nth repeat of one Member hitting one rule are all noise. This
+    function is where that line is drawn, because the gate cannot see it —
+    it decides one call at a time and cannot know it is one of 34.
     """
     log_path = workspace / ".firm" / DENIAL_LOG
     if not log_path.exists():
@@ -161,6 +216,11 @@ def ingest_denials(conn: sqlite3.Connection, workspace: Path, firm_id: str) -> i
     from firm.services import escalation as escalation_svc
     members = {m["id"]: m for m in repo.find(conn, "member", firm_id=firm_id)}
     ingested = 0
+    # One Member hitting one rule is one signal, however many times the log
+    # caught it in this window. `raise_escalation` already absorbs a repeat
+    # into an OPEN escalation — but the moment the Board resolves it, the
+    # next line raises a fresh one, so the dedupe cannot live only there.
+    escalated: set[tuple[str, str]] = set()
     for line in new:
         try:
             evt = json.loads(line)
@@ -171,6 +231,7 @@ def ingest_denials(conn: sqlite3.Connection, workspace: Path, firm_id: str) -> i
             continue
         match = str(evt.get("match") or "")[:120]
         tool = str(evt.get("tool_name") or "")[:60]
+        noise = _is_noise(evt)
         log_event(
             conn,
             firm_id=firm_id,
@@ -178,8 +239,20 @@ def ingest_denials(conn: sqlite3.Connection, workspace: Path, firm_id: str) -> i
             actor={"type": "member", "id": member_id},
             target_ref={"type": "member", "id": member_id},
             details={"rule": match, "tool": tool,
-                     "reason": str(evt.get("reason") or "")[:200]},
+                     "reason": str(evt.get("reason") or "")[:200],
+                     # Why the Board did or didn't hear about it — a silent
+                     # suppression is indistinguishable from a broken ingest.
+                     "escalated": not noise,
+                     "probe": bool(evt.get("probe")),
+                     "heads": evt.get("heads") or []},
         )
+        ingested += 1
+        if noise:
+            continue
+        key = (member_id, match)
+        if key in escalated:
+            continue
+        escalated.add(key)
         name = members[member_id].get("name") or member_id
         escalation_svc.raise_escalation(conn, firm_id, {
             "raised_by_member_id": member_id,
@@ -194,7 +267,6 @@ def ingest_denials(conn: sqlite3.Connection, workspace: Path, firm_id: str) -> i
             ),
             "dedupe_key": f"policy-denied:{member_id}:{match[:60]}",
         })
-        ingested += 1
 
     cursor_path.write_text(str(len(lines)) + "\n", encoding="utf-8")
     return ingested

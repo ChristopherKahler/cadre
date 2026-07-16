@@ -105,10 +105,14 @@ def diagnose(workspace: Path, firm_id: str, *,
         # whatever it was the day it was written. Checking only that the file
         # exists reports a firm running a gate with a known hole as armed —
         # which is how a fixed gate quietly fails to ship (fork 015).
-        from firm.cli.install_hooks import _POLICY_HOOK_TEMPLATE
+        # Compare against the RENDERED gate, not the raw template: the gate
+        # ships with `shell_intent` spliced into it, so a firm whose hook
+        # predates a resolver change is exactly as stale as one whose hook
+        # predates a template change, and must report the same.
+        from firm.cli.install_hooks import render_policy_hook
         hook_file = workspace / ".claude" / "hooks" / POLICY_HOOK_SCRIPT_NAME
         try:
-            current = hook_file.read_text(encoding="utf-8") == _POLICY_HOOK_TEMPLATE
+            current = hook_file.read_text(encoding="utf-8") == render_policy_hook()
         except OSError:
             current = False
         registered = False

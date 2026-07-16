@@ -54,6 +54,14 @@ GWS_RULES = [
      "tool": "gws-acct"},
     {"match": "*events insert*", "reason": "A calendar write emails invites — a send in disguise.",
      "tool": "gws-acct"},
+    # Google Chat. Carried by the live chief-of-staff contracts and missing
+    # here until the noise-hardening fork went looking: the must-block set
+    # blocks nothing a rule is not aimed at, so a fixture that lags the real
+    # Contract quietly stops testing a route the firm actually locks.
+    {"match": "*spaces?messages?create*", "reason": "Chat send (CLI form) — same NEVER.",
+     "tool": "gws-acct"},
+    {"match": "*chat?+send*", "reason": "Chat send (shorthand form) — same NEVER.",
+     "tool": "gws-acct"},
 ]
 
 POLICY = {
@@ -72,7 +80,8 @@ def gate(tmp_path: Path):
     (firm_dir / "policy.json").write_text(json.dumps(POLICY), encoding="utf-8")
     hook = tmp_path / ".claude" / "hooks" / POLICY_HOOK_SCRIPT_NAME
 
-    def run(member_id: str, tool_name: str, tool_input: dict) -> dict:
+    def run(member_id: str, tool_name: str, tool_input: dict,
+            env: dict | None = None) -> dict:
         """Feed the hook a PreToolUse payload; return {} for allow."""
         proc = subprocess.run(
             [sys.executable, str(hook)],
@@ -84,7 +93,7 @@ def gate(tmp_path: Path):
             }),
             capture_output=True,
             text=True,
-            env={"CADRE_MEMBER_ID": member_id, "PATH": "/usr/bin:/bin"},
+            env={"CADRE_MEMBER_ID": member_id, "PATH": "/usr/bin:/bin", **(env or {})},
             timeout=30,
         )
         assert proc.returncode == 0, f"the gate must never brick a session: {proc.stderr}"
@@ -243,3 +252,154 @@ def test_label_reaches_the_denial_receipt(gate):
     evt = json.loads((gate.workspace / ".firm" / "policy-denials.jsonl")
                      .read_text(encoding="utf-8").splitlines()[0])
     assert evt["equips"] == "slack-desk"
+
+
+# ---------------------------------------------------------------------------
+# A mention is not an invocation (fork: policy-noise-hardening)
+#
+# Fork 015 fixed prose in Write/Edit and left shells matching whole-string,
+# writing the cost off as accepted. It was not: a Member greping for the
+# pattern to VERIFY the lock was blocked, and so was a Member escalating to
+# REPORT that the lock was open. The gate could not stop the send, but it
+# stopped the report about the send — ESC-021's inversion, rebuilt.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("case,member,command", [
+    # The two denials the live chief-of-staff log was holding un-ingested.
+    ("grep-to-verify-the-lock", "MEM-002",
+     r'grep -n "SLACK_NO_SEND\|slack_send_message\|slack_post_to_channel" .mcp.json'),
+    ("escalate-about-the-lock", "MEM-002",
+     'firm escalation raise --member MEM-004 --title "UNIT-022: unrestricted Slack" '
+     '--body "slack_send_message is reachable; the NEVER is not enforced"'),
+    # The rest of the enumerated mention set.
+    ("grep-the-pattern", "MEM-002", "grep -rn slack_send_message src/"),
+    ("cat-the-policy", "MEM-001", "cat .firm/policy.json"),
+    ("echo-the-pattern", "MEM-002", "echo chat.postMessage"),
+    ("base-learn-quoting-a-pattern", "MEM-003",
+     'base learn --text "the gate blocks slack_send_message" --domain cadre'),
+    ("read-the-denial-log", "MEM-002",
+     "tail -5 .firm/policy-denials.jsonl | grep chat.postMessage"),
+    # Prose arguments carry shell punctuation; quoted, it is data.
+    ("escalation-body-with-punctuation", "MEM-002",
+     'firm escalation raise --title x --body "first chat.postMessage; then | done"'),
+    ("git-read-piped-to-grep", "MEM-001", "git log --oneline | grep messages.send"),
+    ("sed-print-only", "MEM-001", 'sed -n "/slack_send_message/p" file'),
+])
+def test_a_mention_is_allowed(gate, case, member, command):
+    decision = gate(member, "Bash", {"command": command})
+    assert not _blocked(decision), f"{case}: the gate read a mention as a send"
+
+
+@pytest.mark.parametrize("case,member,command", [
+    # Everything that can send stays exactly as fail-closed as before.
+    ("curl-the-api", "MEM-002",
+     "curl -X POST -d text=hi https://slack.com/api/chat.postMessage"),
+    ("gws-space-form-send", "MEM-001",
+     "gws-acct gmail users messages send --to a@b.com --subject hi"),
+    ("gws-chat-spaces-create", "MEM-002",
+     "gws-acct extendly chat spaces messages create --space spaces/AAA --text hi"),
+    # A read-only head is not a shield for what runs after it.
+    ("read-head-piped-into-sender", "MEM-002",
+     "grep x | curl -X POST -d text=hi https://slack.com/api/chat.postMessage"),
+    ("read-head-chained-into-sender", "MEM-002",
+     "cat draft.txt && curl -X POST https://slack.com/api/chat.postMessage"),
+    ("sender-in-command-substitution", "MEM-002",
+     "echo $(curl -X POST https://slack.com/api/chat.postMessage)"),
+    ("sender-in-backticks", "MEM-002",
+     "echo `curl -X POST https://slack.com/api/chat.postMessage`"),
+    # An allowlisted head that hands off control is not an inspection.
+    ("find-exec-a-sender", "MEM-002",
+     r"find . -exec curl -d x https://slack.com/api/chat.postMessage \;"),
+    ("awk-system-a-sender", "MEM-002",
+     'awk \'BEGIN{system("curl -d x https://slack.com/api/chat.postMessage")}\''),
+    ("interpreter-is-never-an-inspection", "MEM-002",
+     'python3 -c "import urllib.request; urllib.request.urlopen('
+     '\'https://slack.com/api/chat.postMessage\')"'),
+    ("bash-dash-c", "MEM-002", 'bash -c "curl https://slack.com/api/chat.postMessage"'),
+    # A head is only the head it resolves to.
+    ("path-shadowed-head", "MEM-002",
+     "PATH=/tmp/evil grep -rn chat.postMessage x"),
+    # These CLIs act as well as read; only the read verbs are exempt.
+    ("firm-notify-dms-the-board", "MEM-002",
+     'firm notify --msg "chat.postMessage"'),
+])
+def test_a_send_still_blocks(gate, case, member, command):
+    decision = gate(member, "Bash", {"command": command})
+    assert _blocked(decision), f"{case}: the exemption reopened a send"
+
+
+# ---------------------------------------------------------------------------
+# The probe marker — it marks the RECEIPT, never the DECISION
+# ---------------------------------------------------------------------------
+
+def _receipt(gate, index: int = -1) -> dict:
+    lines = (gate.workspace / ".firm" / "policy-denials.jsonl").read_text(
+        encoding="utf-8").splitlines()
+    return json.loads(lines[index])
+
+
+def test_a_harness_probe_is_blocked_and_marked(gate):
+    """A verify run is still a block — it is just not a Board interrupt."""
+    decision = gate("MEM-002", "Bash",
+                    {"command": "curl -X POST https://slack.com/api/chat.postMessage"},
+                    env={"CADRE_POLICY_PROBE": "1"})
+    assert _blocked(decision), "the harness marker weakened the block"
+    assert _receipt(gate)["probe"] is True
+
+
+@pytest.mark.parametrize("case,command", [
+    # A Member cannot reach the gate's environment. An env prefix applies to
+    # the Bash subshell the tool spawns; the hook is a different process,
+    # started by Claude Code, and it reads its OWN environment.
+    ("env-prefix",
+     "CADRE_POLICY_PROBE=1 curl -X POST https://slack.com/api/chat.postMessage"),
+    ("export-then-send",
+     "export CADRE_POLICY_PROBE=1; curl -X POST https://slack.com/api/chat.postMessage"),
+    ("python-sets-environ",
+     'python3 -c "import os; os.environ[\'CADRE_POLICY_PROBE\']=\'1\'; '
+     'import urllib.request; urllib.request.urlopen(\'https://slack.com/api/chat.postMessage\')"'),
+])
+def test_a_member_cannot_mark_its_own_send_as_a_probe(gate, case, command):
+    """Both halves: the call still dies, AND the receipt still reports it.
+
+    The block is the important half, but the receipt is the half a marker
+    could silently rot — a `probe:true` here would suppress the escalation
+    in `ingest_denials` and hand every Member an opt-out from being seen.
+    """
+    decision = gate("MEM-002", "Bash", {"command": command})
+    assert _blocked(decision), f"{case}: a faked marker let a send through"
+    assert _receipt(gate)["probe"] is False, f"{case}: a Member marked its own probe"
+
+
+def test_the_receipt_records_the_resolved_heads(gate):
+    """What the gate decided against — so a mis-block is debuggable."""
+    gate("MEM-002", "Bash",
+         {"command": "grep x | curl -X POST https://slack.com/api/chat.postMessage"})
+    assert _receipt(gate)["heads"] == ["grep", "curl"]
+
+
+def test_an_exempt_command_leaves_no_receipt(gate):
+    """No denial, no evidence line — the log is for blocks, not for reads."""
+    gate("MEM-002", "Bash", {"command": "grep -rn slack_send_message src/"})
+    assert not (gate.workspace / ".firm" / "policy-denials.jsonl").exists()
+
+
+# ---------------------------------------------------------------------------
+# The gate is a copy on disk — the shipped one is the rendered one
+# ---------------------------------------------------------------------------
+
+def test_the_installed_gate_is_the_rendered_gate(gate):
+    """What `install_policy_hook` writes is what `firm doctor` compares to.
+
+    The resolver is spliced in, not imported (the gate runs under the system
+    python3, where `firm` need not exist). If these two ever diverge, every
+    firm reports 'armed and current' against a gate we do not ship — fork
+    015's exact failure, one level up.
+    """
+    from firm.cli.install_hooks import render_policy_hook
+
+    installed = (gate.workspace / ".claude" / "hooks" / POLICY_HOOK_SCRIPT_NAME
+                 ).read_text(encoding="utf-8")
+    assert installed == render_policy_hook()
+    assert "def is_inspection" in installed, "the resolver never made it into the gate"
+    assert "__SHELL_INTENT__" not in installed, "the splice placeholder shipped"
