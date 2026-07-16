@@ -350,3 +350,72 @@ class TestEscalationTools:
             esc_id, resolution="decided",
         ))
         assert resolved["status"] == "resolved"
+
+
+# ---------------------------------------------------------------------------
+# Tool surface — the registry is a public contract
+# ---------------------------------------------------------------------------
+
+
+class TestToolSurface:
+
+    def test_registered_tool_names_are_exactly_the_public_surface(self):
+        """Pin the exact tool-name list, not just a count.
+
+        The e2e smoke test's bare count drifted stale (asserted 33 while five
+        commits moved the surface to 37) because nothing in pytest pinned the
+        registry. External consumers integrate against these names, so a tool
+        appearing, vanishing, or renaming must fail loudly here — and the diff
+        must say WHICH name moved. Deliberate surface changes update this list
+        and scripts/e2e-test.sh step 8 together.
+        """
+        expected = [
+            "firm_checkout_unit",
+            "firm_complete_unit",
+            "firm_create_comment",
+            "firm_create_document",
+            "firm_create_member",
+            "firm_create_operation",
+            "firm_create_project",
+            "firm_create_unit",
+            "firm_detect_gaps",
+            "firm_escalate",
+            "firm_get_direct_reports",
+            "firm_list_comments",
+            "firm_list_contracts",
+            "firm_list_documents",
+            "firm_list_escalations",
+            "firm_list_gates",
+            "firm_list_goals",
+            "firm_list_members",
+            "firm_list_operations",
+            "firm_list_projects",
+            "firm_list_units",
+            "firm_propose_goal",
+            "firm_propose_hire",
+            "firm_release_unit",
+            "firm_request_gate",
+            "firm_resolve_escalation",
+            "firm_status",
+            "firm_update_document",
+            "firm_update_goal",
+            "firm_update_goal_metric",
+            "firm_update_member",
+            "firm_view_contract",
+            "firm_view_escalation",
+            "firm_view_gate",
+            "firm_view_goal",
+            "firm_view_member",
+            "firm_view_unit",
+        ]
+        actual = sorted(mcp_tools.mcp._tool_manager._tools.keys())
+        assert actual == expected
+
+    def test_gate_resolution_is_not_on_the_member_surface(self):
+        """Members request Gates; they never resolve them (fork 010).
+
+        The approve/reject tools were removed from the MCP surface in
+        25e7420 — a constitutional line, not an oversight. This pins it."""
+        names = set(mcp_tools.mcp._tool_manager._tools.keys())
+        assert not {n for n in names if "gate" in n and (
+            "approve" in n or "reject" in n or "resolve" in n)}
