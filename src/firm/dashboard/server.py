@@ -1764,6 +1764,17 @@ def _firm_get(
     if path in ("/", "/index.html"):
         _serve_index(h, base)
         return
+    if path.startswith("/avatars/"):
+        # member faces dropped at .firm/avatars/{member-lowercase}.png — the
+        # folder is the API (no upload flow); _http_send's no-store means a
+        # regenerated face shows on the next refresh.
+        name = path[len("/avatars/"):]
+        file = workspace / ".firm" / "avatars" / name
+        if re.fullmatch(r"[a-z0-9][a-z0-9._-]*\.png", name) and file.is_file():
+            _http_send(h, 200, file.read_bytes(), "image/png")
+        else:
+            _http_send(h, 404, {"ok": False, "error": "no avatar"})
+        return
     if path == "/api/events":
         _sse_stream(h, db_path)
         return
