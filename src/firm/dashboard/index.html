@@ -713,30 +713,43 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .sheethead{padding:30px 34px 24px;padding-right:60px;
   background-image:radial-gradient(var(--dot) 1px, transparent 1px);background-size:24px 24px}
 .plateline{display:flex;gap:22px;align-items:flex-start}
-.portrait{width:96px;height:96px;flex:none;border-radius:12px;position:relative;
+.portrait{width:150px;height:150px;flex:none;border-radius:16px;position:relative;
   display:flex;align-items:center;justify-content:center;
   background:var(--brand-gradient);background-size:300% 100%;
   border:1px solid var(--brand-border-hover);box-shadow:inset 0 0 0 1px rgba(0,0,0,.25), 0 8px 24px rgba(0,0,0,.35);
-  font:800 34px var(--font-display);color:#fff;letter-spacing:-.02em}
-.lvplate{position:absolute;bottom:-9px;left:50%;transform:translateX(-50%);white-space:nowrap;
-  background:var(--brand-elevated);border:1px solid var(--brand-border-hover);border-radius:5px;
-  font:600 9.5px/1 var(--font-mono);letter-spacing:.14em;color:var(--brand-text);padding:4px 8px}
+  font:800 50px var(--font-display);color:#fff;letter-spacing:-.02em}
+.lvplate{position:absolute;bottom:-12px;left:50%;transform:translateX(-50%);white-space:nowrap;
+  background:var(--brand-elevated);border:1px solid var(--brand-border-hover);border-radius:7px;
+  font:700 12px/1 var(--font-mono);letter-spacing:.14em;color:var(--brand-text);padding:6px 13px;
+  box-shadow:0 4px 12px rgba(0,0,0,.35)}
 .swho{flex:1;min-width:0}
 .serial{font:500 9.5px var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--brand-text-dim);
   display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}
 .serial .burn{color:var(--brand-text-secondary)}
 .serial .burn b{color:var(--brand-primary);font-weight:600;margin-right:3px}
-.sheethead h3{font:800 32px/1.05 var(--font-display);letter-spacing:-.02em;color:var(--brand-text);margin-top:7px}
-.classline{font:600 11px var(--font-mono);letter-spacing:.22em;text-transform:uppercase;color:var(--brand-warning);margin-top:6px}
-.sowns{color:var(--brand-text-secondary);font-size:12.5px;line-height:1.6;margin-top:10px;max-width:64ch}
+.sheethead h3{font:800 42px/1.02 var(--font-display);letter-spacing:-.02em;color:var(--brand-text);margin-top:2px}
+.classline{font:600 13px var(--font-mono);letter-spacing:.22em;text-transform:uppercase;color:var(--brand-warning);margin-top:7px}
+.sowns{color:var(--brand-text-secondary);font-size:13.5px;line-height:1.6;margin-top:12px;max-width:64ch}
+/* identity badges — chips, not a caption line */
+.badgerow{display:flex;flex-wrap:wrap;gap:7px;margin-top:13px}
+.sbadge{display:inline-flex;align-items:center;font:600 10.5px var(--font-mono);letter-spacing:.12em;
+  text-transform:uppercase;color:var(--brand-text-secondary);background:var(--brand-elevated);
+  border:1px solid var(--brand-border);border-radius:8px;padding:5px 11px;white-space:nowrap}
+.sbadge.ok{color:var(--brand-primary);border-color:rgba(var(--brand-primary-rgb),.4)}
+.sbadge.lead{color:var(--brand-warning);border-color:color-mix(in srgb, var(--brand-warning) 45%, transparent)}
+.sbadge.burn b{color:var(--brand-primary);font-weight:600;margin-right:5px}
+/* the two progress bands share a row; they stack on narrow sheets */
+.bandrow{display:grid;grid-template-columns:1fr 1fr;gap:10px 28px;margin-top:24px}
+.bandrow .xpband{margin-top:0}
+@media(max-width:880px){.bandrow{grid-template-columns:1fr}}
 .xpband{display:flex;align-items:center;gap:14px;margin-top:20px}
-.xpband .xk{font:600 10px var(--font-mono);letter-spacing:.16em;color:var(--brand-text);flex:none}
-.xbar{flex:1;height:7px;border-radius:4px;background:var(--brand-tint-1);
+.xpband .xk{font:600 11.5px var(--font-mono);letter-spacing:.16em;color:var(--brand-text);flex:none}
+.xbar{flex:1;height:9px;border-radius:5px;background:var(--brand-tint-1);
   border:1px solid var(--brand-border);overflow:hidden}
 .xbar > div{height:100%;background:var(--brand-primary);border-radius:3px;
   transition:width 700ms cubic-bezier(.16,1,.3,1)}
-.xpband .xv{font:500 10px var(--font-mono);letter-spacing:.1em;color:var(--brand-text-secondary);flex:none;font-variant-numeric:tabular-nums}
-.xwhy{font:400 9.5px var(--font-mono);letter-spacing:.04em;color:var(--brand-text-dim);margin-top:7px}
+.xpband .xv{font:500 11px var(--font-mono);letter-spacing:.08em;color:var(--brand-text-secondary);flex:none;font-variant-numeric:tabular-nums}
+.xwhy{font:400 11px var(--font-mono);letter-spacing:.02em;line-height:1.5;color:var(--brand-text-dim);margin-top:8px}
 /* Calibration Ladder — the trust/autonomy band, a distinct axis from level/XP.
    Reuses the xpband skeleton, tinted warning so it never reads as the same bar. */
 .xpband.tierband{margin-top:13px}
@@ -746,9 +759,9 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .sovtag{font:600 9px var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--brand-warning)}
 .tierreadout{font-size:12.5px;color:var(--brand-text-secondary);margin-bottom:10px}
 .tierreadout b{color:var(--brand-warning)}
-.sheetlive{display:flex;align-items:center;gap:9px;margin-top:14px;padding:9px 13px;border-radius:9px;
+.sheetlive{display:flex;align-items:center;gap:10px;margin-top:16px;padding:11px 15px;border-radius:10px;
   border:1px solid rgba(var(--brand-primary-rgb),.35);background:rgba(var(--brand-primary-rgb),.06);
-  font:600 9.5px var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--brand-primary);
+  font:600 11px var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--brand-primary);
   animation:stripglow 2.2s ease-in-out infinite}
 .sheetlive[hidden]{display:none}
 @media(prefers-reduced-motion:reduce){.sheetlive{animation:none}}
@@ -817,17 +830,34 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .stab-sec select option:checked{color:var(--brand-primary)}
 .stab-sec select::picker-icon{display:none}
 .stab-sec .field textarea{min-height:60px;resize:vertical}
-.mgrid .field.wide textarea{min-height:150px}
+.mgrid .field.wide textarea{min-height:120px}
 .stab-sec .field textarea.script{min-height:210px;font:400 12px/1.6 var(--font-mono);
   background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:10px;padding:14px 16px}
 .stab-sec .field textarea.script:focus{border-color:var(--brand-primary);box-shadow:none}
 .zfoot{display:flex;justify-content:flex-end;margin:2px 0 26px}
-.tiertrack{display:flex;align-items:center;gap:5px;margin:6px 0 8px}
-.tiertrack .tseg{width:36px;height:9px;border-radius:2px;background:var(--brand-tint-1)}
-.tiertrack .tseg.lit{background:var(--brand-primary)}
-.tiertrack .tseg.cur{box-shadow:0 0 10px rgba(var(--brand-primary-rgb),.55)}
-.tiertrack .tlabel{margin-left:9px;font:600 10.5px var(--font-mono);letter-spacing:.12em;color:var(--brand-warning)}
-.thint{font-size:11.5px;line-height:1.5;color:var(--brand-text-secondary);margin-bottom:14px}
+/* The trust ladder — five labeled rungs, top rung first. Earned rungs hold
+   the emerald edge, the current one glows, locked rungs sit dim. */
+.calintro{font-size:12.5px;line-height:1.65;color:var(--brand-text-secondary);margin:2px 0 14px}
+.ladder{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+.rung{display:flex;align-items:center;gap:10px;padding:10px 13px;border:1px solid var(--brand-border);
+  border-radius:9px;background:var(--brand-elevated);opacity:.5}
+.rung .rt{font:600 10px var(--font-mono);letter-spacing:.1em;color:var(--brand-text-dim);width:24px;flex:none}
+.rung .rname{font:600 13.5px var(--font-body);color:var(--brand-text);flex:1}
+.rung .rneed{font:500 10px var(--font-mono);letter-spacing:.08em;color:var(--brand-text-dim);text-transform:uppercase}
+.rung .rhere{font:600 8.5px var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--brand-primary);
+  border:1px solid rgba(var(--brand-primary-rgb),.45);border-radius:9999px;padding:2px 8px;margin-right:6px}
+.rung.earned{opacity:.92;border-color:rgba(var(--brand-primary-rgb),.35)}
+.rung.earned .rt{color:var(--brand-primary)}
+.rung.cur{opacity:1;border-color:var(--brand-primary);box-shadow:0 0 16px rgba(var(--brand-primary-rgb),.16)}
+.rung.cur .rt{color:var(--brand-primary)}
+.calnow{margin-bottom:16px}
+.cn-bar{height:7px;border-radius:9999px;background:var(--brand-tint-1);overflow:hidden;margin-bottom:8px}
+.cn-bar div{height:100%;border-radius:inherit;background:var(--brand-primary);box-shadow:0 0 10px rgba(var(--brand-primary-rgb),.5)}
+.cn-line{font-size:12px;line-height:1.6;color:var(--brand-text-secondary)}
+.cn-line b{color:var(--brand-text)}
+.calskip{font-size:11.5px;line-height:1.55;color:var(--brand-text-dim);margin:4px 0 8px}
+.calskip b{color:var(--brand-text-secondary)}
+.calskip .mono-ex{font:500 11px var(--font-mono);color:var(--brand-text-secondary)}
 .szone{padding:22px 34px 26px;border-top:1px solid var(--brand-border);min-width:0;
   animation:zoneRise 280ms cubic-bezier(.16,1,.3,1) both}
 .szone:nth-of-type(2){animation-delay:70ms}
@@ -994,8 +1024,8 @@ tr.flash td{animation:rowflash 2.2s ease-out}
   .sheethead{padding:24px 20px 20px;padding-right:54px}
   .szone{padding:18px 20px 22px}
   .plateline{gap:16px}
-  .portrait{width:72px;height:72px;font-size:26px;border-radius:10px}
-  .sheethead h3{font-size:24px}
+  .portrait{width:104px;height:104px;font-size:34px;border-radius:12px}
+  .sheethead h3{font-size:30px}
 }
 
 /* ---- mobile ---- */
@@ -2909,33 +2939,40 @@ function sheetHtml(m){
   const span = m.level_next_at != null ? m.level_next_at - m.level_floor : 0;
   const pct = span > 0 ? Math.max(0, Math.min(100, 100 * (m.xp - m.level_floor) / span)) : 100;
   const tenure = m.tenure && m.tenure.founding
-    ? '<span title="On the roster since the firm was founded">FOUNDING CREW</span>'
-    : `<span title="Hired after founding">HIRED ${esc(String((m.tenure || {}).since || '').slice(0, 10))}</span>`;
+    ? '<span class="sbadge" title="On the roster since the firm was founded">FOUNDING CREW</span>'
+    : `<span class="sbadge" title="Hired after founding">HIRED ${esc(String((m.tenure || {}).since || '').slice(0, 10))}</span>`;
   const burn = BURN[bm]
-    ? `<span class="burn" title="${esc(BURN_HINT[bm])}"><b>${BURN[bm]}</b>${esc(bm.toUpperCase())}</span>`
-    : '<span class="burn" title="No model override — inherits your account default"><b>▯▯▯</b>DEFAULT</span>';
+    ? `<span class="sbadge burn" title="${esc(BURN_HINT[bm])}"><b>${BURN[bm]}</b>${esc(bm.toUpperCase())}</span>`
+    : '<span class="sbadge burn" title="No model override — inherits your account default"><b>▯▯▯</b>DEFAULT</span>';
 
   return `
     <div class="sheethead">
       <div class="plateline">
         <div class="portrait">${esc(initials(m.name))}${avatarImg(m.name)}<span class="lvplate">LV ${m.level}</span></div>
         <div class="swho">
-          <div class="serial"><span>${esc(m.id)}</span><span>·</span>${tenure}<span>·</span>
-            <span>${esc(String(m.status || '').toUpperCase())}</span>
-            ${m.lead ? '<span>·</span><span style="color:var(--brand-warning)" title="Others on the roster report to this member">LEAD</span>' : ''}
-            <span>·</span>${burn}</div>
           <h3 id="sheetName">${esc(m.name)}</h3>
           <div class="classline">${esc(m.role || 'unassigned')}</div>
+          <div class="badgerow">
+            <span class="sbadge id">${esc(m.id)}</span>
+            ${tenure}
+            <span class="sbadge${m.status === 'active' ? ' ok' : ''}">${esc(String(m.status || '').toUpperCase())}</span>
+            ${m.lead ? '<span class="sbadge lead" title="Others on the roster report to this member">LEAD</span>' : ''}
+            ${burn}
+          </div>
           ${m.owns ? `<div class="sowns">${esc(m.owns)}</div>` : ''}
         </div>
       </div>
-      <div class="xpband">
-        <span class="xk">LEVEL ${m.level}</span>
-        <div class="xbar" role="img" aria-label="${m.xp} XP, ${pct.toFixed(0)}% toward the next level"><div style="width:${pct}%"></div></div>
-        <span class="xv">${m.xp}${m.level_next_at != null ? ' / ' + m.level_next_at + ' XP' : ' XP · CAP'}</span>
+      <div class="bandrow">
+        <div class="bandcell">
+          <div class="xpband">
+            <span class="xk">LEVEL ${m.level}</span>
+            <div class="xbar" role="img" aria-label="${m.xp} XP, ${pct.toFixed(0)}% toward the next level"><div style="width:${pct}%"></div></div>
+            <span class="xv">${m.xp}${m.level_next_at != null ? ' / ' + m.level_next_at + ' XP' : ' XP · CAP'}</span>
+          </div>
+          <div class="xwhy">${esc(XP_WHY)}</div>
+        </div>
+        <div class="bandcell">${tierBand(m)}</div>
       </div>
-      <div class="xwhy">${esc(XP_WHY)}</div>
-      ${tierBand(m)}
       <div class="sheetlive" id="sheetLive" hidden aria-live="polite">
         <span class="fdot"></span><span>Working</span>
         <span data-run-started=""></span><span>·</span><span class="slunit"></span>
@@ -3131,10 +3168,19 @@ function profManageHtml(P){
     `<option value="${esc(c.id)}" ${c.id === (m.contract_id || '') ? 'selected' : ''}>${esc(c.name)} (${esc(c.id)})</option>`).join('');
   const mgrOpts = ['<option value="">THE BOARD (direct)</option>'].concat(P.members.map(x =>
     `<option value="${esc(x.id)}" ${x.id === (m.reports_to_member_id || '') ? 'selected' : ''}>${esc(x.name)} (${esc(x.id)})</option>`)).join('');
-  const cal = P.calibration, nx = cal.next || {}, needs = nx.needs || {};
-  const nextHint = nx.needed_tier != null
-    ? `Next: T${nx.needed_tier}${needs.rated ? ` — ${needs.rated} rated run${needs.rated === 1 ? '' : 's'}${needs.avg ? ` at ≥${needs.avg}` : ''}` : (needs.avg ? ` — average ≥${needs.avg}` : '')}.`
-    : 'Top tier — full earned trust.';
+  const cal = P.calibration, nx = cal.next || {}, needs = nx.needs || {}, have = nx.have || {};
+  // The ladder, mirrored from calibration.py TIERS — top rung first, plain words.
+  const LADDER = [
+    [4, 'Principal',   '40 rated · 4.6★', 'Full earned trust — may even be allowed outside network access.'],
+    [3, 'Autonomous',  '20 rated · 4.3★', 'Can be trusted to run shell commands without asking.'],
+    [2, 'Trusted',     '8 rated · 4.0★',  'Can be trusted to edit files without asking.'],
+    [1, 'Provisional', '3 rated · 3.5★',  'Can be trusted to read things on their own.'],
+    [0, 'Probation',   'starting rung',   'New hire — everything still needs your sign-off.'],
+  ];
+  const remaining = needs.rated ? Math.max(0, needs.rated - (have.rated || 0)) : 0;
+  const pct = needs.rated ? Math.min(100, 100 * (have.rated || 0) / needs.rated) : 100;
+  const nextName = nx.needed_tier != null
+    ? ((LADDER.find(r => r[0] === nx.needed_tier) || [])[1] || 'T' + nx.needed_tier) : null;
   return `
     <div class="mrow">
     <div class="mpanel">
@@ -3149,14 +3195,23 @@ function profManageHtml(P){
       </div>
     </div>
     <div class="mpanel">
-      <div class="mp-head">Calibration <span class="zn">Board-only · the member never sees it</span></div>
-      <div class="tiertrack" role="img" aria-label="trust tier ${cal.tier} of 4">
-        ${[0,1,2,3,4].map(t => `<span class="tseg${t <= cal.tier ? ' lit' : ''}${t === cal.tier ? ' cur' : ''}" title="T${t}"></span>`).join('')}
-        <span class="tlabel">T${cal.tier} · ${esc(cal.tier_label)}</span>
+      <div class="mp-head">Trust ladder <span class="zn">Board-only · the member never sees it</span></div>
+      <p class="calintro">Trust is earned here, never given. Rate this member's runs — good scores climb the ladder, and every rung up means less asking you for permission and more acting on their own.</p>
+      <div class="ladder">${LADDER.map(([t, name, req, means]) => `
+        <div class="rung${t < cal.tier || (t === cal.tier && t === 4) ? ' earned' : ''}${t === cal.tier ? ' cur' : ''}" title="${esc(means)}">
+          <span class="rt">T${t}</span><span class="rname">${esc(name)}</span>
+          ${t === cal.tier ? '<span class="rhere">current</span>' : ''}
+          <span class="rneed">${esc(req)}</span>
+        </div>`).join('')}
       </div>
-      <div class="thint">${esc(nextHint)} Earned autonomy gates which enforced seals may loosen.</div>
-      <div class="field"><label>Sovereign override — capabilities, or * for blanket</label>
-        <input id="fSovereign" value="${esc((cal.sovereign || []).join(', '))}" placeholder="e.g. network, shell — empty means the ladder gates every loosening"></div>
+      ${nx.needed_tier != null ? `
+      <div class="calnow">
+        <div class="cn-bar" role="img" aria-label="${have.rated || 0} of ${needs.rated || 0} rated runs"><div style="width:${pct}%"></div></div>
+        <div class="cn-line">Climbing to <b>${esc(nextName)}</b>: <b>${remaining} more rated run${remaining === 1 ? '' : 's'}</b> at an average of <b>${needs.avg}★ or better</b>. So far: ${have.rated || 0} rated${have.avg != null ? ` · ${have.avg}★ average` : ''}.</div>
+      </div>` : '<div class="calnow"><div class="cn-line">Top of the ladder — nothing left to earn.</div></div>'}
+      <div class="field"><label>Skip the ladder</label>
+        <div class="calskip">Powers this member may <b>always</b> use, ladder or not — <span class="mono-ex">read, write, shell, network</span>, or <span class="mono-ex">*</span> for everything. Leave it empty and the ladder decides.</div>
+        <input id="fSovereign" value="${esc((cal.sovereign || []).join(', '))}" placeholder="read, shell — or *"></div>
     </div>
     </div>
     <div class="mpanel">
