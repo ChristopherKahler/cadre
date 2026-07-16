@@ -32,9 +32,24 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import ssl
 import urllib.error
 import urllib.request
 from typing import Any
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """A verifying TLS context that finds a CA bundle even where the system
+    Python isn't wired to the OS trust store (stock macOS python.org builds —
+    every M2 pilot pulse needed a manual SSL_CERT_FILE without this). Prefer
+    certifi's bundle when present (it rides in transitively via the MCP SDK),
+    else the stdlib default. Verification stays ON; only the trust root is
+    made discoverable."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
 
 from firm.core import repo
 
@@ -77,7 +92,9 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str]) -> di
         headers={"Content-Type": "application/json; charset=utf-8", **headers},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_SEC) as resp:
+    with urllib.request.urlopen(
+        req, timeout=_HTTP_TIMEOUT_SEC, context=_ssl_context(),
+    ) as resp:
         body = resp.read().decode("utf-8", errors="replace")
     try:
         return json.loads(body)

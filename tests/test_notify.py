@@ -7,9 +7,32 @@ import json
 import sqlite3
 from unittest import mock
 
+import ssl
+
 from firm.core.migrate import apply_migrations
 from firm.core.repo import create
-from firm.notify import remind_interval_hours, send_board_dm
+from firm.notify import _ssl_context, remind_interval_hours, send_board_dm
+
+
+def test_ssl_context_verifies():
+    """The notifier's TLS context keeps verification ON (the macOS CA-bundle
+    fix must not become a verification-off shortcut)."""
+    ctx = _ssl_context()
+    assert isinstance(ctx, ssl.SSLContext)
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+    assert ctx.check_hostname is True
+
+
+@mock.patch("firm.notify.urllib.request.urlopen")
+def test_slack_dm_passes_verifying_context(mock_open, monkeypatch):
+    """send_board_dm hands urlopen a verifying SSL context (regression: stock
+    macOS python needed a manual SSL_CERT_FILE without this)."""
+    monkeypatch.setenv("CADRE_SLACK_TOKEN", "xoxb-test")
+    mock_open.return_value = _FakeResponse(json.dumps({"ok": True}).encode())
+    conn = _conn_with_firm({"provider": "slack", "slack_user_id": "U123"})
+    send_board_dm(conn, "chrisai", "hi")
+    ctx = mock_open.call_args.kwargs["context"]
+    assert isinstance(ctx, ssl.SSLContext) and ctx.verify_mode == ssl.CERT_REQUIRED
 
 
 def _conn_with_firm(notify_config=None) -> sqlite3.Connection:
