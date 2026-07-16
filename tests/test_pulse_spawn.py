@@ -288,6 +288,7 @@ class TestSpawnCommand:
             stderr=subprocess.PIPE,
             text=True,
             cwd="/tmp",
+            env=None,  # no member_id → inherit the parent env unchanged
         )
         assert result.returncode == 0
         assert result.stdout == "stdout"

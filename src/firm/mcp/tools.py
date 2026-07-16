@@ -16,6 +16,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from firm.core.db import connect, get_db_path
+from firm.services.authority import AuthorityError
 from firm.services import comment as comment_svc
 from firm.services import contract as contract_svc
 from firm.services import document as document_svc
@@ -48,7 +49,12 @@ def _get_conn() -> sqlite3.Connection:
 
 
 def _safe(fn, *args, **kwargs) -> dict | list:
-    """Call fn, return result or {"error": str} on ValueError."""
+    """Call fn, return result or {"error": str} on ValueError.
+
+    An AuthorityError returns its structured payload instead of a stringified
+    message, so a denied Member run gets an error code and a next action it
+    can act on rather than prose it has to parse.
+    """
     conn = _get_conn()
     try:
         result = fn(conn, *args, **kwargs)
@@ -57,6 +63,8 @@ def _safe(fn, *args, **kwargs) -> dict | list:
         if hasattr(result, "keys"):
             return dict(result)
         return result
+    except AuthorityError as exc:
+        return exc.payload
     except (ValueError, TypeError, sqlite3.IntegrityError) as exc:
         return {"error": str(exc)}
     finally:

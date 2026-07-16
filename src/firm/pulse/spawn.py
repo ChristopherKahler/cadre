@@ -76,12 +76,27 @@ def resolve_claude_bin() -> tuple[str | None, str]:
     )
 
 
+def _run_env(member_id: str | None) -> dict[str, str] | None:
+    """Child env carrying the Member's identity, or None to inherit as-is.
+
+    ``CADRE_MEMBER_ID`` is what the authority gate keys on
+    (:mod:`firm.services.authority`). It propagates to everything the run
+    touches: the firm MCP server (a stdio server the child spawns) and any
+    Bash subshell both inherit it, so the Member is identified on every path
+    it can reach the service layer through.
+    """
+    if not member_id:
+        return None
+    return {**os.environ, "CADRE_MEMBER_ID": member_id}
+
+
 def spawn_member_run(
     prompt: str,
     *,
     timeout_sec: int = 300,
     cwd: str | None = None,
     model: str | None = None,
+    member_id: str | None = None,
 ) -> SpawnResult:
     """Spawn a ``claude --print`` process and capture output on completion.
 
@@ -92,6 +107,9 @@ def spawn_member_run(
         model: Optional ``--model`` override from the Member's Contract
             (``pulse_config.model``) — the per-contract cost lever; cheap
             roles don't need the top model. None = runtime default.
+        member_id: The Member this run acts as. Stamped into the child env as
+            ``CADRE_MEMBER_ID`` for the authority gate. None spawns an
+            unidentified run, which the gate treats as the Board.
 
     Returns:
         SpawnResult with captured stdout/stderr and process metadata.
@@ -118,6 +136,7 @@ def spawn_member_run(
             stderr=subprocess.PIPE,
             text=True,
             cwd=cwd,
+            env=_run_env(member_id),
         )
     except (FileNotFoundError, OSError) as exc:
         return SpawnResult(

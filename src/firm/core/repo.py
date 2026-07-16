@@ -45,7 +45,7 @@ JSON_COLUMNS: dict[str, frozenset[str]] = {
     "firm": frozenset({"operator", "core_values", "partners", "schedule", "notify_config"}),
     "contract": frozenset({"runtime_config", "skill_loadout", "domain_loadout",
                            "pulse_config", "validation_config", "budget_config"}),
-    "member": frozenset({"suggested_skills", "suggested_domains", "budget"}),
+    "member": frozenset({"suggested_skills", "suggested_domains", "budget", "autonomy"}),
     "goal": frozenset({"metric"}),
     "operation": frozenset({"goal_ids", "acceptance_criteria", "project_ids"}),
     "project": frozenset({"goal_ids", "acceptance_criteria", "unit_ids", "tags"}),

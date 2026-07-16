@@ -18,6 +18,7 @@ from firm.core import repo
 from firm.services._id import next_id
 from firm.services._records import log_event
 from firm.services._validate import require_exists, validate_fk, validate_status
+from firm.services.authority import require_authority
 
 MEMBER_STATUSES = ["active", "paused", "retired"]
 
@@ -44,7 +45,10 @@ def create_member(
 
     Raises:
         ValueError: If required fields missing or FK validation fails.
+        AuthorityError: If an identified Member caller lacks the authority key.
     """
+    require_authority(conn, "member.create")
+
     if "name" not in data or "role" not in data:
         raise ValueError("'name' and 'role' are required for member creation")
 
@@ -129,7 +133,10 @@ def update_member(
 
     Raises:
         ValueError: If member not found, FK validation fails, or invalid status.
+        AuthorityError: If an identified Member caller lacks the authority key.
     """
+    require_authority(conn, "member.update")
+
     existing = require_exists(conn, "member", member_id)
 
     # Validate status if changing

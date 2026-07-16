@@ -24,6 +24,7 @@ from firm.pulse.parser import parse_stream
 from firm.pulse.spawn import spawn_member_run
 from firm.pulse.validate import retry_on_failure, validate_output
 from firm.services._id import next_id
+from firm.services.authority import system_context
 from firm.services.unit import complete_unit
 
 
@@ -309,6 +310,7 @@ def _execute_run(
                 failure_context,
                 lambda p: spawn_member_run(
                     p, timeout_sec=timeout, cwd=cwd, model=retry_model,
+                    member_id=member_id,
                 ),
                 parse_stream,
             )
@@ -343,9 +345,12 @@ def _execute_run(
     # done (audit record + AC rollup via the service), or every future
     # pulse re-dispatches the same finished work and dependents never
     # unblock. Runner-owned per the relay seam-4 convention: the harness,
-    # not the model, is the completion authority.
+    # not the model, is the completion authority — hence system_context():
+    # the authority gate must read this as the harness acting, even when the
+    # pulse itself was fired from inside a Member run's process tree.
     if validation_result.passed:
-        complete_unit(conn, firm_id, unit["id"], member_id, run_id=run_id)
+        with system_context():
+            complete_unit(conn, firm_id, unit["id"], member_id, run_id=run_id)
 
     return {
         "run_id": run_id,
