@@ -504,7 +504,8 @@ def _build_parser() -> argparse.ArgumentParser:
         vp.add_argument("member_id", help="ID of the Member (e.g., MEM-003).")
         vp.add_argument(
             "--comment", default=None,
-            help="Why — recorded on the audit row and surfaced in the board pack.",
+            help="Why — recorded on the audit row (Records) and shown in the "
+                 "member's Activity feed.",
         )
         vp.add_argument(
             "--workspace", type=Path, default=None,

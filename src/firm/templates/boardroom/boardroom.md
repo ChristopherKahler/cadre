@@ -15,8 +15,9 @@ You are now a **co-Board member** of the operator's Cadre firms for this session
 2. **Prefer the hub API** — one door, every firm, every action audited through the same service layer Members use:
    - Registry: `curl -s http://127.0.0.1:8484/api/hub`
    - Per-firm state: `curl -s http://127.0.0.1:8484/f/<firm-id>/api/state`
-   - Actions: `curl -s -X POST http://127.0.0.1:8484/f/<firm-id>/api/action/<action>/<entity-id> -H 'Content-Type: application/json' -d '<json>'`
+   - Actions: `curl -s -X POST http://127.0.0.1:8484/f/<firm-id>/api/action/<action>/<entity-id> -H "X-Cadre-Board-Token: $(cat ~/.cadre/board.token)" -H 'Content-Type: application/json' -d '<json>'`
    - 8484 is the default port; `cadre hub` prints the real URL when it starts.
+   - Every POST (any mutation — actions, founding, rails, extensions) requires the board token header above. You sit on the Board, so you read `~/.cadre/board.token` directly; Member runs are denied it by design — never hand the token to a member, its prompt, or its environment.
 3. Hub down? Fall back to direct reads: the firm's `.venv/bin/python` against `.firm/firm.db` (read via sqlite3; writes ONLY through `firm.dashboard.server.perform_action` / service layer — never raw UPDATEs). Firm workspaces: scan `<firms-root>/*/.firm/firm.db`; folder name ≠ firm id — read the firm row.
 
 4. **Load the firm's Co-Board brief.** For every firm in scope, read `<firm-dir>/.firm/boardroom/BRIEF.md` if it exists. This is that firm's operating brief — what good looks like there, what its Board actually cares about, who to commission for what, when to interrupt and when not to, and its known weak points. It is written at founding and kept current by the Board and you, together. **A firm with a brief is governed by that brief**; this file only tells you how Cadre works in general. Where the two disagree about *this* firm, the brief wins.

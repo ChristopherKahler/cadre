@@ -199,6 +199,10 @@ def spawn_member_run(
                 env.setdefault(k, v)
         except Exception:
             pass   # vault is additive — it must never block a member run
+    # Board credentials never enter a Member run: the dashboard's POST gate
+    # (X-Cadre-Board-Token) would be meaningless if the token rode in on the
+    # inherited shell env or a future vault entry.
+    env.pop("CADRE_BOARD_TOKEN", None)
     if member_id:
         env["CADRE_MEMBER_ID"] = member_id
     if firm_id:

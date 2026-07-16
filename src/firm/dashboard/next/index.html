@@ -1176,8 +1176,16 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&
 const app = document.getElementById('app');
 
 async function GET(p){ const r = await fetch(p); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+/* Board token rides on every mutation — same-origin localStorage, shared
+   with the boardroom (which owns the set-once modal). A 401 payload's hint
+   points the operator at ~/.cadre/board.token. */
+function boardHeaders(h){
+  const t = localStorage.getItem('cadreBoardToken');
+  if(t) h['X-Cadre-Board-Token'] = t;
+  return h;
+}
 async function POST(p, body){
-  const r = await fetch(p, {method:'POST', headers:{'Content-Type':'application/json'},
+  const r = await fetch(p, {method:'POST', headers: boardHeaders({'Content-Type':'application/json'}),
                            body: JSON.stringify(body || {})});
   return r.json();
 }

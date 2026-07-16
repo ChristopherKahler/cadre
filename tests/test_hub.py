@@ -138,7 +138,10 @@ def test_assemble_state_stale_flag(firms_root: Path):
 
 
 @pytest.fixture()
-def hub_server(firms_root: Path):
+def hub_server(firms_root: Path, tmp_path: Path, monkeypatch):
+    # POSTs are board-token-gated; isolate the minted token to this test's
+    # home so runs never touch the operator's real ~/.cadre.
+    monkeypatch.setenv("CADRE_HOME", str(tmp_path / "cadre-home"))
     handler = make_hub_handler(firms_root)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -155,6 +158,14 @@ def _get(url: str) -> tuple[int, bytes]:
             return resp.status, resp.read()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read()
+
+
+def _post_headers() -> dict:
+    """Mutations ride with the board token (see test_dashboard_auth.py)."""
+    from firm.dashboard import auth as board_auth
+
+    return {"Content-Type": "application/json",
+            board_auth.HEADER: board_auth.board_token()}
 
 
 def test_hub_portfolio_and_api(hub_server: str):
@@ -225,7 +236,7 @@ def test_pulse_action_dispatches_detached(hub_server: str, monkeypatch):
     req = urllib.request.Request(
         hub_server + "/f/alpha/api/action/pulse/now",
         data=b"{}", method="POST",
-        headers={"Content-Type": "application/json"},
+        headers=_post_headers(),
     )
     with urllib.request.urlopen(req) as resp:
         out = json.loads(resp.read())
@@ -271,7 +282,7 @@ def test_commission_creates_unit_and_dispatches(hub_server: str, firms_root: Pat
     req = urllib.request.Request(
         hub_server + "/f/alpha/api/action/member-commission/MEM-001",
         data=json.dumps({"instructions": "Render portraits for every registered NPC"}).encode(),
-        method="POST", headers={"Content-Type": "application/json"},
+        method="POST", headers=_post_headers(),
     )
     with urllib.request.urlopen(req) as resp:
         out = json.loads(resp.read())
@@ -358,7 +369,7 @@ def test_resolve_with_followup_commissions_raiser(hub_server: str, firms_root: P
     req = urllib.request.Request(
         hub_server + "/f/alpha/api/action/escalation-resolve/ESC-010",
         data=json.dumps({"resolution": "Hold and read it", "queue_followup": True}).encode(),
-        method="POST", headers={"Content-Type": "application/json"},
+        method="POST", headers=_post_headers(),
     )
     with urllib.request.urlopen(req) as resp:
         out = json.loads(resp.read())

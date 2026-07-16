@@ -1847,7 +1847,7 @@ async function onExtFile(ev){
       '\n\nOnly install packages you trust. Cancel = install the panel WITHOUT running it.');
   }
   try{
-    const r = await fetch(BASE + '/api/extensions/install', {
+    const r = await boardFetch(BASE + '/api/extensions/install', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({package: pkg, confirmed: confirmed}),
     });
@@ -1875,7 +1875,7 @@ window.CadreShell = {
   },
   viewAction: async (viewId, key, body) => {
     try{
-      const r = await fetch(BASE + '/api/views/' + viewId + '/action/' + key, {
+      const r = await boardFetch(BASE + '/api/views/' + viewId + '/action/' + key, {
         method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body || {}),
       });
       return await r.json();
@@ -3073,7 +3073,7 @@ async function resyncArmory(){
   const foot = document.getElementById('palFoot');
   foot.textContent = 'Re-surveying the machine — CLI identity probes take a few seconds…';
   try{
-    const r = await fetch(BASE + '/api/inventory/sync', {method: 'POST'});
+    const r = await boardFetch(BASE + '/api/inventory/sync', {method: 'POST'});
     const d = await r.json();
     if(d.ok){
       const c = d.result.counts || {};
@@ -3961,9 +3961,61 @@ async function submitGoal(){
 function openUnitComment(unitId){
   openModal('unit-comment', unitId);
 }
+/* ---- board token (HTTP boundary) ---- */
+/* Every POST is a Board mutation; the server 401s without the operator's
+   token (~/.cadre/board.token) so member runs can't drive this surface.
+   Asked once via modal, remembered in this browser, call retried. */
+function boardHeaders(h){
+  const t = localStorage.getItem('cadreBoardToken');
+  if(t) h['X-Cadre-Board-Token'] = t;
+  return h;
+}
+let boardTokenAsk = null;
+function askBoardToken(){
+  if(boardTokenAsk) return boardTokenAsk;
+  boardTokenAsk = new Promise((resolve) => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;inset:0;z-index:200;display:grid;place-items:center;background:rgba(0,0,0,.55)';
+    wrap.innerHTML = `
+      <div style="background:var(--brand-elevated);border:1px solid var(--brand-border);border-radius:12px;padding:20px;max-width:460px;width:92%">
+        <h3 style="margin:0 0 8px">Board token required</h3>
+        <p style="margin:0 0 12px;font-size:13px;color:var(--brand-text-secondary)">
+          Board actions are token-gated so member runs can't reach this surface.
+          Paste the token from <code>~/.cadre/board.token</code> — asked once, remembered by this browser.</p>
+        <input id="boardTokenInput" type="password" placeholder="board token" autocomplete="off"
+               style="width:100%;box-sizing:border-box;margin-bottom:12px;border:1px solid var(--brand-border);border-radius:8px;padding:8px 10px">
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn" id="boardTokenCancel">Cancel</button>
+          <button class="btn primary" id="boardTokenSave">Save</button>
+        </div>
+      </div>`;
+    document.body.appendChild(wrap);
+    const done = (val) => { wrap.remove(); boardTokenAsk = null; resolve(val); };
+    wrap.querySelector('#boardTokenCancel').onclick = () => done(null);
+    wrap.querySelector('#boardTokenSave').onclick = () => {
+      const v = wrap.querySelector('#boardTokenInput').value.trim();
+      if(v) localStorage.setItem('cadreBoardToken', v);
+      done(v || null);
+    };
+    const inp = wrap.querySelector('#boardTokenInput');
+    inp.addEventListener('keydown', (e) => { if(e.key === 'Enter') wrap.querySelector('#boardTokenSave').click(); });
+    inp.focus();
+  });
+  return boardTokenAsk;
+}
+async function boardFetch(url, opts){
+  opts = opts || {};
+  opts.headers = boardHeaders(opts.headers || {});
+  let r = await fetch(url, opts);
+  if(r.status === 401){
+    const t = await askBoardToken();
+    if(t){ opts.headers = boardHeaders(opts.headers); r = await fetch(url, opts); }
+  }
+  return r;
+}
 async function postAction(path, body){
   try{
-    const r = await fetch(BASE + '/api/action/' + path, {
+    const r = await boardFetch(BASE + '/api/action/' + path, {
       method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body),
     });
     return await r.json();

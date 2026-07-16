@@ -30,6 +30,7 @@ from urllib.parse import parse_qs
 from firm.core import repo
 from firm.core.db import connect, db_is_remote, get_db_path, resolve_firm_id
 from firm.core.migrate import apply_migrations
+from firm.dashboard import auth as board_auth
 from firm.dashboard import calibration as calibration_svc
 from firm.pulse.orchestrator import (
     _REAP_GRACE_SEC,
@@ -427,6 +428,14 @@ _VIEW_PAGE_TEMPLATE = """<!doctype html>
 /* Minimal CadreShell bridge — same contract the boardroom shell exposes,
    so a fragment renders identically full-page and embedded. */
 const BASE = '__BASE__';
+/* Board token rides on every mutation — same-origin localStorage, set once
+   in the main boardroom. A fragment can't prompt; a 401 payload's hint
+   tells the operator where to set it. */
+const authHeaders = (h) => {
+  const t = localStorage.getItem('cadreBoardToken');
+  if(t) h['X-Cadre-Board-Token'] = t;
+  return h;
+};
 window.CadreShell = {
   base: BASE,
   _state: {},
@@ -434,7 +443,7 @@ window.CadreShell = {
   post: async function(path, body){
     try{
       const r = await fetch(BASE + '/api/action/' + path, {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
+        method: 'POST', headers: authHeaders({'Content-Type': 'application/json'}),
         body: JSON.stringify(body || {}),
       });
       return await r.json();
@@ -455,7 +464,7 @@ window.CadreShell = {
   viewAction: async function(viewId, key, body){
     try{
       const r = await fetch(BASE + '/api/views/' + viewId + '/action/' + key, {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
+        method: 'POST', headers: authHeaders({'Content-Type': 'application/json'}),
         body: JSON.stringify(body || {}),
       });
       return await r.json();
@@ -2312,6 +2321,13 @@ def _firm_post(
     path: str,
 ) -> None:
     """POST routing for one firm's boardroom (firm-relative *path*)."""
+    # HTTP boundary: every firm POST is a Board mutation. Checked before any
+    # body or route work — Member runs share loopback with the operator, and
+    # an open POST surface would bypass the authority gate the MCP tools
+    # enforce. Reads (GET) stay open.
+    if not board_auth.authorized(h):
+        board_auth.deny(_http_send, h)
+        return
     parts = path.strip("/").split("/")
     # Route: /api/inventory/sync — re-survey the machine into the Armory.
     # Machine-tier, not firm state — no Records entry, any firm may trigger it.
@@ -2512,11 +2528,13 @@ def run_dashboard(
 
     handler = make_handler(workspace, firm_id)
     server = ThreadingHTTPServer((host, port), handler)
+    board_auth.board_token()   # minted before first use so the path is live
     print(json.dumps({
         "ok": True,
         "url": f"http://{host}:{port}",
         "workspace": str(workspace),
         "firm_id": firm_id,
+        "board_token": str(board_auth.board_token_path()),
     }))
     try:
         server.serve_forever()
@@ -2966,6 +2984,11 @@ def make_hub_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             _http_send(self, 404, {"error": "not found"})
 
         def do_POST(self) -> None:
+            # Same boundary as _firm_post: hub POSTs (founding, rails,
+            # extensions, prefs) are Board mutations, token-gated.
+            if not board_auth.authorized(self):
+                board_auth.deny(_http_send, self)
+                return
             if self.path.startswith("/api/next/"):
                 from firm.dashboard import founding
                 length = int(self.headers.get("Content-Length") or 0)
@@ -3147,11 +3170,13 @@ def run_hub(
     launch.ensure_boardroom_claude(root)   # the Co-Board's loadout, laid once
     handler = make_hub_handler(root)
     server = ThreadingHTTPServer((host, port), handler)
+    board_auth.board_token()   # minted before first use so the path is live
     print(json.dumps({
         "ok": True,
         "url": f"http://{host}:{port}",
         "root": str(root),
         "firms": sorted(firms),
+        "board_token": str(board_auth.board_token_path()),
     }))
     try:
         server.serve_forever()
