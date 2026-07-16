@@ -355,11 +355,32 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
 .doc .dp{font:400 11px var(--font-mono);color:var(--brand-text-dim);word-break:break-all;margin-top:3px}
 .doc .dm2{color:var(--brand-text-dim);font-size:11.5px;margin-top:2px}
 
-/* ---- roster canvas (Miro-style org chart) ---- */
+/* ---- The Floor canvas (full-bleed org chart) ---- */
 .canvaswrap{position:relative;height:calc(100vh - 210px);min-height:480px;border:1px solid var(--brand-border);
   border-radius:12px;overflow:hidden;background:var(--brand-surface);
   background-image:radial-gradient(var(--dot) 1px, transparent 1px);background-size:24px 24px;
   cursor:grab;user-select:none}
+/* The Floor owns its whole embed — no page gutter, the canvas IS the page.
+   A soft light-well breathes at the top so the org reads staged, not floating. */
+#page-floor{max-width:none;margin:0;padding:0;height:100%;position:relative}
+#page-floor .canvaswrap{position:absolute;inset:0;height:auto;min-height:0;border:0;border-radius:0}
+#page-floor .canvaswrap::before{content:'';position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse 70% 42% at 50% -6%, rgba(var(--brand-primary-rgb),.07), transparent 62%)}
+/* the legend plaque — the page title lives ON the floor, like a map key */
+.floorplaque{position:absolute;top:20px;left:20px;z-index:6;max-width:330px;pointer-events:none;
+  padding:15px 20px 13px;border:1px solid var(--brand-border);border-radius:12px;
+  background:color-mix(in srgb, var(--brand-surface) 82%, transparent);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);box-shadow:var(--shadow-card)}
+.floorplaque::before{content:'';position:absolute;left:-1px;top:13px;bottom:13px;width:2px;border-radius:2px;
+  background:var(--brand-primary);box-shadow:0 0 12px rgba(var(--brand-primary-rgb),.55)}
+.fp-eyebrow{font:600 9.5px var(--font-mono);letter-spacing:.24em;text-transform:uppercase;
+  color:var(--brand-primary);margin-bottom:6px}
+.fp-title{font:800 25px/1 var(--font-display);letter-spacing:-.015em;color:var(--brand-text);margin:0 0 7px}
+.fp-desc{font-size:11.5px;line-height:1.55;color:var(--brand-text-secondary);margin:0}
+.fp-meta{display:flex;gap:16px;margin-top:11px;padding-top:10px;border-top:1px solid var(--brand-border);
+  font:500 9.5px var(--font-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--brand-text-dim)}
+.fp-meta b{color:var(--brand-primary);font-weight:600;margin-right:1px}
+@media(max-width:700px){.floorplaque{max-width:calc(100vw - 40px)}.fp-desc{display:none}}
 .canvaswrap.panning{cursor:grabbing}
 .stage{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform}
 .stage svg{position:absolute;top:0;left:0;overflow:visible;pointer-events:none}
@@ -384,8 +405,14 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
 .mcard .mfoot{display:flex;align-items:center;gap:7px;font:500 10.5px var(--font-mono);color:var(--brand-text-dim)}
 .mcard .mfoot .sdot{width:7px;height:7px}
 .mcard .mcu{margin-top:7px;font-size:11px;color:var(--brand-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.mcard.board{background:var(--brand-wash);border-color:rgba(var(--brand-primary-rgb),.35);cursor:default}
-.mcard.board:hover{box-shadow:var(--shadow-card)}
+.mcard.board{width:280px;height:132px;padding:18px 20px;background:var(--brand-wash);
+  border-color:rgba(var(--brand-primary-rgb),.35);cursor:default;
+  box-shadow:0 0 28px rgba(var(--brand-primary-rgb),.10)}
+.mcard.board:hover{box-shadow:0 0 28px rgba(var(--brand-primary-rgb),.10)}
+.mcard.board .avatar{width:56px;height:56px;font-size:18px}
+.mcard.board .mname{font-size:16px;letter-spacing:.02em}
+.mcard.board .mrole{font-size:12px}
+.mcard.board .mfoot{margin-top:9px}
 .canvasctl{position:absolute;bottom:14px;right:14px;display:flex;gap:6px;z-index:5}
 .canvasctl button{width:34px;height:34px;border-radius:8px;border:1px solid var(--brand-border);
   background:var(--brand-elevated);color:var(--brand-text-secondary);cursor:pointer;font:600 15px var(--font-mono)}
@@ -612,8 +639,10 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .confignote button:hover{color:var(--brand-text)}
 
 /* ---- The Floor: character select ---- */
-/* floor cards live on the org canvas — absolutely placed by layoutRoster */
-.fcard.on-canvas{position:absolute;width:232px;box-sizing:border-box}
+/* floor cards live on the org canvas — absolutely placed by layoutRoster.
+   max-width:none: the base .fcard's max-width:100% resolves against the
+   zero-width stage and collapses the card to its padding. */
+.fcard.on-canvas{position:absolute;width:232px;max-width:none;box-sizing:border-box}
 .fcard{position:relative;background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:14px;
   padding:20px 16px 14px;cursor:pointer;text-align:center;box-shadow:var(--shadow-card);
   min-width:0;max-width:100%;overflow:hidden;
@@ -747,6 +776,35 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .stab-sec .seclabel{font:600 10px var(--font-mono);letter-spacing:.18em;text-transform:uppercase;
   color:var(--brand-text-secondary)}
 .stab-about{color:var(--brand-text-secondary);font-size:13px;line-height:1.6;margin-bottom:18px}
+/* Manage reads as character configuration, not a web form: a two-column
+   designation grid with underlined value fields, the trust ladder as a lit
+   segment track (same language as the budget dial), the instructions file
+   as the member's script block. */
+.mgrid{display:grid;grid-template-columns:1fr 1fr;gap:2px 28px}
+.mgrid .field.wide{grid-column:1 / -1}
+@media(max-width:720px){.mgrid{grid-template-columns:1fr}}
+.stab-sec .field{margin-bottom:14px}
+.stab-sec .field label{font:600 9.5px var(--font-mono);letter-spacing:.18em;color:var(--brand-text-dim)}
+.stab-sec .field input,.stab-sec .field select,.stab-sec .field textarea{
+  background:transparent;border:0;border-bottom:1px solid var(--brand-border);border-radius:0;
+  padding:7px 2px;font:500 13.5px var(--font-body);color:var(--brand-text)}
+.stab-sec .field select{appearance:none;-webkit-appearance:none;padding-right:22px;cursor:pointer;
+  background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" fill="none" stroke="%23808a84" stroke-width="1.5" stroke-linecap="round"/></svg>');
+  background-repeat:no-repeat;background-position:right 4px center}
+.stab-sec .field input:focus,.stab-sec .field select:focus,.stab-sec .field textarea:focus{
+  outline:none;border-bottom-color:var(--brand-primary);
+  box-shadow:0 8px 16px -10px rgba(var(--brand-primary-rgb),.45)}
+.stab-sec .field textarea{min-height:60px;resize:vertical}
+.stab-sec .field textarea.script{min-height:210px;font:400 12px/1.6 var(--font-mono);
+  background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:10px;padding:14px 16px}
+.stab-sec .field textarea.script:focus{border-color:var(--brand-primary);box-shadow:none}
+.zfoot{display:flex;justify-content:flex-end;margin:2px 0 26px}
+.tiertrack{display:flex;align-items:center;gap:5px;margin:6px 0 8px}
+.tiertrack .tseg{width:36px;height:9px;border-radius:2px;background:var(--brand-tint-1)}
+.tiertrack .tseg.lit{background:var(--brand-primary)}
+.tiertrack .tseg.cur{box-shadow:0 0 10px rgba(var(--brand-primary-rgb),.55)}
+.tiertrack .tlabel{margin-left:9px;font:600 10.5px var(--font-mono);letter-spacing:.12em;color:var(--brand-warning)}
+.thint{font-size:11.5px;line-height:1.5;color:var(--brand-text-secondary);margin-bottom:14px}
 .szone{padding:22px 34px 26px;border-top:1px solid var(--brand-border);min-width:0;
   animation:zoneRise 280ms cubic-bezier(.16,1,.3,1) both}
 .szone:nth-of-type(2){animation-delay:70ms}
@@ -1055,9 +1113,14 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 
       <!-- ============ THE FLOOR ============ -->
       <div class="page" id="page-floor">
-        <div class="pagehead"><h1>The Floor</h1><p>Your org, live. Drag to pan, scroll to zoom, click a member to open their sheet. Every level, stat, and achievement is derived from the ledger — verified outcomes only, nothing authored, and the members never see it.</p></div>
         <div class="canvaswrap" id="canvasWrap">
           <div class="stage" id="stage"></div>
+          <div class="floorplaque">
+            <div class="fp-eyebrow">Boardroom · Live Org</div>
+            <h1 class="fp-title">The Floor</h1>
+            <p class="fp-desc">Every level, stat, and achievement earned from the ledger — verified outcomes only, nothing authored. The members never see it.</p>
+            <div class="fp-meta" id="floorMeta"></div>
+          </div>
           <div class="canvashint">drag · scroll · click a card</div>
           <div class="canvasctl">
             <button onclick="zoomBy(1.2)" title="Zoom in" aria-label="Zoom in">+</button>
@@ -2096,7 +2159,9 @@ function renderRecent(S){
 /* ======================= THE FLOOR CANVAS ======================= */
 /* Hierarchy layout sized for the gamified floor card; the Board node keeps
    its compact plate (BOARD_H) so edges anchor at its real bottom edge. */
-const CARD_W = 232, CARD_H = 312, GAP_X = 36, GAP_Y = 96, BOARD_H = 110;
+const CARD_W = 232, CARD_H = 312, GAP_X = 36, GAP_Y = 96;
+/* The Board plate sits on its own tighter row — command is adjacent, not distant. */
+const BOARD_W = 280, BOARD_H = 132, BOARD_GAP = 60;
 let view = {x: 60, y: 40, k: 1};
 let viewInit = false;
 
@@ -2126,15 +2191,17 @@ function layoutRoster(members){
   Object.values(kids).forEach(list => list.sort());
   const pos = {};
   let cursor = 0;
+  // Row 0 is the Board's compact plate; member rows stack below it at card pitch.
+  const rowY = d => d === 0 ? 0 : BOARD_H + BOARD_GAP + (d - 1) * (CARD_H + GAP_Y);
   function place(id, depth){
     const c = kids[id] || [];
     if(!c.length){
-      pos[id] = {x: cursor, y: depth * (CARD_H + GAP_Y)};
+      pos[id] = {x: cursor, y: rowY(depth)};
       cursor += CARD_W + GAP_X;
     } else {
       c.forEach(k => place(k, depth + 1));
       const xs = c.map(k => pos[k].x);
-      pos[id] = {x: (Math.min(...xs) + Math.max(...xs)) / 2, y: depth * (CARD_H + GAP_Y)};
+      pos[id] = {x: (Math.min(...xs) + Math.max(...xs)) / 2, y: rowY(depth)};
     }
   }
   place('BOARD', 0);
@@ -2153,9 +2220,12 @@ function fitCanvas(){
   // Hidden page (display:none) measures 0x0 — fitting now would lock in a
   // garbage transform. Stay unfitted; show('roster') fits once visible.
   if(wrap.clientWidth < 40 || wrap.clientHeight < 40) return;
-  const w = +stage.dataset.w, h = +stage.dataset.h;
-  const k = Math.max(.25, Math.min(1, (wrap.clientWidth - 80) / w, (wrap.clientHeight - 80) / h));
-  view = {k, x: (wrap.clientWidth - w * k) / 2, y: 40};
+  const w = +stage.dataset.w;
+  // Land at reading size, framed on the roster: cards full-scale, the lead row
+  // high in the view, the Board a nudge of pan away. The whole-tree overview is
+  // one zoom-out away — it is never the landing shot.
+  const k = Math.max(1, Math.min(1.3, (wrap.clientWidth - 120) / w));
+  view = {k, x: (wrap.clientWidth - w * k) / 2, y: Math.round(112 - (BOARD_H + BOARD_GAP) * k)};
   viewInit = true;
   applyView();
 }
@@ -2336,6 +2406,9 @@ function renderFloor(){
   const allY = Object.values(pos).map(p => p.y);
   const w = Math.max(...allX) + CARD_W, h = Math.max(...allY) + CARD_H + 40;
   stage.dataset.w = w; stage.dataset.h = h;
+  // Real dimensions: the stage is absolutely positioned and otherwise computes
+  // 0 width, which collapses every card's max-width:100% to its padding.
+  stage.style.width = w + 'px'; stage.style.height = h + 'px';
 
   let edges = '';
   const drawKids = (pid) => (kids[pid] || []).forEach(cid => {
@@ -2348,12 +2421,17 @@ function renderFloor(){
 
   const firmName = ((FLOOR.firm || {}).name) || ((STATE || {}).firm || {}).name || 'the firm';
   const bpt = pos.BOARD;
-  const boardCard = `<div class="mcard board" style="left:${(bpt.x + (CARD_W - 228) / 2).toFixed(0)}px;top:${bpt.y}px">
+  const boardCard = `<div class="mcard board" style="left:${(bpt.x + (CARD_W - BOARD_W) / 2).toFixed(0)}px;top:${bpt.y}px">
       <div class="mtop"><div class="avatar">YOU${avatarImg('board')}</div>
       <div><div class="mname">THE BOARD</div><div class="mrole">Operator — ${esc(firmName)}</div></div></div>
       <div class="mfoot"><span class="sdot ok"></span>commanding from this dashboard</div></div>`;
   stage.innerHTML = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${edges}</svg>`
     + boardCard + members.map(m => floorCard(m, pos[m.id])).join('');
+  const meta = document.getElementById('floorMeta');
+  if(meta) meta.innerHTML =
+    `<span><b>${members.length}</b> on the floor</span>` +
+    `<span><b id="fpWorking">0</b> working</span>` +
+    (FLOOR.goal_completed ? '<span>goal <b>hit</b></span>' : '');
   if(!viewInit) fitCanvas();
   else applyView();
   paintFloorActivity();
@@ -2371,6 +2449,8 @@ function paintFloorActivity(){
   if(!grid || currentView !== 'floor') { syncFloorSpy({}); return; }
   const byMember = {};
   activeRuns().forEach(r => { if(!byMember[r.member_id]) byMember[r.member_id] = r; });
+  const fpw = document.getElementById('fpWorking');
+  if(fpw) fpw.textContent = Object.keys(byMember).length;
   grid.querySelectorAll('.fcard[data-member]').forEach(card => {
     const run = byMember[card.dataset.member];
     card.classList.toggle('running', !!run);
@@ -3028,22 +3108,33 @@ function profManageHtml(P){
     `<option value="${esc(c.id)}" ${c.id === (m.contract_id || '') ? 'selected' : ''}>${esc(c.name)} (${esc(c.id)})</option>`).join('');
   const mgrOpts = ['<option value="">THE BOARD (direct)</option>'].concat(P.members.map(x =>
     `<option value="${esc(x.id)}" ${x.id === (m.reports_to_member_id || '') ? 'selected' : ''}>${esc(x.name)} (${esc(x.id)})</option>`)).join('');
+  const cal = P.calibration, nx = cal.next || {}, needs = nx.needs || {};
+  const nextHint = nx.needed_tier != null
+    ? `Next: T${nx.needed_tier}${needs.rated ? ` — ${needs.rated} rated run${needs.rated === 1 ? '' : 's'}${needs.avg ? ` at ≥${needs.avg}` : ''}` : (needs.avg ? ` — average ≥${needs.avg}` : '')}.`
+    : 'Top tier — full earned trust.';
   return `
-    <div class="field"><label>Role</label><input id="fRole" value="${esc(m.role || '')}"></div>
-    <div class="field"><label>Description</label><textarea id="fDesc">${esc(m.description || '')}</textarea></div>
-    <div class="field"><label>Status</label><select id="fStatus">
-      ${['active','paused','offboarded'].map(x => `<option ${x === m.status ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
-    <div class="field"><label>Reports to</label><select id="fMgr">${mgrOpts}</select></div>
-    <div class="field"><label>Contract</label><select id="fContract">${contractOpts}</select></div>
-    <div class="btn-row" style="margin-bottom:26px"><button class="btn primary" onclick="saveMember()">Save changes</button></div>
-    <div class="seclabel">Calibration — trust tier &amp; sovereign override <span class="hint">Board-only · the member never sees this</span></div>
-    <div class="tierreadout">Earned tier: <b>T${P.calibration.tier} · ${esc(P.calibration.tier_label)}</b>${P.calibration.next.needed_tier != null ? ` — next is T${P.calibration.next.needed_tier}${P.calibration.next.needs.rated ? ' (needs ' + P.calibration.next.needs.rated + ' rated' + (P.calibration.next.needs.avg ? ' @ ≥' + P.calibration.next.needs.avg : '') + ')' : (P.calibration.next.needs.avg ? ' (needs avg ≥' + P.calibration.next.needs.avg + ')' : '')}` : ' — top tier, full earned trust'}</div>
-    <div class="field"><label>Sovereign override <span class="hint">comma-separated capabilities (read, write, shell, network…), or * for blanket · empty = none, the ladder gates every loosening</span></label>
-      <input id="fSovereign" value="${esc((P.calibration.sovereign || []).join(', '))}" placeholder="e.g. network, shell — or * for full sovereignty"></div>
-    <div class="btn-row" style="margin-bottom:26px"><button class="btn primary" onclick="saveSovereign()">Save override</button></div>
-    <div class="seclabel">Standing instructions file — appended to the identity section of every prompt</div>
-    <div class="field"><textarea id="fInstructions" style="min-height:160px;font-family:var(--font-mono);font-size:12px">${esc(P.instructions)}</textarea></div>
-    <div class="btn-row"><button class="btn primary" onclick="saveInstructions()">Save instructions</button></div>`;
+    <div class="seclabel">Designation</div>
+    <div class="mgrid">
+      <div class="field"><label>Role</label><input id="fRole" value="${esc(m.role || '')}"></div>
+      <div class="field"><label>Status</label><select id="fStatus">
+        ${['active','paused','offboarded'].map(x => `<option ${x === m.status ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+      <div class="field"><label>Reports to</label><select id="fMgr">${mgrOpts}</select></div>
+      <div class="field"><label>Contract</label><select id="fContract">${contractOpts}</select></div>
+      <div class="field wide"><label>Description</label><textarea id="fDesc">${esc(m.description || '')}</textarea></div>
+    </div>
+    <div class="zfoot"><button class="btn primary sm" onclick="saveMember()">Save changes</button></div>
+    <div class="seclabel">Calibration <span class="zn" style="text-transform:none;letter-spacing:.02em">Board-only · the member never sees it</span></div>
+    <div class="tiertrack" role="img" aria-label="trust tier ${cal.tier} of 4">
+      ${[0,1,2,3,4].map(t => `<span class="tseg${t <= cal.tier ? ' lit' : ''}${t === cal.tier ? ' cur' : ''}" title="T${t}"></span>`).join('')}
+      <span class="tlabel">T${cal.tier} · ${esc(cal.tier_label)}</span>
+    </div>
+    <div class="thint">${esc(nextHint)} Earned autonomy gates which enforced seals may loosen.</div>
+    <div class="field"><label>Sovereign override — capabilities, or * for blanket</label>
+      <input id="fSovereign" value="${esc((cal.sovereign || []).join(', '))}" placeholder="e.g. network, shell — empty means the ladder gates every loosening"></div>
+    <div class="zfoot"><button class="btn primary sm" onclick="saveSovereign()">Save override</button></div>
+    <div class="seclabel">Standing instructions <span class="zn" style="text-transform:none;letter-spacing:.02em">appended to every prompt</span></div>
+    <div class="field"><textarea id="fInstructions" class="script">${esc(P.instructions)}</textarea></div>
+    <div class="zfoot" style="margin-bottom:6px"><button class="btn primary sm" onclick="saveInstructions()">Save instructions</button></div>`;
 }
 
 async function postCommission(){
