@@ -135,7 +135,7 @@ Diagnose → say what happened in one plain sentence → propose the fix tier (s
 - **Locks**: leftover `pulse.lock` blocking new pulses when no pulse process exists.
 - **Budget health**: spend per firm vs expectations (~$1.50-2/member-run); any member burning money on repeated failed runs is a stop-and-investigate, not a shrug.
 - **Routine health**: scheduled Board Proxy routines actually firing (last-pulse.json mtime per firm; a firm silent >2h during business hours with queued work = routine problem).
-- **Config drift**: contracts with no model set that the firm's SEED-SPEC says should have one; members with load but never spawning (frequency/budget gate stuck); notify_config broken (records show `"notified": false`).
+- **Config drift**: contracts with no model set that the firm's SEED-SPEC says should have one; members with load but never spawning (frequency/budget gate stuck). NOTE (2026-07-16 Board decision): Cadre firms run **notify-less** — `notify_config` is intentionally null on every firm, the operator governs via the dashboard + co-board, and a raised escalation IS the notification. Do NOT flag an empty `notify_config` or a `notified:false`/`notify_count=0` escalation as a defect — that is the intended state. Never re-wire Slack/webhook/telegram notify without an explicit Board verdict reversing this.
 - **Graph health**: a firm whose `.base/` graph hasn't been written to in 7+ days while units shipped — the firm's memory is rotting; name it and commission the fix. A firm with no `.base/` at all predates graph-at-founding: offer to scaffold it.
 - Report exceptions only, each with a proposed fix.
 
