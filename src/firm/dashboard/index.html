@@ -803,20 +803,22 @@ tr.flash td{animation:rowflash 2.2s ease-out}
   font-weight:400;letter-spacing:.03em;text-transform:none;color:var(--brand-text-secondary);text-align:right}
 #floorSheet.running .portrait{box-shadow:inset 0 0 0 1px rgba(0,0,0,.25), 0 0 26px rgba(var(--brand-primary-rgb),.4)}
 
-/* ---- sheet tabs: a 2×3 grid of gamified tiles under the portrait — menu
-   buttons on a character screen, not a browser tab rail. */
-.stabs-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:32px}
-.stab{appearance:none;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:5px;
-  padding:11px 6px 9px;border:1px solid var(--brand-border);border-radius:10px;background:var(--brand-elevated);
-  font:600 9px var(--font-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--brand-text-secondary);
-  transition:border-color .15s,color .15s,box-shadow .15s,transform .15s}
-.stab .sg{font-size:16px;line-height:1;color:var(--brand-text-dim);transition:color .15s}
-.stab:hover{border-color:var(--brand-border-hover);color:var(--brand-text);transform:translateY(-1px)}
-.stab:hover .sg{color:var(--brand-text-secondary)}
+/* ---- sheet tabs: a 2×3 grid of menu tiles under the portrait — buttons on a
+   character screen. Icon leads, label seats it; the active tile is lit. */
+.stabs-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:34px}
+.stab{appearance:none;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:8px;
+  padding:15px 8px 12px;border:1px solid var(--brand-border);border-radius:12px;background:var(--brand-elevated);
+  font:700 10px var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--brand-text-secondary);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04), 0 1px 2px rgba(0,0,0,.3);
+  transition:border-color .18s,color .18s,box-shadow .18s,transform .18s,background .18s}
+.stab svg{width:24px;height:24px;color:var(--brand-text-dim);transition:color .18s,transform .18s}
+.stab:hover{border-color:rgba(var(--brand-primary-rgb),.45);color:var(--brand-text);transform:translateY(-2px);
+  box-shadow:0 8px 20px rgba(0,0,0,.35), 0 0 14px rgba(var(--brand-primary-rgb),.14), inset 0 1px 0 rgba(255,255,255,.05)}
+.stab:hover svg{color:var(--brand-primary);transform:scale(1.1)}
 .stab.active{border-color:var(--brand-primary);color:var(--brand-primary);
-  background:color-mix(in srgb, var(--brand-primary) 8%, var(--brand-elevated));
-  box-shadow:0 0 14px rgba(var(--brand-primary-rgb),.18)}
-.stab.active .sg{color:var(--brand-primary)}
+  background:color-mix(in srgb, var(--brand-primary) 10%, var(--brand-elevated));
+  box-shadow:0 0 20px rgba(var(--brand-primary-rgb),.24), inset 0 1px 0 rgba(255,255,255,.06)}
+.stab.active svg{color:var(--brand-primary)}
 .stab:focus-visible{outline:2px solid var(--brand-primary);outline-offset:2px}
 .stab-sec{display:none}
 .stab-sec.active{display:block}
@@ -2373,6 +2375,17 @@ const BURN_HINT = {
 };
 const TRACK_GLYPH = {service:'♜', craft:'⚒', honesty:'⚑', goal:'◎'};
 
+/* Section-tile icons — same stroke language as the sidebar nav. */
+const TAB_ICON_SVG = (paths) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const TAB_ICONS = {
+  dossier: TAB_ICON_SVG('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h10M7 17h6"/>'),
+  command: TAB_ICON_SVG('<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'),
+  activity: TAB_ICON_SVG('<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>'),
+  artifacts: TAB_ICON_SVG('<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>'),
+  prompt: TAB_ICON_SVG('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/>'),
+  manage: TAB_ICON_SVG('<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>'),
+};
+
 async function loadFloor(memberId){
   const stage = document.getElementById('stage');
   const stale = !FLOOR || (Date.now() - floorFetchedAt > 10000);
@@ -3006,9 +3019,9 @@ function sheetHtml(m){
             <div class="nameplate"><h3 id="sheetName">${esc(m.name)}</h3></div>
           </div>
           <div class="stabs-grid" role="tablist" aria-label="Member record sections">
-            ${[['dossier','▤','Dossier'],['command','▸','Command'],['activity','◎','Activity'],['artifacts','◆','Artifacts'],['prompt','⬡','Prompt'],['manage','⚒','Manage']].map(([k, g, label]) =>
+            ${[['dossier','Dossier'],['command','Command'],['activity','Activity'],['artifacts','Artifacts'],['prompt','Prompt'],['manage','Manage']].map(([k, label]) =>
               `<button class="stab${k === 'dossier' ? ' active' : ''}" data-stab="${k}" role="tab"
-                 aria-selected="${k === 'dossier'}" onclick="sheetTab('${k}')"><span class="sg">${g}</span>${label}</button>`).join('')}
+                 aria-selected="${k === 'dossier'}" onclick="sheetTab('${k}')">${TAB_ICONS[k]}${label}</button>`).join('')}
           </div>
         </div>
         <div class="hmid">
