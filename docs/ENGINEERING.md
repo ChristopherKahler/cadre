@@ -143,6 +143,32 @@ A firm extends its boardroom without forking anything. Manifest at `<workspace>/
 - **Security boundary:** `_firm_file` refuses path escapes from `.firm/`; view actions run manifest-declared argv only (the `{json}` placeholder carries the request body as ONE argument, never through a shell). The manifest lives inside `.firm/` — same trust domain as the DB itself.
 - Reference implementation: `~/firms/dnd-table/.firm/dashboard/` (views.json + table.html).
 
+## 5b. The firm-dashboard pattern (signal/morning — build every reporting view this way)
+
+Two live references, deliberately identical in system: `partner-media-desk/.firm/dashboard/views/signal.html` (canonical) and `chief-of-staff/.firm/dashboard/views/morning.html`. A new reporting dashboard copies their structure and changes ONLY the schema/sections.
+
+**Layout (the settled geometry):**
+- Root fragment div (`#<x>Root`, one scoped class) owns the design tokens and `padding:24px 10rem 64px 20px` — the 10rem right gutter is what makes full-bleed content read as a centered column.
+- Two-column top: `.x-top{display:grid;grid-template-columns:var(--rail) 1fr}` — jump-nav rail | main. **`.x-main{min-width:0}` is load-bearing**: without it a wide table inflates the 1fr column past the viewport and the `overflow-x:auto` wrapper around the table never gets to scroll.
+- Full-bleed neutralizers, scoped by `:has(#<x>Root)` so no other page is touched: `.page`/`main.inset`/`main` get `padding:0`/`max-width:100%` **`overflow:visible`**, AND `.scroll:has(#<x>Root){overflow:visible!important}`. That last rule is the sticky-nav fix: the full-bleed overrides collapse the shell's inner-scroll (`#scrollArea` stops clipping; the DOCUMENT becomes the one real scroller in both mounts), but `#scrollArea` keeps `overflow:auto` — and `position:sticky` pins against the nearest overflow≠visible ancestor's scrollport, which never scrolls. Neutralize it and native `position:sticky;top:20px` on the rail just works — embedded and standalone, no JS pin (diagnosed live in Chromium, 2026-07-16).
+- Scroll-spy: IntersectionObserver + a passive document scroll listener, both resolving by geometry (`SPY_LINE` px from viewport top; bottom-of-page pins the last section). Jump links are `<button data-goto>`, never anchors — a `#hash` on the host URL is a side effect.
+- Wide tables live inside an `overflow-x:auto` wrapper (`.x-modal-scroll`); the page body never scrolls horizontally.
+
+**Data honesty (non-negotiable, from the signal build):** three-tier confidence (`measured`/`modeled`/`unknown`) badged on every number; an always-visible source line (system · N records · window); drill-to-slice on anything with `slice_ref`; a number with no verifiable source renders `unknown`, never a confident value; live-state reconciliation (goal drift, escalation status) says so loudly instead of picking a winner.
+
+**Actionable items (the signal-quality loop — `services/signal_quality.py`):**
+- Any item in a declared view file with a stable `id` is resolvable; attribution rides ON the item: `surfaced_by` (the finder — unit assignee / escalation raiser), `presented_by` (the curator), optional `refs.escalation`/`refs.unit` or the morning page's `escalation_refs[]` list. Production writes these; **never guess attribution — unattributed is honest, misattributed is a defect.**
+- Board verdict: `POST /api/action/view-item-resolve/<view-id>` with `{item_id, verdict: real|noise, note}` — board-token gated like every POST; the server re-reads the item from the firm's own files, so the browser can never assign credit. Binary verdict by design; the note carries nuance.
+- One immutable `signal.resolved`/`signal.dismissed` Records entry is the ledger. Views filter against `GET /api/views/<id>/resolutions` (+ fully-resolved escalation refs) — resolving clears the item everywhere without rewriting the member's deliverable, and resolving the escalation in the boardroom clears the dashboard item too. No zombies in either direction.
+- The finder (and a distinct presenter) get the verdict as a Board comment → rendered as Standing Notes in their next spawn prompt. **The comment carries verdict + note only — never the tally.** The aggregate (`signals_real`/`signals_noise`/`signal_assists`, +5 XP per real) is derived into the Floor stats, Board-facing only: a member that knows the scoreboard optimizes the scoreboard.
+- Noise dismissals write the counter-mark so the metric can't be gamed by volume.
+- Affordance gating is display-only: the fragment shows the verdict strip when `localStorage.cadreBoardToken` is present; the server enforces regardless. The strip is a SIBLING of the item card — never nested inside the card `<button>` (nested interactive elements eject mid-parse, §4). Verdict UI is a modal, not a browser dialog.
+- The board token is operator-global (`~/.cadre/board.token`), so a mount-agnostic shared view (signal on the CoS boardroom) can post its verdict to the OWNING firm's absolute endpoint and it validates cross-firm.
+
+**Shared views:** a view mounted by multiple firms stays **byte-identical** — edit the canonical copy (PMD's signal.html), `cp` to the mirrors, `md5sum` to prove it. Mount-agnostic data contract: every fetch absolute to the owning firm (`/f/<owner>/api/...`), never `CadreShell.state()`/BASE, so the same bytes render the same numbers under any host.
+
+**Production seam:** every dashboard has an instructions file (`.firm/instructions/<view>.md`) that makes the JSON a standing deliverable — schema, confidence rules, attribution contract, and the don't-re-list-resolved-items rule live there, not in member contract NEVERs.
+
 ---
 
 ## 6. Standing up a new firm (the checklist that actually works)

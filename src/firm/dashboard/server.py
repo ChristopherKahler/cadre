@@ -47,6 +47,7 @@ from firm.services import goal as goal_svc
 from firm.services import member as member_svc
 from firm.services import posture as posture_svc
 from firm.services import run as run_svc
+from firm.services import signal_quality as signal_svc
 from firm.services import tagging as tagging_svc
 from firm.services import unit as unit_svc
 from firm.services._records import log_event
@@ -1016,6 +1017,7 @@ def write_instructions(
 _XP_UNIT_SHIPPED = 10        # unit closed with a registered deliverable
 _XP_GATE_APPROVED = 5        # asked right, asked early
 _XP_ESCALATION_ACTIONED = 5  # honesty pays
+_XP_SIGNAL_REAL = 5          # surfaced something the Board acted on
 _LEVEL_FLOORS = [0, 25, 60, 120, 220, 360, 550, 800, 1100, 1500]
 
 
@@ -1163,6 +1165,12 @@ def floor_state(
     # and this runs on the floor-fetch cadence.
     postures = posture_svc.roster_postures(conn, firm_id, workspace)
 
+    # Signal-quality tallies — derived from the signal.* records ledger
+    # (Floor law 2). Board-facing only (law 3): counts and ratio reach no
+    # member surface; the member only ever sees the per-item feedback
+    # comment, never the scoreboard.
+    signal_by_member = signal_svc.signal_marks(conn, firm_id)
+
     cards = []
     for m in members:
         mine = [u for u in units
@@ -1182,6 +1190,7 @@ def floor_state(
         escs_actioned = sum(1 for e in my_escs if e.get("status") == "resolved")
         rr = runs_by_member.get(m["id"], {})
         spend = round(float(spend_by_member.get(m["id"]) or 0), 4)
+        sq = signal_by_member.get(m["id"], {})
 
         stats = {
             "runs_total": rr.get("total") or 0,
@@ -1198,10 +1207,14 @@ def floor_state(
             "cost_per_deliverable": round(spend / deliverables, 2) if deliverables else None,
             "run_score_avg": round(rr["avg_score"], 1) if rr.get("avg_score") is not None else None,
             "runs_rated": rr.get("rated") or 0,
+            "signals_real": sq.get("real") or 0,
+            "signals_noise": sq.get("noise") or 0,
+            "signal_assists": sq.get("assists") or 0,
         }
         xp = (_XP_UNIT_SHIPPED * stats["units_shipped"]
               + _XP_GATE_APPROVED * stats["gates_approved"]
-              + _XP_ESCALATION_ACTIONED * stats["escalations_actioned"])
+              + _XP_ESCALATION_ACTIONED * stats["escalations_actioned"]
+              + _XP_SIGNAL_REAL * stats["signals_real"])
         level, next_at = _level_for(xp)
 
         contract = contracts.get(m.get("contract_id") or "") or {}
@@ -1988,6 +2001,14 @@ def _firm_get(
                 content, ctype = read_view_dir_file(
                     workspace, view, parts[4], parts[5])
                 _send_media(h, content, ctype)
+            elif parts[3] == "resolutions" and len(parts) == 4:
+                # The view filters resolved items against this ledger read.
+                conn = connect(db_path)
+                try:
+                    _http_send(h, 200, {"resolutions": signal_svc.view_resolutions(
+                        conn, firm_id, parts[2])})
+                finally:
+                    conn.close()
             else:
                 raise ValueError("unknown view route")
         except ValueError as exc:
@@ -2487,6 +2508,49 @@ def _firm_post(
                 else unequip_member(conn, firm_id, entity_id, body)
             )
             _http_send(h, 200, {"ok": True, "result": result})
+        except ValueError as exc:
+            _http_send(h, 400, {"ok": False, "error": str(exc)})
+        finally:
+            conn.close()
+        return
+    if action == "view-item-resolve":
+        # Board verdict on a dashboard item — entity_id names the VIEW; the
+        # body names only the item and the verdict. Attribution (who gets
+        # the mark) is read server-side from the view's own declared files,
+        # never from the browser. The service writes the immutable ledger
+        # entry, informs the surfacing member, and reconciles the item's
+        # declared source (see services/signal_quality.py).
+        views = {v["id"]: v for v in load_custom_views(workspace)}
+        view = views.get(entity_id)
+        conn = connect(db_path)
+        try:
+            if view is None:
+                raise ValueError(f"unknown view {entity_id!r}")
+            item_id = str(body.get("item_id") or "")
+            if not item_id:
+                raise ValueError("item_id is required")
+            item = None
+            for key in view.get("files") or {}:
+                content, ctype = read_view_file(workspace, view, key)
+                if "json" not in ctype:
+                    continue
+                try:
+                    payload = json.loads(content)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                item = signal_svc.find_view_item(payload, item_id)
+                if item is not None:
+                    break
+            if item is None:
+                raise ValueError(
+                    f"item {item_id!r} not found in view {entity_id!r} files")
+            result = signal_svc.resolve_view_item(
+                conn, firm_id, entity_id, item,
+                verdict=str(body.get("verdict") or ""),
+                note=(str(body.get("note")).strip() or None)
+                if body.get("note") else None,
+            )
+            _http_send(h, 200 if result.get("ok") else 409, result)
         except ValueError as exc:
             _http_send(h, 400, {"ok": False, "error": str(exc)})
         finally:
