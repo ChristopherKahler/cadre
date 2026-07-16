@@ -26,7 +26,7 @@ from firm.pulse.spawn import expected_mcp_servers, spawn_member_run
 from firm.pulse.validate import retry_on_failure, validate_output
 from firm.services._id import next_id
 from firm.services.authority import system_context
-from firm.services.document import _next_version_path, create_document, update_document
+from firm.services.document import register_deliverable
 from firm.services.unit import complete_unit
 
 
@@ -81,7 +81,12 @@ def _register_deliverables(
     Seam-4 owns completion; a completed unit with a verified file but no
     Document row is invisible to the Board (wastelander UNIT-023 / ch18 pilot,
     2026-07-07). Gated on the deliverable opt-in so scratch-writing members
-    don't spam Documents; idempotent by content_path so retries don't dupe.
+    don't spam Documents.
+
+    This selects WHICH files a run produced; ``register_deliverable`` decides
+    what registering one means (idempotency, version bumps, ownership). The
+    Member-facing verbs call the same service, so the harness and a Member
+    hand-registering the same file cannot disagree.
     """
     if not _wants_deliverable_registration(validation_config):
         return
@@ -96,36 +101,12 @@ def _register_deliverables(
         seen.add(fp)
         if not os.path.exists(fp):
             continue
-        rel = os.path.relpath(fp, cwd) if cwd else fp
-        if repo.find(conn, "document", firm_id=firm_id, content_path=rel):
-            continue  # already registered
-        # A revision writes foo-v2.md beside foo.md (never-overwrite). That is a new
-        # version of the existing Document, not a sibling of it — registering it as a
-        # fresh DOC row forks the version history and the Board loses the diff.
-        prior = next(
-            (
-                d for d in repo.find(conn, "document", firm_id=firm_id)
-                if _next_version_path(d.get("content_path") or "", d.get("version") or 1) == rel
-            ),
-            None,
+        # A file the run wrote but that belongs to another unit's Document is a
+        # conflict the service reports rather than performs; the harness has no
+        # standing to resolve it, so it leaves the row alone.
+        register_deliverable(
+            conn, firm_id, unit["id"], fp, member_id=member_id, cwd=cwd,
         )
-        if prior:
-            update_document(
-                conn,
-                prior["id"],
-                {"content_path": rel},
-                actor={"type": "member", "id": member_id},
-            )
-            continue
-        create_document(conn, firm_id, {
-            "name": os.path.basename(fp),
-            "type": "draft",
-            "content_path": rel,
-            "parent_entity_type": "unit",
-            "parent_entity_id": unit["id"],
-            "author_type": "member",
-            "author_id": member_id,
-        })
 
 
 def _persist_final_text(

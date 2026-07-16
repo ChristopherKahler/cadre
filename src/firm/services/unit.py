@@ -37,6 +37,7 @@ def create_unit(
     conn: sqlite3.Connection,
     firm_id: str,
     data: dict[str, Any],
+    actor: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create a Unit with project linkage, FK validation, cycle check, and Records.
 
@@ -46,6 +47,11 @@ def create_unit(
         data: Must include 'name', 'project_id'. Optional: description,
               assignee_member_id, parent_unit_id, status, priority, rank,
               goal_ids, acceptance_criteria, depends_on, due_date, outputs, tags.
+        actor: Who is creating it, e.g. {"type": "member", "id": "MEM-004"}.
+               Defaults to the Board. A Member queueing its own follow-up work
+               must pass itself — Records has to carry who actually queued the
+               work, not whoever the default happens to be. Mirrors
+               :func:`firm.services.document.update_document`'s actor.
 
     Returns:
         The created unit row as a dict.
@@ -91,7 +97,7 @@ def create_unit(
         conn,
         firm_id=firm_id,
         event_type="unit.created",
-        actor={"type": "board", "id": None},
+        actor=actor or {"type": "board", "id": None},
         target_ref={"type": "unit", "id": unit_id},
     )
 
