@@ -779,9 +779,42 @@ tr.flash td{animation:rowflash 2.2s ease-out}
   box-shadow:0 0 12px rgba(var(--brand-primary-rgb),.12)}
 .dial.clickable:focus-visible{outline:2px solid var(--brand-primary);outline-offset:2px}
 .dial .dchev{margin-left:auto;color:var(--brand-text-dim);font-size:10px}
-/* model cards — pick the burn tier, no dropdown */
-.modelpick{display:flex;flex-direction:column;gap:8px;margin:-6px 0 16px}
+/* model cards — an overlay tray below the dial, cards stagger in and out */
+.dialwrap{position:relative}
+.modelpick{position:absolute;top:calc(100% + 8px);left:0;right:0;z-index:9;
+  display:flex;flex-direction:column;gap:8px;margin:0;padding:12px;
+  border:1px solid var(--brand-border-hover);border-radius:12px;
+  background:color-mix(in srgb, #000 22%, var(--brand-canvas));
+  box-shadow:0 20px 52px rgba(0,0,0,.55)}
 .modelpick[hidden]{display:none}
+.modelpick .mpick,.modelpick .mtimeout,.modelpick .mth{opacity:0;
+  animation:mpickIn 200ms cubic-bezier(.16,1,.3,1) forwards}
+.modelpick > *:nth-child(1){animation-delay:0ms}
+.modelpick > *:nth-child(2){animation-delay:35ms}
+.modelpick > *:nth-child(3){animation-delay:70ms}
+.modelpick > *:nth-child(4){animation-delay:105ms}
+.modelpick > *:nth-child(5){animation-delay:140ms}
+.modelpick > *:nth-child(6){animation-delay:175ms}
+.modelpick.closing > *{opacity:1;animation:mpickOut 160ms ease-in forwards}
+.modelpick.closing > *:nth-child(6){animation-delay:0ms}
+.modelpick.closing > *:nth-child(5){animation-delay:25ms}
+.modelpick.closing > *:nth-child(4){animation-delay:50ms}
+.modelpick.closing > *:nth-child(3){animation-delay:75ms}
+.modelpick.closing > *:nth-child(2){animation-delay:100ms}
+.modelpick.closing > *:nth-child(1){animation-delay:125ms}
+@keyframes mpickIn{from{opacity:0;transform:translateY(-9px)}to{opacity:1;transform:none}}
+@keyframes mpickOut{to{opacity:0;transform:translateY(-9px)}}
+@media(prefers-reduced-motion:reduce){
+  .modelpick > *,.modelpick.closing > *{animation:none;opacity:1}}
+/* the timeout lever rides the same tray */
+.mtimeout{display:flex;align-items:center;gap:9px;padding:9px 12px;
+  border:1px solid var(--brand-border);border-radius:10px;background:var(--brand-elevated)}
+.mtimeout .mtl{font:600 10px var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--brand-text-secondary)}
+.mtimeout input{width:64px;background:transparent;border:0;border-bottom:1px solid var(--brand-border);
+  padding:3px 4px;font:600 13px var(--font-mono);color:var(--brand-text);text-align:center}
+.mtimeout input:focus{outline:none;border-bottom-color:var(--brand-primary)}
+.mtimeout .mtu{font:500 10px var(--font-mono);letter-spacing:.1em;color:var(--brand-text-dim);flex:1}
+.mth{font-size:10px;line-height:1.45;color:var(--brand-text-dim);padding:0 2px}
 .modelpick .mpick{display:grid;grid-template-columns:auto auto 1fr;align-items:baseline;gap:6px 10px;
   text-align:left;padding:10px 13px;border:1px solid var(--brand-border);border-radius:10px;
   background:var(--brand-elevated);cursor:pointer;
@@ -2785,10 +2818,18 @@ document.getElementById('floorWrap').addEventListener('click', e => {
 function toggleModelPick(ev){
   if(ev) ev.stopPropagation();
   const p = document.getElementById('modelPick');
-  if(p) p.hidden = !p.hidden;
+  if(!p) return;
+  if(p.hidden){
+    p.classList.remove('closing');
+    p.hidden = false;
+  } else {
+    p.classList.add('closing');
+    setTimeout(() => { p.hidden = true; p.classList.remove('closing'); }, 240);
+  }
 }
-async function pickModel(model){
-  if(!sheetCtx) return;
+/* The write target for both levers — the open sheet's contract. */
+async function sheetContract(){
+  if(!sheetCtx) return null;
   if(!sheetProfile || (sheetProfile.member || {}).id !== sheetCtx){
     try{
       const r = await fetch(BASE + '/api/member/' + encodeURIComponent(sheetCtx));
@@ -2797,14 +2838,34 @@ async function pickModel(model){
     }catch(e){}
   }
   const c = sheetProfile && sheetProfile.contract;
-  if(!c){ toast('No contract on this member — assign one in Manage first', true); return; }
+  if(!c) toast('No contract on this member — assign one in Manage first', true);
+  return c || null;
+}
+async function rebuildSheetAfterBudget(){
+  floorFetchedAt = 0; await loadFloor();
+  const id = sheetCtx; sheetCtx = null;
+  openSheet(id);   // rebuild so dial, chips, and canvas cards agree
+}
+async function pickModel(model){
+  const c = await sheetContract();
+  if(!c) return;
   const out = await postAction('contract-model/' + encodeURIComponent(c.id), {model});
   if(out.ok){
     toast(model ? 'Model set to ' + model + ' — every future run boots on it' : 'Override cleared — inherits the account default');
-    floorFetchedAt = 0; await loadFloor();
-    const id = sheetCtx; sheetCtx = null;
-    openSheet(id);   // rebuild the sheet so dial, chips, and cards agree
+    rebuildSheetAfterBudget();
   } else toast(out.error || 'Model change failed', true);
+}
+async function saveTimeout(){
+  const c = await sheetContract();
+  if(!c) return;
+  const v = document.getElementById('mTimeoutMin').value.trim();
+  const mins = v ? parseInt(v, 10) : 0;
+  if(v && (!Number.isFinite(mins) || mins < 1)){ toast('Timeout must be at least 1 minute', true); return; }
+  const out = await postAction('contract-model/' + encodeURIComponent(c.id), {timeout_sec: mins ? mins * 60 : 0});
+  if(out.ok){
+    toast(mins ? 'Timeout set — runs get cut after ' + mins + ' min' : 'Timeout cleared — inherits the account default');
+    rebuildSheetAfterBudget();
+  } else toast(out.error || 'Timeout change failed', true);
 }
 
 /* Cycle the open sheet through the roster — wraps at both ends. */
@@ -3133,7 +3194,8 @@ function sheetHtml(m){
   }
   const bm = String(m.budget.model || '').toLowerCase();
   const segs = bm === 'opus' ? 3 : bm === 'sonnet' ? 2 : bm === 'haiku' ? 1 : 0;
-  const dial = `<div class="dial clickable"${d()} role="button" tabindex="0" title="Change the model this member runs on"
+  const dial = `<div class="dialwrap">
+    <div class="dial clickable"${d()} role="button" tabindex="0" title="Change the model and timeout this member runs on"
       onclick="toggleModelPick(event)" onkeydown="if(event.key==='Enter')toggleModelPick(event)">
       <span class="dk">Budget</span>
       <span class="dsegs">${[1,2,3].map(i => `<span class="dseg${i <= segs ? ' lit' : ''}"></span>`).join('')}</span>
@@ -3149,7 +3211,16 @@ function sheetHtml(m){
         ${x === bm ? '<span class="mcur">current</span>' : ''}
         <span class="mhint">${esc(x ? BURN_HINT[x] : 'No override — inherits your account default.')}</span>
       </button>`).join('')}
-    </div>`;
+      <div class="mtimeout" onclick="event.stopPropagation()">
+        <span class="mtl">Timeout</span>
+        <input id="mTimeoutMin" type="number" min="1" max="240" step="1"
+          value="${m.budget.timeout_sec ? Math.round(m.budget.timeout_sec / 60) : ''}" placeholder="—">
+        <span class="mtu">min</span>
+        <button class="btn primary sm" onclick="saveTimeout()">Set</button>
+      </div>
+      <div class="mth">How long a run may hold the floor before it's cut. Empty = account default.</div>
+    </div>
+  </div>`;
 
   const st = m.stats;
   const rows = [

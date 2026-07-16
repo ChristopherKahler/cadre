@@ -1334,18 +1334,35 @@ def perform_action(
             body.get("body") or "",
         )
     if action == "contract-model":
-        # Per-contract model override (pulse_config.model — the cost lever).
-        # entity_id = contract id; body.model = alias/full id, empty = inherit
-        # the account default. Takes effect on the next spawn; no restart.
+        # Per-contract model + timeout override (pulse_config — the cost lever).
+        # entity_id = contract id; body.model = alias/full id (empty = inherit);
+        # body.timeout_sec = seconds (empty/0 = inherit). Only keys present in
+        # the body are touched, so either lever moves independently. Takes
+        # effect on the next spawn; no restart.
         contract = repo.get(conn, "contract", entity_id)
         if not contract:
             raise ValueError(f"unknown contract {entity_id!r}")
         pc = _parse_pulse_config(contract)
-        model = str(body.get("model") or "").strip()
-        if model:
-            pc["model"] = model
-        else:
-            pc.pop("model", None)
+        details: dict[str, Any] = {}
+        if "model" in body:
+            model = str(body.get("model") or "").strip()
+            if model:
+                pc["model"] = model
+            else:
+                pc.pop("model", None)
+            details["pulse_config.model"] = model or "(inherit default)"
+        if "timeout_sec" in body:
+            try:
+                timeout = int(body.get("timeout_sec") or 0)
+            except (TypeError, ValueError):
+                raise ValueError("timeout_sec must be a number of seconds")
+            if timeout > 0:
+                pc["timeout_sec"] = timeout
+            else:
+                pc.pop("timeout_sec", None)
+            details["pulse_config.timeout_sec"] = timeout or "(inherit default)"
+        if not details:
+            raise ValueError("nothing to change — pass model and/or timeout_sec")
         repo.update(conn, "contract", entity_id, {"pulse_config": json.dumps(pc)})
         log_event(
             conn,
@@ -1353,9 +1370,10 @@ def perform_action(
             event_type="contract.updated",
             actor={"type": "board", "id": None},
             target_ref={"type": "contract", "id": entity_id},
-            details={"pulse_config.model": model or "(inherit default)"},
+            details=details,
         )
-        return {"contract_id": entity_id, "model": model or None}
+        return {"contract_id": entity_id, "model": pc.get("model"),
+                "timeout_sec": pc.get("timeout_sec")}
     if action == "run-retry":
         # Re-queue a failed/timed-out run's unit: release any stale claim so
         # the next pulse re-spawns the member on it. entity_id = run id.
