@@ -106,9 +106,12 @@ class TestInvoke:
         mock_prompt.assert_called_once_with(
             conn, "chrisai", "MEM-001", "UNT-001", cwd="/tmp",
         )
+        # posture is resolved here (member override → firm default → legacy
+        # file → lean) and passed explicitly: spawn.py stays DB-free, and the
+        # boot command reflects THIS member. See tests/test_loadout_posture.py.
         mock_spawn.assert_called_once_with(
             "assembled prompt", timeout_sec=120, cwd="/tmp", model=None,
-            member_id="MEM-001", firm_id="chrisai", run_id=None,
+            member_id="MEM-001", firm_id="chrisai", run_id=None, posture="lean",
         )
 
         assert isinstance(result, InvokeResult)

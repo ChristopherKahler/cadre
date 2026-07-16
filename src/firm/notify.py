@@ -59,6 +59,59 @@ def get_notify_config(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any] 
     return cfg if isinstance(cfg, dict) else None
 
 
+def rail_health(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
+    """Cheap, side-effect-free-as-possible resolvability check for the rail.
+
+    Distinct from :func:`send_board_dm`: this never delivers a Board message.
+    For ``slack`` it makes one read-only ``auth.test`` call to confirm the
+    resolved token actually authenticates — config-and-env-only checks would
+    have called ESC-022's "correct-looking, inert" config healthy right up
+    until the moment a real escalation tried to fire through it. Returns
+    ``{"ok": bool, "reason": str}``; never raises.
+    """
+    cfg = get_notify_config(conn, firm_id)
+    if not cfg:
+        return {"ok": False, "reason": "notify_config not set on firm"}
+
+    provider = cfg.get("provider", "slack")
+    try:
+        if provider == "slack":
+            if not cfg.get("slack_user_id"):
+                return {"ok": False, "reason": "notify_config.slack_user_id missing"}
+            token_env = cfg.get("token_env") or cfg.get("slack_token_env") or DEFAULT_TOKEN_ENV
+            token = os.environ.get(token_env)
+            if not token:
+                return {"ok": False, "reason": f"token env {token_env} unset in this process"}
+            result = _post_json(
+                "https://slack.com/api/auth.test", {}, {"Authorization": f"Bearer {token}"},
+            )
+            if result.get("ok"):
+                return {"ok": True, "reason": "slack auth.test ok"}
+            return {"ok": False, "reason": f"slack auth.test error: {result.get('error', 'unknown')}"}
+
+        if provider == "webhook":
+            url_env = cfg.get("webhook_url_env", DEFAULT_WEBHOOK_ENV)
+            if not os.environ.get(url_env):
+                return {"ok": False, "reason": f"webhook env {url_env} unset in this process"}
+            return {"ok": True, "reason": "webhook url present (unverified — webhooks have no read-only probe)"}
+
+        if provider == "telegram":
+            if not cfg.get("telegram_chat_id"):
+                return {"ok": False, "reason": "notify_config.telegram_chat_id missing"}
+            token_env = cfg.get("telegram_token_env", DEFAULT_TELEGRAM_ENV)
+            token = os.environ.get(token_env)
+            if not token:
+                return {"ok": False, "reason": f"token env {token_env} unset in this process"}
+            result = _post_json(f"https://api.telegram.org/bot{token}/getMe", {}, {})
+            if result.get("ok"):
+                return {"ok": True, "reason": "telegram getMe ok"}
+            return {"ok": False, "reason": f"telegram getMe error: {result.get('description', 'unknown')}"}
+
+        return {"ok": False, "reason": f"unknown notify provider {provider!r}"}
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        return {"ok": False, "reason": f"health check failed: {exc}"}
+
+
 def remind_interval_hours(cfg: dict[str, Any] | None) -> float:
     """The escalation re-notify window for this firm (default 24h)."""
     if not cfg:

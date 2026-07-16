@@ -14,16 +14,18 @@ import sys
 from pathlib import Path
 
 from firm.core.db import connect, get_db_path, resolve_firm_id
-from firm.notify import send_board_dm
+from firm.notify import rail_health, send_board_dm
 
 
 def run_notify(
     workspace: Path,
-    message: str,
+    message: str | None,
     *,
     firm_id: str | None = None,
+    check: bool = False,
 ) -> int:
-    """Send *message* to the Board. Returns 0 if delivered, 1 otherwise."""
+    """Send *message* to the Board, or with ``check=True`` probe the rail
+    without delivering anything. Returns 0 if delivered/healthy, 1 otherwise."""
     workspace = workspace.expanduser().resolve()
     db_path = get_db_path(workspace)
     if not db_path.exists():
@@ -35,7 +37,11 @@ def run_notify(
     conn = connect(db_path)
     try:
         firm_id = resolve_firm_id(conn, firm_id)
-        result = send_board_dm(conn, firm_id, message)
+        if check:
+            result = rail_health(conn, firm_id)
+            print(json.dumps(result))
+            return 0 if result["ok"] else 1
+        result = send_board_dm(conn, firm_id, message or "")
     except ValueError as exc:
         print(json.dumps({"ok": False, "reason": str(exc)}), file=sys.stderr)
         return 1

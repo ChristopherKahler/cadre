@@ -546,6 +546,48 @@ def pulse(
     # else reads them (dry-run detects but does not write).
     summary.reaped = reap_stale_runs(conn, firm_id, now=now, write=not dry_run)
 
+    # Gate 0b: Board notify-rail preflight — the startup assertion ESC-022
+    # asked for. A dead rail does NOT stop Member work (per-surface blindness,
+    # not firm-wide — the same principle Gate 4 applies to dead CLI tools),
+    # but it MUST stop the pulse from reporting a clean "errors: 0" while the
+    # Board's own escalation channel is silently inert (ESC-001..022: 22
+    # straight escalations recorded on Records and never delivered). Runs
+    # before the business-hours gate so even a skipped pulse still surfaces
+    # rail health. Dry runs skip it — the probe is a real network call. Only
+    # fires once a firm has actually configured notify_config: a firm that
+    # never opted into Board notifications is not "unhealthy", it is unset —
+    # this asserts a CONFIGURED rail resolves, it doesn't mandate configuring one.
+    if not dry_run:
+        from firm.notify import get_notify_config, rail_health
+
+        health = rail_health(conn, firm_id) if get_notify_config(conn, firm_id) else {"ok": True}
+        if not health["ok"]:
+            members = repo.find(conn, "member", firm_id=firm_id)
+            lead = next(
+                (m for m in members if not m.get("reports_to_member_id")),
+                members[0] if members else None,
+            )
+            if lead is not None:
+                raise_escalation(conn, firm_id, {
+                    "raised_by_member_id": lead["id"],
+                    "severity": "high",
+                    "title": f"Board notify rail is unresolvable: {health['reason']}",
+                    "body": (
+                        "The pulse's startup assertion could not confirm the "
+                        "Board notification rail resolves. Escalations and "
+                        "gates raised while this stands will record on Records "
+                        "but may never reach the Board. Surfaced as a "
+                        "firm-level pulse error so it cannot pass silently.\n\n"
+                        f"Reason: {health['reason']}"
+                    ),
+                    "dedupe_key": "preflight:notify-rail",
+                })
+            summary.errors.append({
+                "member": None,
+                "error": {"notify_rail_unresolvable": health["reason"]},
+                "error_type": "notify_rail_unresolvable",
+            })
+
     # Gate 1: business hours
     if not check_business_hours(conn, firm_id, now=now):
         summary.skipped.append({

@@ -355,7 +355,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "notify",
         help="Send a Board notification (Slack DM / webhook / Telegram) via the firm's notify_config.",
     )
-    notify_parser.add_argument("message", help="Message text to deliver to the Board.")
+    notify_parser.add_argument(
+        "message", nargs="?", default=None,
+        help="Message text to deliver to the Board. Omit with --check.",
+    )
     notify_parser.add_argument(
         "--workspace", type=Path, default=None,
         help="Workspace containing .firm/firm.db (defaults to current directory).",
@@ -363,6 +366,11 @@ def _build_parser() -> argparse.ArgumentParser:
     notify_parser.add_argument(
         "--firm-id", dest="firm_id", default=None,
         help="Firm scope. Defaults to the firm this workspace's db holds.",
+    )
+    notify_parser.add_argument(
+        "--check", action="store_true",
+        help="Probe the rail's resolvability (config + token + one read-only "
+             "identity call) WITHOUT delivering a message.",
     )
 
     # ---- backup subparser ----
@@ -889,9 +897,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "notify":
         from firm.cli.notify import run_notify
 
+        if not args.check and not args.message:
+            print("error: MESSAGE is required unless --check is given", file=sys.stderr)
+            return 1
         workspace = args.workspace if args.workspace is not None else Path.cwd()
         firm_id = args.firm_id or None
-        return run_notify(workspace, args.message, firm_id=firm_id)
+        return run_notify(workspace, args.message, firm_id=firm_id, check=args.check)
 
     if args.command == "heartbeat":
         if args.heartbeat_command == "enable":

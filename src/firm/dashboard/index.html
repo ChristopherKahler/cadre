@@ -442,10 +442,240 @@ tbody tr:hover td{background:var(--brand-hover-bg)}
 .ratemini{flex:none;padding:3px 9px;border:1px solid var(--brand-border);border-radius:20px;background:var(--brand-surface);color:var(--brand-text-secondary);font:600 10.5px var(--font-mono);letter-spacing:.04em;cursor:pointer;text-transform:uppercase}
 .ratemini:hover{border-color:var(--brand-primary);color:var(--brand-text)}
 
-/* ---- settings page ---- */
-#settingsTable select{background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:8px;
-  padding:6px 10px;color:var(--brand-text);font:500 12px var(--font-body);cursor:pointer}
-#settingsTable select:focus{outline:none;border-color:var(--brand-primary)}
+/* ======================= SETTINGS: THE CONSOLE =======================
+   Settings is the firm's control deck, and it speaks the Floor's dossier
+   language — mono zone labels, lit segment dials, portrait plates. Every
+   lever here is the SAME control the Floor sheet exposes (contract-model
+   posts to the same endpoint); it just used to wear a <select>.
+   Nothing on this page is decoration: each control states its consequence. */
+/* The Console is a page, not a card on a page. .page's 72rem cap + its 24px
+   gutter + a bordered plate + the zone's own 34px padding stacked FOUR insets
+   between the shell and the content — so the levers sat small in a lot of dead
+   space. The plate loses its chrome, the zones lose their side padding, and the
+   page runs to the shell's own gutter. Hairline zone dividers carry the
+   structure the plate's border used to. */
+#page-settings{max-width:none;padding:34px 34px 96px}
+.conplate{position:relative}
+/* zoneRise animates opacity AND transform with fill-mode:both, so every .szone
+   sits in the animation's fill phase forever — which is a permanent stacking
+   context. That traps a picker inside its own zone and lets the Training zone (a
+   later sibling) paint straight over it. Lift the whole zone while one is open. */
+#page-settings .szone{position:relative;padding:26px 0 30px}
+#page-settings .szone.zpicking{z-index:30}
+.conhead{position:relative;padding:0 0 22px;
+  background-image:radial-gradient(var(--dot) 1px, transparent 1px);background-size:26px 26px}
+.conhead::before{content:'';position:absolute;inset:-34px -34px 0;pointer-events:none;
+  background:radial-gradient(ellipse 52% 90% at 0% 0%, rgba(var(--brand-primary-rgb),.07), transparent 66%)}
+.conhead > *{position:relative}
+.conhead h1{font:800 29px/1 var(--font-display);letter-spacing:-.015em;color:var(--brand-text);margin:0 0 8px}
+.conhead p{font-size:13.5px;line-height:1.6;color:var(--brand-text-secondary);margin:0;max-width:78ch}
+.conmeta{display:flex;gap:24px;margin-top:17px;padding-top:14px;border-top:1px solid var(--brand-border);
+  font:500 10.5px var(--font-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--brand-text-dim);flex-wrap:wrap}
+.conmeta b{color:var(--brand-primary);font-weight:600;margin-right:4px}
+.conmeta .warn b{color:var(--brand-warning)}
+
+/* ---- pulse deck: cadence as a throttle, not a row of pills ---- */
+.pulsedeck{display:flex;align-items:center;gap:26px;flex-wrap:wrap}
+.pulsecore{display:flex;align-items:center;gap:12px;flex:none;padding:12px 18px;border-radius:12px;
+  background:var(--brand-elevated);border:1px solid var(--brand-border);min-width:200px}
+.pulsecore.beating{border-color:rgba(var(--brand-primary-rgb),.42)}
+.pulsecore .pdot{width:9px;height:9px;border-radius:9999px;flex:none;background:var(--brand-text-dim)}
+.pulsecore.beating .pdot{background:var(--brand-primary);box-shadow:0 0 10px rgba(var(--brand-primary-rgb),.85);
+  animation:heartbeat 1.9s ease-in-out infinite}
+@keyframes heartbeat{0%,100%{transform:scale(1);opacity:1}
+  14%{transform:scale(1.45);opacity:.75}28%{transform:scale(1);opacity:1}
+  42%{transform:scale(1.3);opacity:.8}56%{transform:scale(1);opacity:1}}
+@media(prefers-reduced-motion:reduce){.pulsecore.beating .pdot{animation:none}}
+.pulsecore .pck{display:block;font:600 9.5px var(--font-mono);letter-spacing:.2em;text-transform:uppercase;color:var(--brand-text-dim)}
+.pulsecore.beating .pck{color:var(--brand-primary)}
+.pulsecore .pcv{display:block;font:600 14px var(--font-mono);color:var(--brand-text);margin-top:3px;letter-spacing:.02em}
+/* the gear selector — stops on a rail, throttle bars under each */
+.cadencetrack{position:relative;display:flex;gap:6px;flex:1;min-width:300px}
+.cadencetrack::before{content:'';position:absolute;left:10px;right:10px;top:17px;height:2px;border-radius:2px;
+  background:var(--brand-tint-1)}
+.cstop{position:relative;flex:1;min-width:0;background:none;border:0;padding:0;cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;gap:7px;color:var(--brand-text-dim);
+  transition:color 160ms}
+.cstop:hover{color:var(--brand-text)}
+.cstop:focus-visible{outline:2px solid var(--brand-primary);outline-offset:3px;border-radius:8px}
+.cstop .cnotch{width:12px;height:12px;border-radius:9999px;background:var(--brand-elevated);
+  border:2px solid var(--brand-tint-1);margin-top:10px;transition:border-color 160ms,box-shadow 160ms,background 160ms}
+.cstop:hover .cnotch{border-color:var(--brand-border-hover)}
+.cstop.cur{color:var(--brand-primary)}
+.cstop.cur .cnotch{background:var(--brand-primary);border-color:var(--brand-primary);
+  box-shadow:0 0 12px rgba(var(--brand-primary-rgb),.6)}
+.cstop .csname{font:600 12px var(--font-mono);letter-spacing:.1em;text-transform:uppercase}
+/* Throttle bars: how hard this cadence works the firm. Off reads as an empty
+   slot, on as a filled one — the contrast has to survive a glance. */
+.cstop .csload{display:flex;gap:2px;height:5px}
+.cstop .csload i{width:5px;border-radius:1px;background:color-mix(in srgb, var(--brand-text-dim) 26%, transparent)}
+.cstop .csload i.on{background:var(--brand-text-secondary)}
+.cstop:hover .csload i.on{background:var(--brand-text)}
+.cstop.cur .csload i.on{background:var(--brand-primary);box-shadow:0 0 6px rgba(var(--brand-primary-rgb),.6)}
+.cstop:disabled{opacity:.5;cursor:default}
+/* Mid-flight: the OS scheduler call takes seconds. The clicked stop stays lit
+   and beats so the track never looks dead while it's working. */
+.cstop.applying{opacity:1;color:var(--brand-primary)}
+.cstop.applying .cnotch{background:var(--brand-primary);border-color:var(--brand-primary);
+  animation:pulse 1s ease-in-out infinite}
+@media(prefers-reduced-motion:reduce){.cstop.applying .cnotch{animation:none}}
+.pulsehint{flex-basis:100%;font-size:12.5px;line-height:1.55;color:var(--brand-text-dim);
+  padding-top:15px;margin-top:2px;border-top:1px dashed var(--brand-border);min-height:19px}
+.pulsehint b{color:var(--brand-text-secondary);font-weight:600}
+@media(max-width:760px){.pulsedeck{gap:18px}.cadencetrack{min-width:100%}}
+
+/* ---- crew budget: the table becomes character plates ---- */
+.crewgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:16px}
+.bcard{position:relative;background:var(--brand-elevated);border:1px solid var(--brand-border);
+  border-radius:14px;padding:17px 18px 16px;min-width:0;
+  transition:border-color 200ms cubic-bezier(.16,1,.3,1),box-shadow 200ms}
+.bcard:hover{border-color:var(--brand-border-hover)}
+.bcard.picking{border-color:rgba(var(--brand-primary-rgb),.5);
+  box-shadow:0 0 22px rgba(var(--brand-primary-rgb),.14);z-index:12}
+.bhead{display:flex;align-items:center;gap:12px;min-width:0}
+/* The identity block opens the member's character sheet — same as the Floor.
+   Scoped to .bhead so it never swallows a click meant for the dial below it. */
+.bhead.linked{cursor:pointer;border-radius:10px;margin:-4px;padding:4px;
+  transition:background 140ms}
+.bhead.linked:hover{background:var(--brand-hover-bg)}
+.bhead.linked:hover .bname{color:var(--brand-primary)}
+.bhead.linked:hover .bport{border-color:rgba(var(--brand-primary-rgb),.6);
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.22), 0 0 14px rgba(var(--brand-primary-rgb),.35)}
+.bhead.linked:focus-visible{outline:2px solid var(--brand-primary);outline-offset:1px}
+.bhead .bgo{flex:none;color:var(--brand-text-dim);font:400 13px/1 var(--font-body);opacity:0;
+  transition:opacity 140ms,transform 140ms}
+.bhead.linked:hover .bgo{opacity:1;transform:translateX(2px);color:var(--brand-primary)}
+.bport{width:48px;height:48px;flex:none;border-radius:12px;position:relative;overflow:hidden;
+  display:flex;align-items:center;justify-content:center;background:var(--brand-gradient);background-size:300% 100%;
+  border:1px solid var(--brand-border-hover);box-shadow:inset 0 0 0 1px rgba(0,0,0,.22);
+  font:800 16px var(--font-display);color:#fff;letter-spacing:-.02em}
+.bport img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.bstack{position:relative;width:48px;height:48px;flex:none}
+.bstack .bport{position:absolute;width:34px;height:34px;font-size:11px;border-radius:10px}
+.bstack .bport:nth-child(1){top:0;left:0;z-index:2}
+.bstack .bport:nth-child(2){bottom:0;right:0;z-index:1}
+.bwho{min-width:0;flex:1}
+.bname{font:700 15.5px var(--font-display);color:var(--brand-text);letter-spacing:-.01em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The role is the member's class line — it wraps to two lines rather than
+   truncating "CHIEF MARKETING OFFI…". min-height keeps every dial on one line
+   across the grid regardless of role length. */
+.brole{font:600 10px/1.45 var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--brand-warning);
+  margin-top:4px;overflow:hidden;min-height:29px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.bid{font:500 10px var(--font-mono);letter-spacing:.1em;color:var(--brand-text-dim);flex:none}
+.bcard .dial{margin-top:15px;padding:12px 15px}
+.bcard .dial .dname{font-size:11.5px}
+.bcard .dial .dseg{width:17px;height:9px}
+.bcard .dial .dhint{display:none}          /* the card carries the hint below, full width */
+.bcard .modelpick{z-index:14}
+.bfoot{display:flex;align-items:baseline;gap:8px;margin-top:11px;padding-top:11px;
+  border-top:1px dashed var(--brand-border)}
+.bhint{font-size:11.5px;line-height:1.45;color:var(--brand-text-dim);flex:1;min-width:0}
+.bcap{font:600 10.5px var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--brand-text-secondary);
+  flex:none;white-space:nowrap}
+.bcap.none{color:var(--brand-text-dim)}
+
+/* ---- posture: the reach lever. Two plates, because this decides whether the
+   armory is a boundary or a floor — it earns more room than a pill pair. ---- */
+.postgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:760px){.postgrid{grid-template-columns:1fr}}
+.postopt{display:grid;grid-template-columns:1fr auto;gap:5px 10px;text-align:left;cursor:pointer;
+  background:var(--brand-elevated);border:1px solid var(--brand-border);border-radius:12px;
+  padding:14px 16px 15px;
+  transition:border-color 180ms cubic-bezier(.16,1,.3,1),transform 180ms cubic-bezier(.16,1,.3,1),box-shadow 180ms}
+.postopt:hover{transform:translateY(-1px);border-color:var(--brand-border-hover)}
+.postopt:focus-visible{outline:2px solid var(--brand-primary);outline-offset:2px}
+.postopt .poname{font:700 13.5px var(--font-display);color:var(--brand-text);letter-spacing:-.01em}
+.postopt .pocur{justify-self:end;align-self:center;font:600 8.5px var(--font-mono);letter-spacing:.16em;
+  text-transform:uppercase;color:var(--brand-primary);border:1px solid rgba(var(--brand-primary-rgb),.45);
+  border-radius:9999px;padding:2px 8px}
+.postopt .potag{grid-column:1 / -1;font:500 9.5px var(--font-mono);letter-spacing:.04em;color:var(--brand-text-dim)}
+.postopt .pohint{grid-column:1 / -1;font-size:11px;line-height:1.5;color:var(--brand-text-secondary);margin-top:3px}
+/* lean selected = the safe path, brand-lit */
+.postopt.lean.cur{border-color:var(--brand-primary);box-shadow:0 0 18px rgba(var(--brand-primary-rgb),.16)}
+.postopt.lean.cur .potag{color:var(--brand-primary)}
+/* full selected = armed. It should look like it. */
+.postopt.full.cur{border-color:var(--brand-danger);box-shadow:0 0 20px rgba(var(--brand-danger-rgb),.22)}
+.postopt.full.cur .poname{color:var(--brand-danger)}
+.postopt.full.cur .pocur{color:var(--brand-danger);border-color:rgba(var(--brand-danger-rgb),.5)}
+.postopt.full.cur .potag{color:var(--brand-danger)}
+.postopt.full:hover{border-color:rgba(var(--brand-danger-rgb),.45)}
+.postprov{margin-top:12px;font-size:11px;line-height:1.55;color:var(--brand-text-dim);
+  display:flex;align-items:baseline;gap:7px}
+.postprov.warn{color:var(--brand-warning)}
+.postprov .pwx{flex:none}
+.postprov b{color:var(--brand-text-secondary)}
+
+/* Standard Equip is the quiet default — it reads as ordinary because it IS
+   ordinary. Full Loadout is the exception and must never blend in: an unbounded
+   member is a standing risk, so its tag carries the danger colour on every
+   surface that shows it. */
+.sbadge.lean{color:var(--brand-text-secondary)}
+.sbadge.full{color:var(--brand-danger);border-color:rgba(var(--brand-danger-rgb),.55);
+  background:rgba(var(--brand-danger-rgb),.10)}
+/* The risk gate's body — the sentence IS the control, so it gets room to be
+   read rather than the cramped line a confirm() would allow. */
+.riskbox{border:1px solid rgba(var(--brand-danger-rgb),.35);border-radius:10px;
+  background:rgba(var(--brand-danger-rgb),.07);padding:13px 15px;margin-bottom:16px}
+.riskbox p{font-size:12.5px;line-height:1.65;color:var(--brand-text-secondary);margin:0 0 9px}
+.riskbox p:last-child{margin-bottom:0}
+.riskbox b{color:var(--brand-text)}
+.riskonly{color:var(--brand-danger)!important;font-weight:600}
+/* .mono-ex was scoped to .calskip only — the risk gate and the posture panels
+   need it too. */
+.riskbox .mono-ex,.psteff .mono-ex,.pstopt .mono-ex{font:500 11px var(--font-mono);color:var(--brand-text-secondary)}
+/* Member posture picker (Floor → Manage) — three explicit choices, never a
+   toggle. A checkbox implies a symmetric flip; these options are not symmetric. */
+.pstpick{display:flex;gap:8px;flex-wrap:wrap}
+.pstopt{flex:1;min-width:150px;text-align:left;border:1px solid var(--brand-border);
+  border-radius:10px;padding:10px 12px;background:var(--brand-surface);cursor:pointer;
+  color:var(--brand-text-secondary);font:inherit}
+.pstopt:hover{border-color:var(--brand-border-hover)}
+.pstopt.sel{border-color:var(--brand-primary);background:rgba(var(--brand-primary-rgb),.08)}
+.pstopt.sel.risk{border-color:var(--brand-danger);background:rgba(var(--brand-danger-rgb),.10)}
+.pstopt b{display:block;color:var(--brand-text);font-size:12.5px;margin-bottom:2px}
+.pstopt span{display:block;font-size:11px;line-height:1.5}
+.psteff{margin-top:10px;font-size:11.5px;color:var(--brand-text-dim);line-height:1.6}
+
+/* ---- training bay: keeps vs re-decides, stated as chips ---- */
+.trainrow{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.traincopy{flex:1;min-width:260px;line-height:1.6;font-size:12.5px;color:var(--brand-text-secondary)}
+.traincopy b{color:var(--brand-text)}
+.trainsplit{display:grid;grid-template-columns:1fr 1fr;gap:14px 24px;margin-top:16px;padding-top:15px;
+  border-top:1px dashed var(--brand-border)}
+@media(max-width:700px){.trainsplit{grid-template-columns:1fr}}
+.tcol .tch{font:600 9px var(--font-mono);letter-spacing:.18em;text-transform:uppercase;margin-bottom:9px}
+.tcol.keeps .tch{color:var(--brand-success)}
+.tcol.redo .tch{color:var(--brand-warning)}
+.tchips{display:flex;flex-wrap:wrap;gap:5px}
+.tchip{font:600 9px var(--font-mono);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;
+  border:1px solid currentColor;border-radius:9999px;padding:3px 9px;color:var(--brand-text-dim)}
+.tcol.keeps .tchip{color:color-mix(in srgb, var(--brand-success) 72%, var(--brand-text-dim))}
+.tcol.redo .tchip{color:color-mix(in srgb, var(--brand-warning) 72%, var(--brand-text-dim))}
+
+/* ---- a real switch, not a raw checkbox ---- */
+.switchrow{display:flex;align-items:flex-start;gap:15px}
+.tswitch{flex:none;width:44px;height:25px;border-radius:9999px;cursor:pointer;position:relative;
+  background:var(--brand-tint-1);border:1px solid var(--brand-border);padding:0;margin-top:1px;
+  transition:background 180ms,border-color 180ms}
+.tswitch .tsk{position:absolute;top:2px;left:2px;width:19px;height:19px;border-radius:9999px;
+  background:var(--brand-text-dim);transition:transform 180ms cubic-bezier(.16,1,.3,1),background 180ms}
+.tswitch[aria-checked="true"]{background:rgba(var(--brand-primary-rgb),.22);border-color:var(--brand-primary)}
+.tswitch[aria-checked="true"] .tsk{transform:translateX(19px);background:var(--brand-primary);
+  box-shadow:0 0 10px rgba(var(--brand-primary-rgb),.7)}
+.tswitch:focus-visible{outline:2px solid var(--brand-primary);outline-offset:2px}
+.tswitch:disabled{opacity:.55;cursor:default}
+.switchcopy{flex:1;min-width:0}
+.switchtitle{font-size:13px;color:var(--brand-text);line-height:1.45}
+.switchdesc{color:var(--brand-text-dim);font-size:11px;margin-top:3px;line-height:1.5}
+.unrated{flex:none;text-align:center;padding:6px 14px;border-radius:10px;
+  background:var(--brand-elevated);border:1px solid var(--brand-border)}
+.unrated .usv{display:block;font:600 17px var(--font-mono);color:var(--brand-warning);font-variant-numeric:tabular-nums}
+.unrated .usl{display:block;font:500 8px var(--font-mono);letter-spacing:.16em;text-transform:uppercase;
+  color:var(--brand-text-dim);margin-top:1px}
+.unrated.clear .usv{color:var(--brand-success)}
+@media(max-width:560px){.switchrow{flex-wrap:wrap}}
 
 /* ---- custom-view nav row: embedded view + new-tab full-screen icon ---- */
 .navitem-row{display:flex;align-items:center;gap:2px}
@@ -1421,44 +1651,79 @@ tr.flash td{animation:rowflash 2.2s ease-out}
       </div>
 
       <!-- ============ SETTINGS ============ -->
+      <!-- The Console. One dossier plate, zones stacked like the Floor sheet:
+           every lever states its consequence, and the crew's budget wears the
+           same dial the character sheet uses (same contract-model endpoint). -->
       <div class="page" id="page-settings">
-        <div class="pagehead"><h1>Settings</h1><p>Runtime levers per contract. Model changes take effect on the next spawn — no restart, and every change lands in Records.</p></div>
-        <div class="stack">
-        <div>
-        <div class="seclabel">Firm pulse — <span class="mono" style="font-size:11px">scheduled cadence — systemd / launchd / Task Scheduler per OS · manual pulsing always works regardless</span></div>
-        <div class="listcard" id="pulseCadence" style="padding:12px 14px">Loading…</div>
-        </div>
-        <div>
-        <div class="seclabel">Member models — <span class="mono" style="font-size:11px">pulse_config.model → claude --model</span>; blank inherits your account default</div>
-        <div class="listcard"><div class="tablewrap"><table id="settingsTable"></table></div></div>
-        </div>
-        <div>
-        <div class="seclabel">Training — <span class="mono" style="font-size:11px">re-wire under the current framework</span></div>
-        <div class="listcard" id="retrainCard" style="padding:12px 14px">
-          <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-            <div style="flex:1;min-width:260px;line-height:1.6;font-size:12.5px;color:var(--brand-text-secondary)">
-              <b style="color:var(--brand-text)">Re-Train this firm.</b> The wiring agent re-surveys
-              the machine — live CLIs, servers, skills — and re-decides who carries what; you review
-              the plan before anything commits.<br>
-              <span style="color:var(--brand-text-dim)">Keeps goals, models, units, Records, cadence
-              &nbsp;·&nbsp; regenerates the charter &nbsp;·&nbsp; re-decides loadouts and enforced
-              NEVERs &nbsp;·&nbsp; <span class="mono">firm doctor</span> shows the drift first</span>
-            </div>
-            <a class="btn primary sm" id="retrainBtn" href="#" style="text-decoration:none;flex:none">Open Train →</a>
+        <div class="conplate">
+          <div class="conhead">
+            <div class="fp-eyebrow">Firm control · runtime levers</div>
+            <h1>Settings</h1>
+            <p>Everything here changes what the crew does on its next spawn — no restart, no redeploy.
+               Every change lands in Records, so the firm can always tell you who moved a lever and when.</p>
+            <div class="conmeta" id="conMeta"></div>
           </div>
-        </div>
-        </div>
-        <div>
-        <div class="seclabel">Run review — <span class="mono" style="font-size:11px">Board-only quality scoring of completed member runs · never shown to members</span></div>
-        <div class="listcard" id="runReviewCard" style="padding:12px 14px">
-          <label class="mcheck" style="margin:0;align-items:center">
-            <input type="checkbox" id="setRunNudge" onchange="setRunNudge(this)">
-            <span>Show a subtle &ldquo;runs awaiting your rating&rdquo; nudge in the nav badge
-              <span style="display:block;color:var(--brand-text-dim);font-size:11px;margin-top:2px">Off by default. Counts completed runs you haven&rsquo;t scored yet — it never pings Slack, and members never see the score.</span>
-            </span>
-          </label>
-        </div>
-        </div>
+
+          <div class="szone">
+            <div class="zlabel">Firm pulse <span class="zn">the heartbeat · systemd / launchd / Task Scheduler per OS · manual pulsing always works regardless</span></div>
+            <div id="pulseCadence"><div class="empty">Reading the scheduler…</div></div>
+          </div>
+
+          <div class="szone">
+            <div class="zlabel">Crew budget <span class="zn">pulse_config.model → claude --model · blank inherits your account default · applies next spawn</span></div>
+            <div class="crewgrid" id="settingsCrew"></div>
+          </div>
+
+          <!-- Loadout posture — the switch is ours, the backend + risk modal are
+               the posture build's. Stays hidden until S.loadout_posture is in the
+               payload, so this page never ships a lever that does nothing. -->
+          <div class="szone" id="postureZone" hidden>
+            <div class="zlabel">Loadout posture <span class="zn">what every member can reach on a run · firm-wide default · per-member overrides live on the Floor</span></div>
+            <div id="postureRow"></div>
+          </div>
+
+          <!-- id kept: the standalone (no-hub) fallback appends its "open via
+               cadre hub" note here after removing the Train button. -->
+          <div class="szone train-bay" id="retrainCard">
+            <div class="zlabel">Training <span class="zn">re-wire under the current framework</span></div>
+            <div class="trainrow">
+              <div class="traincopy">
+                <b>Re-Train this firm.</b> The wiring agent re-surveys the machine — live CLIs, servers,
+                skills — and re-decides who carries what. You review the plan before anything commits, and
+                <span class="mono">firm doctor</span> shows you the drift first.
+              </div>
+              <a class="btn primary" id="retrainBtn" href="#" style="text-decoration:none;flex:none">Open Train →</a>
+            </div>
+            <div class="trainsplit">
+              <div class="tcol keeps">
+                <div class="tch">Survives a re-Train</div>
+                <div class="tchips">
+                  <span class="tchip">Goals</span><span class="tchip">Models</span><span class="tchip">Units</span>
+                  <span class="tchip">Records</span><span class="tchip">Cadence</span>
+                </div>
+              </div>
+              <div class="tcol redo">
+                <div class="tch">Gets re-decided</div>
+                <div class="tchips">
+                  <span class="tchip">Charter</span><span class="tchip">Loadouts</span><span class="tchip">Enforced NEVERs</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="szone">
+            <div class="zlabel">Run review <span class="zn">Board-only quality scoring of completed member runs · never shown to members</span></div>
+            <div class="switchrow">
+              <button class="tswitch" id="setRunNudge" role="switch" aria-checked="false"
+                      aria-labelledby="runNudgeLabel" onclick="setRunNudge(this)"><span class="tsk"></span></button>
+              <div class="switchcopy">
+                <div class="switchtitle" id="runNudgeLabel">Nudge me when runs are waiting on a rating</div>
+                <div class="switchdesc">Off by default. Counts completed runs you haven&rsquo;t scored yet and shows them
+                  on the nav badge — it never pings Slack, and members never see the score.</div>
+              </div>
+              <div class="unrated" id="unratedCount" title="Completed runs you haven't scored yet"></div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1511,6 +1776,33 @@ tr.flash td{animation:rowflash 2.2s ease-out}
     <div class="btn-row">
       <button class="btn" onclick="closeRate()">Cancel</button>
       <button class="btn primary" id="rateConfirm" onclick="submitRate()">Save rating</button>
+    </div>
+  </div>
+</div>
+
+<!-- Full-loadout risk gate. A real modal, never confirm(): the browser dialog
+     cannot carry the sentence that makes this decision informed, and this is
+     the one control in the boardroom that hands a member the operator's own
+     reach. Cancel is the default action; the commit button is danger-styled
+     and never focused. -->
+<div class="overlay" id="postureOverlay">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="postureTitle">
+    <h3 id="postureTitle">Full Loadout — read this first</h3>
+    <div class="msub" id="postureSub"></div>
+    <div class="riskbox">
+      <p><b>This is the loadout equivalent of dangerous bypass permission.</b> It inherits
+      your ENTIRE connected-tool fleet — every Cowork/claude.ai connector you have (Gmail,
+      Calendar, Drive, Slack, Canva, DocuSeal, Monday, Zoom) with its full
+      <b>write / send / publish / e-sign</b> power, on top of the firm armory, under
+      <span class="mono-ex">--dangerously-skip-permissions</span>.</p>
+      <p><b>The firm's loadout stops bounding what it can do.</b> The armory you
+      equipped is no longer the limit — it becomes a floor. Anything your operator
+      account can reach, this can reach, without asking you.</p>
+      <p class="riskonly">Only choose this for a trusted personal-proxy member.</p>
+    </div>
+    <div class="btn-row">
+      <button class="btn primary" id="postureCancel" onclick="closePostureRisk()">Cancel — stay on Standard Equip</button>
+      <button class="btn danger" id="postureConfirm" onclick="confirmPostureRisk()">I understand — Full Loadout</button>
     </div>
   </div>
 </div>
@@ -1668,7 +1960,7 @@ function show(view){
   if(custom && custom.mode === 'fullscreen'){ window.location.href = BASE + '/view/' + encodeURIComponent(view); return; }
   if(!VIEWS[view] && !custom) view = 'dashboard';
   currentView = view;
-  if(view === 'settings') loadPulseCadence();
+  if(view === 'settings') loadPulseCadence();   // posture rides the poll payload
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + view));
   document.querySelectorAll('.navitem[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   document.getElementById('crumbHere').textContent = VIEWS[view] || (custom && custom.title) || view;
@@ -3301,6 +3593,7 @@ function sheetHtml(m){
             <span class="sbadge${m.status === 'active' ? ' ok' : ''}">${esc(String(m.status || '').toUpperCase())}</span>
             ${m.lead ? '<span class="sbadge lead" title="Others on the roster report to this member">LEAD</span>' : ''}
             ${burn}
+            ${postureTag((m.posture || {}).posture || 'lean', {source: (m.posture || {}).source})}
           </div>
           ${m.owns ? `<div class="sowns">${esc(m.owns)}</div>` : ''}
         </div>
@@ -3583,6 +3876,7 @@ function profManageHtml(P){
       <div class="mp-head">Standing instructions <span class="zn">appended to every prompt</span></div>
       <div class="field"><textarea id="fInstructions" class="script">${esc(P.instructions)}</textarea></div>
     </div>
+    ${profPostureHtml(P)}
     <div class="zfoot" style="margin-bottom:6px"><button class="btn primary" onclick="saveManage(this)">Save changes</button></div>`;
 }
 
@@ -4065,84 +4359,489 @@ const MODEL_OPTS = [
    state. Loaded when Settings opens and after every change; never on the
    poll cadence, so a mid-click row is never clobbered. */
 const PULSE_OPTS = ['10m', '30m', '1h', '4h', '1d'];
+/* Cadence is a throttle, so it's drawn as one — stops on a rail, each with the
+   load it puts on the firm. The operator should see the tradeoff before pulling
+   the lever, not discover it in next month's spend. */
+const PULSE_META = {
+  '':    {load: 0, name: 'Manual', hint: 'Nothing wakes on its own. You pulse from the dashboard or the CLI when you want work to move.'},
+  '10m': {load: 5, name: '10m',    hint: 'Aggressive — six wakes an hour. Highest burn; right for a live push you are actually watching.'},
+  '30m': {load: 4, name: '30m',    hint: 'Tight loop — work moves while you watch. Good for an active build day.'},
+  '1h':  {load: 3, name: '1h',     hint: 'Steady — the default working rhythm. Progress every hour without runaway spend.'},
+  '4h':  {load: 2, name: '4h',     hint: 'Relaxed — a few passes a day. The firm ticks along behind you.'},
+  '1d':  {load: 1, name: '1d',     hint: 'Dormant watch — one pass a day. Lowest burn; the firm stays warm, barely.'},
+};
+let pulseCur = null;
 async function loadPulseCadence(){
   const el = document.getElementById('pulseCadence');
   if(!el) return;
   const fid = (BASE || '').split('/').pop();
-  if(!fid){ el.textContent = 'Pulse control needs the hub — open this firm via /f/<firm-id>/.'; return; }
+  if(!fid){ el.innerHTML = '<div class="empty">Pulse control needs the hub — open this firm via /f/&lt;firm-id&gt;/.</div>'; return; }
   let ps = null;
   try{ ps = await (await fetch('/api/next/pulse-state/' + encodeURIComponent(fid))).json(); }catch(e){}
-  if(!ps || !ps.ok){ el.textContent = 'Pulse state unavailable — is the hub serving this dashboard?'; return; }
+  if(!ps || !ps.ok){ el.innerHTML = '<div class="empty">Pulse state unavailable — is the hub serving this dashboard?</div>'; return; }
   const cur = ps.enabled ? (ps.interval || '') : '';
-  el.innerHTML = ['', ...PULSE_OPTS].map(iv => `
-    <button data-iv="${iv}" style="margin:2px 8px 2px 0;padding:6px 14px;border-radius:999px;cursor:pointer;
-      background:none;border:1px solid ${iv === cur ? '#22c55e' : 'rgba(128,128,128,.35)'};
-      color:${iv === cur ? '#22c55e' : 'inherit'}">${iv || 'Manual'}</button>`).join('')
-    + `<span class="mono" style="font-size:11px;opacity:.6;margin-left:6px">${cur
-        ? 'wakes every ' + esc(cur)
-        : 'manual only — pulse from the dashboard or CLI when you want it to work'}</span>`;
+  pulseCur = cur;
+  const stops = ['', ...PULSE_OPTS].map(iv => {
+    const M = PULSE_META[iv] || {load: 0, name: iv, hint: ''};
+    const on = iv === cur;
+    return `<button class="cstop${on ? ' cur' : ''}" data-iv="${iv}" role="radio" aria-checked="${on}"
+        aria-label="${esc(M.name)} — ${esc(M.hint)}">
+      <span class="cnotch"></span>
+      <span class="csname">${esc(M.name)}</span>
+      <span class="csload" aria-hidden="true">${[1,2,3,4,5].map(i => `<i class="${i <= M.load ? 'on' : ''}"></i>`).join('')}</span>
+    </button>`;
+  }).join('');
+  el.innerHTML = `<div class="pulsedeck">
+    <div class="pulsecore${cur ? ' beating' : ''}">
+      <span class="pdot"></span>
+      <div>
+        <span class="pck">${cur ? 'Beating' : 'Dormant'}</span>
+        <span class="pcv">${cur ? 'every ' + esc(cur) : 'manual only'}</span>
+      </div>
+    </div>
+    <div class="cadencetrack" role="radiogroup" aria-label="Pulse cadence">${stops}</div>
+    <div class="pulsehint" id="pulseHint"></div>
+  </div>`;
+  // The hint tracks the stop under the cursor, then falls back to what's live —
+  // you can read every setting's cost without committing to any of them.
+  const hint = document.getElementById('pulseHint');
+  const paint = iv => {
+    const M = PULSE_META[iv] || {name: iv, hint: ''};
+    hint.innerHTML = `<b>${esc(M.name)}</b> — ${esc(M.hint)}`;
+  };
+  paint(cur);
   for(const b of el.querySelectorAll('[data-iv]')){
+    b.onmouseenter = () => paint(b.dataset.iv);
+    b.onfocus = () => paint(b.dataset.iv);
     b.onclick = async () => {
-      b.disabled = true; b.textContent = '…';
+      if(b.dataset.iv === cur) return;                 // already there — no churn
+      // Installing/removing a systemd (or launchd / Task Scheduler) unit takes
+      // seconds, not milliseconds. Say so — a dead-looking track invites a
+      // second click on a lever that's already moving.
+      el.querySelectorAll('[data-iv]').forEach(x => x.disabled = true);
+      b.classList.add('applying');
+      hint.innerHTML = '<b>Applying…</b> ' + (b.dataset.iv
+        ? 'installing the timer with the OS scheduler.'
+        : 'removing the timer — the firm will only move when you pulse it.');
       let r;
       try{
-        r = await (await fetch('/api/next/pulse', {method: 'POST',
+        // boardFetch, never bare fetch: every hub POST is Board-gated, so this
+        // has to carry the token AND be able to prompt for the password on a
+        // 401. A bare fetch here just returned board_token_required forever.
+        r = await (await boardFetch('/api/next/pulse', {method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({firm_id: fid, interval: b.dataset.iv || '30m',
                                 enable: !!b.dataset.iv})})).json();
       }catch(e){ r = {ok: false}; }
-      if(r.ok) toast(b.dataset.iv ? 'Pulse set — wakes every ' + b.dataset.iv
+      if(r.ok) toast(b.dataset.iv ? 'Pulse set — the firm wakes every ' + b.dataset.iv
                                   : 'Pulse timer removed — manual only');
       else toast((r && r.error) || 'Could not change the pulse', true);
       loadPulseCadence();
     };
   }
+  el.onmouseleave = () => paint(cur);
+  if(STATE) renderConMeta(STATE);
 }
 
+/* The Console renders from the same poll payload as everything else — the
+   global STATE the poll already holds, so the async pulse load can repaint the
+   header strip without re-plumbing state through every call site. */
 function renderSettings(S){
-  // Keep the run-review toggle in sync — but never clobber it mid-click.
-  const nudge = document.getElementById('setRunNudge');
-  if(nudge && nudge !== document.activeElement){
-    nudge.checked = !!(S.run_review && S.run_review.nudge_enabled);
-  }
-  const rows = S.contract_settings || [];
-  const el = document.getElementById('settingsTable');
-  if(!el) return;
-  if(!rows.length){ el.innerHTML = '<tbody><tr><td class="empty">No contracts yet.</td></tr></tbody>'; return; }
-  // Don't clobber a dropdown mid-interaction on the poll cadence.
-  if(el.contains(document.activeElement)) return;
-  el.innerHTML = `<thead><tr><th>Members</th><th>Contract</th><th>Model</th><th>Timeout</th></tr></thead><tbody>` +
-    rows.map(c => {
-      const cur = c.model || '';
-      const known = MODEL_OPTS.some(([v]) => v === cur);
-      const opts = MODEL_OPTS.map(([v, label]) =>
-        `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`).join('')
-        + (known ? '' : `<option value="${esc(cur)}" selected>${esc(cur)}</option>`);
-      return `<tr>
-        <td>${esc(c.members.join(', ') || '—')}</td>
-        <td class="mono" style="font-size:12px">${esc(c.name || c.id)}</td>
-        <td><select onchange="setContractModel('${esc(c.id)}', this)">${opts}</select></td>
-        <td class="mono" style="font-size:12px">${c.timeout_sec != null ? c.timeout_sec + 's' : '—'}</td>
-      </tr>`;
-    }).join('') + '</tbody>';
+  renderConMeta(S);
+  renderPosture(S);
+  renderCrew(S);
+  renderRunReviewZone(S);
 }
-async function setContractModel(contractId, sel){
-  sel.disabled = true;
-  const out = await postAction('contract-model/' + contractId, {model: sel.value});
-  if(out.ok){
-    toast(`Model ${sel.value ? 'set to ' + sel.value : 'reset to account default'} — applies next spawn`);
-    lastHash = null; poll();
+
+/* The header strip: what the levers on this page currently add up to. */
+function renderConMeta(S){
+  const el = document.getElementById('conMeta');
+  if(!el) return;
+  const rows = S.contract_settings || [];
+  const roster = S.roster || [];
+  const crew = roster.filter(m => (m.status || '') === 'active').length || roster.length;
+  const mix = {};
+  rows.forEach(c => {
+    const k = String(c.model || '').toLowerCase() || 'default';
+    mix[k] = (mix[k] || 0) + Math.max(1, (c.members || []).length);
+  });
+  const order = ['opus', 'sonnet', 'haiku', 'default'];
+  const mixTxt = Object.keys(mix)
+    .sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99))
+    .map(k => `<b>${mix[k]}</b>${esc(k)}`).join(' · ') || '—';
+  const unrated = (S.run_review || {}).unrated_count || 0;
+  el.innerHTML = `<span>Pulse <b>${esc(pulseCur || 'manual')}</b></span>
+    <span>Crew <b>${crew}</b></span>
+    <span>Burn ${mixTxt}</span>
+    ${unrated ? `<span class="warn">Unrated <b>${unrated}</b></span>` : ''}`;
+}
+
+/* Crew budget — one plate per contract, wearing the character sheet's dial.
+   Same lever, same endpoint (contract-model); this page just used to render it
+   as a <select> while the Floor got the good one. */
+function renderCrew(S){
+  const el = document.getElementById('settingsCrew');
+  if(!el) return;
+  const rows = S.contract_settings || [];
+  if(!rows.length){ el.innerHTML = '<div class="empty">No contracts yet — the crew gets wired at Train.</div>'; return; }
+  // The poll cadence must never eat a click: skip the repaint while a picker is
+  // open or the timeout field has focus.
+  if(budgetPickOpen || el.contains(document.activeElement)) return;
+  const byName = {};
+  (S.roster || []).forEach(m => { byName[m.name] = m; });
+  el.innerHTML = rows.map(c => bcardHtml(c, byName)).join('');
+}
+function bcardHtml(c, byName){
+  const cid = esc(c.id);
+  const names = c.members || [];
+  const bm = String(c.model || '').toLowerCase();
+  const segs = bm === 'opus' ? 3 : bm === 'sonnet' ? 2 : bm === 'haiku' ? 1 : 0;
+  const multi = names.length > 1;
+  const port = multi
+    ? `<div class="bstack">${names.slice(0, 2).map(n =>
+        `<div class="bport">${esc(initials(n))}${avatarImg(n)}</div>`).join('')}</div>`
+    : `<div class="bport">${esc(initials(names[0] || '?'))}${avatarImg(names[0] || '')}</div>`;
+  const primary = byName[names[0]];
+  const title = multi ? names.length + ' members' : (names[0] || '—');
+  const sub = multi ? names.join(' · ') : ((primary && primary.role) || c.name || 'unassigned');
+  const mins = c.timeout_sec ? Math.round(c.timeout_sec / 60) : 0;
+  // Open the character sheet, same as the Floor. Multi-member contracts land on
+  // the first member — the sheet cycles to the rest with the arrow keys.
+  const mid = primary && primary.id;
+  const link = mid
+    ? ` class="bhead linked" role="button" tabindex="0"
+        title="Open ${esc(title)}'s record"
+        onclick="openSheet('${esc(mid)}')"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openSheet('${esc(mid)}')}"`
+    : ' class="bhead"';
+  const picks = ['opus', 'sonnet', 'haiku', ''].map(x => `
+    <button class="mpick${x === bm ? ' cur' : ''}" onclick="event.stopPropagation();pickContractModel('${cid}','${x}')">
+      <span class="mseg">${x ? BURN[x] : '▯▯▯'}</span>
+      <span class="mname">${x ? x.toUpperCase() : 'DEFAULT'}</span>
+      ${x === bm ? '<span class="mcur">current</span>' : ''}
+      <span class="mhint">${esc(x ? BURN_HINT[x] : 'No override — inherits your account default.')}</span>
+    </button>`).join('');
+  return `<div class="bcard">
+    <div${link}>
+      ${port}
+      <div class="bwho">
+        <div class="bname">${esc(title)}</div>
+        <div class="brole" title="${esc(sub)}">${esc(sub)}</div>
+      </div>
+      <span class="bgo" aria-hidden="true">→</span>
+      <span class="bid">${cid}</span>
+    </div>
+    <div class="dialwrap">
+      <div class="dial clickable" role="button" tabindex="0"
+        title="Change the model and timeout this contract runs on"
+        onclick="toggleBudgetPick('${cid}', event)"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleBudgetPick('${cid}', event)}">
+        <span class="dk">Budget</span>
+        <span class="dsegs">${[1, 2, 3].map(i => `<span class="dseg${i <= segs ? ' lit' : ''}"></span>`).join('')}</span>
+        <span class="dname">${esc(bm || 'account default')}</span>
+        <span class="dchev" aria-hidden="true">▾</span>
+      </div>
+      <div class="modelpick" id="bpick-${cid}" hidden>
+        ${picks}
+        <div class="mtimeout" onclick="event.stopPropagation()">
+          <span class="mtl">Timeout</span>
+          <input id="bto-${cid}" type="number" min="1" max="240" step="1"
+            value="${mins || ''}" placeholder="—">
+          <span class="mtu">min</span>
+          <button class="btn primary sm" onclick="saveContractTimeout('${cid}')">Set</button>
+        </div>
+        <div class="mth">How long a run may hold the floor before it's cut. Empty = account default.</div>
+      </div>
+    </div>
+    <div class="bfoot">
+      <span class="bhint">${esc(BURN_HINT[bm] || 'No override — inherits your account default.')}</span>
+      <span class="bcap${mins ? '' : ' none'}">${mins ? mins + 'm cap' : 'no cap'}</span>
+    </div>
+  </div>`;
+}
+
+/* One picker open at a time; the open one also freezes the poll repaint. */
+let budgetPickOpen = null;
+function toggleBudgetPick(cid, ev){
+  if(ev) ev.stopPropagation();
+  const p = document.getElementById('bpick-' + cid);
+  if(!p) return;
+  if(budgetPickOpen && budgetPickOpen !== cid) closeBudgetPick(budgetPickOpen);
+  if(p.hidden){
+    p.classList.remove('closing');
+    p.hidden = false;
+    const card = p.closest('.bcard');
+    if(card) card.classList.add('picking');
+    // The zone owns the stacking context (see .zpicking) — the card alone can't
+    // climb out of it, so the whole zone lifts while the picker is open.
+    const zone = p.closest('.szone');
+    if(zone) zone.classList.add('zpicking');
+    budgetPickOpen = cid;
   } else {
-    toast(out.error || 'Model update failed', true);
+    closeBudgetPick(cid);
   }
-  sel.disabled = false;
+}
+function closeBudgetPick(cid){
+  const p = document.getElementById('bpick-' + cid);
+  if(budgetPickOpen === cid) budgetPickOpen = null;
+  if(!p || p.hidden) return;
+  p.classList.add('closing');
+  const card = p.closest('.bcard');
+  const zone = p.closest('.szone');
+  setTimeout(() => {
+    p.hidden = true;
+    p.classList.remove('closing');
+    if(card) card.classList.remove('picking');
+    if(zone) zone.classList.remove('zpicking');
+  }, 240);
+}
+document.addEventListener('click', e => {
+  if(!budgetPickOpen) return;
+  if(e.target.closest && e.target.closest('#settingsCrew .dialwrap')) return;
+  closeBudgetPick(budgetPickOpen);
+});
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape' && budgetPickOpen) closeBudgetPick(budgetPickOpen);
+});
+
+async function pickContractModel(cid, model){
+  const out = await postAction('contract-model/' + encodeURIComponent(cid), {model});
+  if(out.ok){
+    toast(model ? 'Budget set to ' + model + ' — every future run boots on it'
+                : 'Override cleared — inherits the account default');
+    closeBudgetPick(cid);
+    floorFetchedAt = 0;      // the Floor's dial reads this same lever
+    lastHash = null; poll();
+  } else toast(out.error || 'Budget change failed', true);
+}
+async function saveContractTimeout(cid){
+  const inp = document.getElementById('bto-' + cid);
+  if(!inp) return;
+  const v = String(inp.value || '').trim();
+  const mins = v ? parseInt(v, 10) : 0;
+  if(v && (!Number.isFinite(mins) || mins < 1)){ toast('Timeout must be at least 1 minute', true); return; }
+  const out = await postAction('contract-model/' + encodeURIComponent(cid), {timeout_sec: mins ? mins * 60 : 0});
+  if(out.ok){
+    toast(mins ? 'Timeout set — runs get cut after ' + mins + ' min'
+               : 'Timeout cleared — inherits the account default');
+    closeBudgetPick(cid);
+    floorFetchedAt = 0;
+    lastHash = null; poll();
+  } else toast(out.error || 'Timeout change failed', true);
+}
+
+/* ---- Loadout posture: the firm-wide reach lever ----
+   The single most consequential control on this page, so it gets the most
+   weight: it decides whether a Member's MCP surface is EXACTLY the firm armory
+   (--strict-mcp-config) or the operator's whole connector fleet.
+
+   Contract (owned by the posture build — services/posture.py):
+     read  · S.loadout_posture = {posture, source, stated, members}
+             source: 'firm' (Board stated it) | 'legacy_file' (inherited from
+             .firm/spawn.json, never reviewed) | 'default' (nothing set → lean)
+     write · postAction('firm-posture', {posture: 'lean'|'full'})
+   Both tiers land a Records row naming who changed it and from what.
+   The zone reveals itself once that payload is present. */
+const POSTURE_META = {
+  lean: {
+    name: 'Standard Equip',
+    tag: 'strict-mcp-config',
+    hint: 'Members carry exactly the firm armory you equipped — nothing more. Your personal connectors stay out of reach, and the loadout is a real boundary.',
+  },
+  full: {
+    name: 'Full Loadout',
+    tag: 'dangerously-skip-permissions',
+    hint: 'Members inherit your entire connected-tool fleet — every Cowork connector, with its write / send / publish / e-sign power — on top of the armory. The loadout stops bounding them.',
+  },
+};
+const POSTURE_SOURCE = {
+  firm: 'Stated by the Board.',
+  legacy_file: 'Inherited from .firm/spawn.json and never reviewed — state a choice here to shadow the file for good.',
+  default: 'Nothing stated — running the safe default.',
+};
+let postureCur = null;
+let postureCtx = null;
+
+/* The compact tag, shown wherever a member's reach is on screen. */
+function postureTag(p, opts){
+  const o = opts || {};
+  const full = p === 'full';
+  const why = o.source === 'member' ? 'set on this member'
+    : o.source === 'legacy_file' ? 'inherited from .firm/spawn.json — never reviewed in the boardroom'
+    : o.source === 'firm' ? 'inherited from the firm default'
+    : 'the default';
+  const title = full
+    ? `FULL LOADOUT — inherits your entire connector fleet on top of the firm armory (${why})`
+    : `STANDARD EQUIP — MCP surface is exactly the firm armory (${why})`;
+  return `<span class="sbadge ${full ? 'full' : 'lean'}" title="${esc(title)}">${full ? 'FULL LOADOUT' : 'STANDARD'}</span>`;
+}
+
+/* The single gate, shared by the Settings switch and the Floor Manage switch.
+   `ctx.gate` is computed by the caller from what the click would ACTUALLY
+   produce — never from the literal value clicked, because "inherit" under a
+   Full firm default raises a member's reach just as surely as picking Full.
+   Standard Equip is never gated: the safe direction stays one click away. */
+function requestPosture(ctx){
+  if(!ctx.gate){ commitPosture(ctx); return; }
+  postureCtx = ctx;
+  document.getElementById('postureSub').textContent = ctx.sub;
+  document.getElementById('postureOverlay').classList.add('show');
+  document.getElementById('postureCancel').focus();   // cancel is the default action
+}
+function closePostureRisk(){
+  document.getElementById('postureOverlay').classList.remove('show');
+  postureCtx = null;
+  // Cancel leaves posture untouched; re-render so the picker snaps back to what
+  // is actually stored rather than the choice we just declined.
+  refreshSheetProfile(); lastHash = null; poll();
+}
+async function confirmPostureRisk(){
+  const ctx = postureCtx;
+  document.getElementById('postureOverlay').classList.remove('show');
+  postureCtx = null;
+  if(ctx) await commitPosture(ctx);
+}
+async function commitPosture(ctx){
+  const out = ctx.scope === 'firm'
+    ? await postAction('firm-posture/default', {posture: ctx.value})
+    : await postAction('member-posture/' + encodeURIComponent(ctx.id), {posture: ctx.value});
+  if(!out.ok){ toast(out.error || 'Posture update failed', true); refreshSheetProfile(); return; }
+  toast(ctx.toast);
+  lastHash = null; poll(); floorFetchedAt = 0; loadFloor(); refreshSheetProfile();
+}
+// Backdrop dismiss = cancel = stay on Standard Equip. Every exit that isn't the
+// danger button leaves the posture alone.
+document.getElementById('postureOverlay').addEventListener('click',
+  e => { if(e.target.id === 'postureOverlay') closePostureRisk(); });
+
+function renderPosture(S){
+  const zone = document.getElementById('postureZone');
+  if(!zone) return;
+  const P = S.loadout_posture;
+  if(!P || !P.posture){ zone.hidden = true; return; }   // backend absent — no dead lever
+  zone.hidden = false;
+  postureCur = String(P.posture).toLowerCase();
+  const src = String(P.source || 'default');
+  const opts = ['lean', 'full'].map(x => {
+    const M = POSTURE_META[x];
+    const on = x === postureCur;
+    return `<button class="postopt ${x}${on ? ' cur' : ''}" role="radio" aria-checked="${on}"
+        onclick="setPosture('${x}')">
+      <span class="poname">${esc(M.name)}</span>
+      ${on ? '<span class="pocur">current</span>' : ''}
+      <span class="potag mono">--${esc(M.tag)}</span>
+      <span class="pohint">${esc(M.hint)}</span>
+    </button>`;
+  }).join('');
+  // roster_postures() returns a DICT keyed by member id, not a list.
+  const overrides = Object.entries(P.members || {}).filter(([, v]) => v && v.override);
+  document.getElementById('postureRow').innerHTML = `
+    <div class="postgrid" role="radiogroup" aria-label="Firm loadout posture">${opts}</div>
+    <div class="postprov${src === 'legacy_file' ? ' warn' : ''}">
+      ${src === 'legacy_file' ? '<span class="pwx">⚠</span>' : ''}
+      <span>${esc(POSTURE_SOURCE[src] || '')}
+      ${overrides.length
+        ? ' · ' + overrides.length + ' member' + (overrides.length === 1 ? '' : 's') + ' override'
+          + (overrides.length === 1 ? 's' : '') + ' this: '
+          + overrides.map(([id, v]) => esc(memberName(id)) + ' <b>'
+              + (v.override === 'full' ? 'FULL LOADOUT' : 'STANDARD') + '</b>').join(' · ')
+        : ' · No member overrides — every member runs the firm default.'}</span>
+    </div>`;
+}
+/* Full Loadout widens blast radius, so it routes through the shared gate. A firm
+   running Full off its founding file has never been shown the warning — ratifying
+   that into a Board decision is the first real choice, so it gets gated too
+   (ESC-086's whole point: nobody chose the posture it was running). */
+function setPosture(mode){
+  const P = (STATE && STATE.loadout_posture) || {};
+  if(mode === (P.posture || 'lean') && P.source !== 'legacy_file') return;
+  requestPosture({
+    scope: 'firm', value: mode,
+    gate: mode === 'full' && P.stated !== 'full',
+    sub: 'Firm default — applies to every member without an override of its own.',
+    toast: mode === 'full'
+      ? 'Firm default is now FULL LOADOUT — members inherit your connectors on the next spawn'
+      : 'Firm default is now STANDARD EQUIP — the loadout is the law again',
+  });
+}
+
+/* Per-member loadout posture (Floor → Manage). Commits on click (like the
+   management key, not like the designation fields) — the modal already made it
+   deliberate, and a security posture sitting unsaved in a form is a posture you
+   think you set. */
+function profPostureHtml(P){
+  const p = P.posture || {};
+  const eff = p.posture || 'lean';
+  const fd = p.firm_default || 'lean';
+  const cur = p.override || 'inherit';
+  const fdName = fd === 'full' ? 'FULL LOADOUT' : 'STANDARD EQUIP';
+  const opt = (v, name, blurb) =>
+    `<button type="button" class="pstopt${v === cur ? ' sel' : ''}${v === 'full' ? ' risk' : ''}"
+       aria-pressed="${v === cur}" onclick="setMemberPosture('${v}')">
+       <b>${name}</b><span>${blurb}</span></button>`;
+  return `
+    <div class="mpanel">
+      <div class="mp-head">Loadout posture <span class="zn">Board-only · what this member can reach · the member never sees it</span></div>
+      <p class="calintro">Standard Equip means this member reaches <b>exactly the firm armory</b> and nothing else.
+        Full Loadout means it also inherits <b>your entire connected-tool fleet</b> — every connector you hold, with
+        its write and send power. Standard unless you have a reason.</p>
+      <div class="pstpick">
+        ${opt('inherit', `Inherit the firm default (${fdName})`,
+              'Follows Settings. Change the firm default and this member follows it.')}
+        ${opt('lean', 'Standard Equip — firm armory only',
+              'Pin this member to the armory even if the firm default goes Full Loadout.')}
+        ${opt('full', 'Full Loadout — inherit my connectors',
+              'Unbounds this member from the firm loadout. Personal-proxy only.')}
+      </div>
+      <div class="psteff">Effective now: ${postureTag(eff, {source: p.source})} —
+        ${p.source === 'member' ? 'set on this member, overriding the firm default.'
+          : p.source === 'legacy_file' ? 'from the firm&rsquo;s founding <span class="mono-ex">.firm/spawn.json</span> — no Board decision behind it.'
+          : p.source === 'firm' ? 'inherited from the firm default.' : 'the default.'}
+      </div>
+    </div>`;
+}
+function setMemberPosture(choice){
+  if(!profileCtx) return;
+  const p = (sheetProfile && sheetProfile.posture) || {};
+  if(choice === (p.override || 'inherit')) return;
+  const fd = p.firm_default || 'lean';
+  // What the member will ACTUALLY run with after this click. "Inherit" under a
+  // FULL firm default is an escalation to Full Loadout even though the word says
+  // inherit — gate on the outcome, never the label.
+  const effective = choice === 'inherit' ? fd : choice;
+  const who = memberName(profileCtx);
+  const nm = v => v === 'full' ? 'FULL LOADOUT' : 'STANDARD EQUIP';
+  requestPosture({
+    scope: 'member', id: profileCtx, value: choice === 'inherit' ? null : choice,
+    gate: effective === 'full' && (p.posture || 'lean') !== 'full',
+    sub: `${who} — this member's loadout, on its next spawn.`,
+    toast: choice === 'inherit'
+      ? `${who} follows the firm default (${nm(fd)}) again`
+      : `${who} pinned to ${nm(choice)} — applies on the next spawn`,
+  });
+}
+
+function renderRunReviewZone(S){
+  const rr = S.run_review || {};
+  const sw = document.getElementById('setRunNudge');
+  if(sw && sw !== document.activeElement) sw.setAttribute('aria-checked', String(!!rr.nudge_enabled));
+  const u = document.getElementById('unratedCount');
+  if(u){
+    const n = rr.unrated_count || 0;
+    u.classList.toggle('clear', n === 0);
+    u.innerHTML = `<span class="usv">${n}</span><span class="usl">awaiting</span>`;
+  }
 }
 
 /* ---- Run review: Board-only run scoring + the toggleable nudge ---- */
 async function setRunNudge(el){
-  const out = await postAction('firm-setting/run_review_nudge', {value: el.checked});
-  if(out.ok){ toast(el.checked ? 'Run-review nudge on' : 'Run-review nudge off'); lastHash = null; poll(); }
-  else { toast(out.error || 'Setting update failed', true); el.checked = !el.checked; }
+  const next = el.getAttribute('aria-checked') !== 'true';
+  el.setAttribute('aria-checked', String(next));   // optimistic — reverted on failure
+  el.disabled = true;
+  const out = await postAction('firm-setting/run_review_nudge', {value: next});
+  el.disabled = false;
+  if(out.ok){ toast(next ? 'Run-review nudge on' : 'Run-review nudge off'); lastHash = null; poll(); }
+  else { toast(out.error || 'Setting update failed', true); el.setAttribute('aria-checked', String(!next)); }
 }
 let rateCtx = {runId: null, score: null};
 function openRate(runId, suggested, current, memberId){
