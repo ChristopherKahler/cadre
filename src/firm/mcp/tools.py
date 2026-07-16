@@ -16,6 +16,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from firm.core.db import connect, get_db_path, resolve_firm_id
+from firm.services import authority as authority_svc
 from firm.services import comment as comment_svc
 from firm.services import contract as contract_svc
 from firm.services import document as document_svc
@@ -86,6 +87,25 @@ def _safe(fn, *args, **kwargs) -> dict | list:
             conn.close()
 
 
+def _authorize(tool_name: str) -> dict | None:
+    """Authority gate for the five self-govern tools (audit A6).
+
+    Returns an ``{"error": ...}`` dict when the caller (``CADRE_MEMBER_ID`` in
+    env) lacks a Board grant for ``tool_name``, else ``None``. A no-identity
+    caller (Board via dashboard/CLI) always passes. Runs before the tool
+    touches the service layer, so a denied call causes no mutation — the same
+    guarantee the ``_safe`` error boundary gives every other failure. Uses
+    ``_get_conn`` so the test connection-factory is honored."""
+    member_id = os.environ.get("CADRE_MEMBER_ID", "")
+    conn = _get_conn()
+    try:
+        ok, reason = authority_svc.has_authority(conn, member_id, tool_name)
+    finally:
+        if _conn_factory is None:
+            conn.close()
+    return None if ok else {"error": reason}
+
+
 def _safe_firm(fn, firm_id: str, *args, **kwargs) -> dict | list:
     """_safe for firm-scoped services. An empty firm_id resolves to the firm
     this workspace's database actually holds — never a hardcoded name, which
@@ -129,6 +149,9 @@ def firm_view_member(member_id: str) -> str:
 @mcp.tool()
 def firm_create_member(name: str, role: str, firm_id: str = "", description: str = "", reports_to_member_id: str = "", contract_id: str = "") -> str:
     """Create a new firm member with a name and role."""
+    denied = _authorize("firm_create_member")
+    if denied:
+        return json.dumps(denied)
     data: dict[str, Any] = {"name": name, "role": role}
     if description:
         data["description"] = description
@@ -143,6 +166,9 @@ def firm_create_member(name: str, role: str, firm_id: str = "", description: str
 @mcp.tool()
 def firm_update_member(member_id: str, status: str = "", role: str = "", description: str = "", reports_to_member_id: str = "") -> str:
     """Update a member's fields (status, role, description, reports_to)."""
+    denied = _authorize("firm_update_member")
+    if denied:
+        return json.dumps(denied)
     data: dict[str, Any] = {}
     if status:
         data["status"] = status
@@ -240,6 +266,12 @@ def firm_release_unit(unit_id: str) -> str:
 @mcp.tool()
 def firm_complete_unit(unit_id: str, member_id: str, firm_id: str = "", run_id: str = "") -> str:
     """Mark a unit as done and trigger completion handler. member_id is the completing member (actor on the audit record)."""
+    # Gate on the CALLER (CADRE_MEMBER_ID in env), never the member_id arg —
+    # that arg is the audit actor a caller supplies, exactly the value a
+    # self-completing Member could forge (audit A6).
+    denied = _authorize("firm_complete_unit")
+    if denied:
+        return json.dumps(denied)
     result = _safe_firm(unit_svc.complete_unit, firm_id, unit_id, member_id, run_id=run_id or None)
     return json.dumps(result, default=str)
 
@@ -337,6 +369,9 @@ def firm_view_escalation(escalation_id: str) -> str:
 @mcp.tool()
 def firm_resolve_escalation(escalation_id: str, status: str = "resolved", resolution: str = "") -> str:
     """Resolve or acknowledge an escalation (Board action). status: acknowledged|resolved."""
+    denied = _authorize("firm_resolve_escalation")
+    if denied:
+        return json.dumps(denied)
     result = _safe(
         escalation_svc.resolve_escalation,
         escalation_id,
@@ -416,6 +451,9 @@ def firm_update_goal_metric(goal_id: str, current: str = "", value: str = "", un
 @mcp.tool()
 def firm_update_goal(goal_id: str, status: str = "", metric: str = "") -> str:
     """Update a goal's status or metric."""
+    denied = _authorize("firm_update_goal")
+    if denied:
+        return json.dumps(denied)
     data: dict[str, Any] = {}
     if status:
         data["status"] = status

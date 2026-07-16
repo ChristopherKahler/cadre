@@ -99,3 +99,66 @@ def set_sovereign_override(
         details={"sovereign": caps},
     )
     return updated
+
+
+def set_authority_grant(
+    conn: sqlite3.Connection,
+    member_id: str,
+    tools: Any,
+    actor: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Grant (or clear) a Member's authority to drive the five self-govern
+    MCP tools (audit A6). Board write path — the companion to
+    ``firm.services.authority.has_authority`` (the read/check side).
+
+    Writes the ``"authority"`` key inside the same ``member.autonomy`` blob
+    ``set_sovereign_override`` writes ``"sovereign"`` into, preserving the
+    other key (each mutates only its own). ``"*"`` grants all five governed
+    tools; a list grants exactly those; ``[]``/``None`` clears the grant.
+
+    Args:
+        conn: SQLite connection with migrations applied.
+        member_id: The Member being granted (or cleared).
+        tools: ``"*"``, a list of governed tool names, or ``[]``/``None``.
+        actor: ``{"type", "id"}`` — defaults to the Board.
+
+    Raises:
+        ValueError: member not found, or a grant token that is neither ``"*"``
+            nor a governed tool name (a grant for a tool this gate does not
+            govern is a Board mistake, caught here rather than silently stored).
+    """
+    from firm.services.authority import GOVERNED_TOOLS
+
+    member = repo.get(conn, "member", member_id)
+    if not member:
+        raise ValueError(f"member {member_id!r} not found")
+
+    grants = _normalize(tools)
+    unknown = [g for g in grants if g != "*" and g not in GOVERNED_TOOLS]
+    if unknown:
+        raise ValueError(
+            f"not governed self-govern tools: {unknown}. Grant '*' or one of "
+            f"{sorted(GOVERNED_TOOLS)}."
+        )
+
+    cfg = _load(member.get("autonomy"))
+    if grants:
+        cfg["authority"] = grants
+    else:
+        cfg.pop("authority", None)
+
+    updated = repo.update(
+        conn, "member", member_id,
+        {"autonomy": json.dumps(cfg) if cfg else None},
+    )
+    assert updated is not None, "member disappeared after repo.get"
+
+    log_event(
+        conn,
+        firm_id=member["firm_id"],
+        event_type="member.autonomy_updated",
+        actor=actor or {"type": "board", "id": None},
+        target_ref={"type": "member", "id": member_id},
+        details={"authority": grants},
+    )
+    return updated
