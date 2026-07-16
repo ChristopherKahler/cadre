@@ -612,7 +612,8 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .confignote button:hover{color:var(--brand-text)}
 
 /* ---- The Floor: character select ---- */
-.floorgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(212px,1fr));gap:14px}
+/* floor cards live on the org canvas — absolutely placed by layoutRoster */
+.fcard.on-canvas{position:absolute;width:232px;box-sizing:border-box}
 .fcard{position:relative;background:var(--brand-surface);border:1px solid var(--brand-border);border-radius:14px;
   padding:20px 16px 14px;cursor:pointer;text-align:center;box-shadow:var(--shadow-card);
   min-width:0;max-width:100%;overflow:hidden;
@@ -726,6 +727,26 @@ tr.flash td{animation:rowflash 2.2s ease-out}
   font-weight:400;letter-spacing:.03em;text-transform:none;color:var(--brand-text-secondary);text-align:right}
 #floorSheet.running .portrait{box-shadow:inset 0 0 0 1px rgba(0,0,0,.25), 0 0 26px rgba(var(--brand-primary-rgb),.4)}
 
+/* ---- sheet tabs: dossier sections on one rail. Filing-tab, not browser-tab —
+   the active label's emerald edge cuts through the hairline the sheet already
+   uses to separate zones, so switching sections reads as flipping the file. */
+.stabs{display:flex;gap:2px;margin:18px 30px 0;border-bottom:1px solid var(--brand-border);
+  overflow-x:auto;scrollbar-width:none}
+.stabs::-webkit-scrollbar{display:none}
+.stab{appearance:none;background:none;border:0;cursor:pointer;position:relative;flex:none;
+  font:600 10.5px var(--font-mono);letter-spacing:.16em;text-transform:uppercase;
+  color:var(--brand-text-dim);padding:9px 13px 12px;transition:color .15s}
+.stab:hover{color:var(--brand-text-secondary)}
+.stab.active{color:var(--brand-primary)}
+.stab.active::after{content:'';position:absolute;left:10px;right:10px;bottom:-1px;height:2px;
+  background:var(--brand-primary);box-shadow:0 0 10px rgba(var(--brand-primary-rgb),.5)}
+.stab:focus-visible{outline:2px solid var(--brand-primary);outline-offset:-2px}
+.stab-sec{display:none}
+.stab-sec.active{display:block}
+.stab-sec:not(#s-tab-dossier).active{padding:20px 34px 28px}
+.stab-sec .seclabel{font:600 10px var(--font-mono);letter-spacing:.18em;text-transform:uppercase;
+  color:var(--brand-text-secondary)}
+.stab-about{color:var(--brand-text-secondary);font-size:13px;line-height:1.6;margin-bottom:18px}
 .szone{padding:22px 34px 26px;border-top:1px solid var(--brand-border);min-width:0;
   animation:zoneRise 280ms cubic-bezier(.16,1,.3,1) both}
 .szone:nth-of-type(2){animation-delay:70ms}
@@ -929,11 +950,7 @@ tr.flash td{animation:rowflash 2.2s ease-out}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
           <span>Dashboard</span><span class="badge" id="navAttn">0</span>
         </button>
-        <button class="navitem" data-view="roster" title="Roster">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-          <span>Roster</span>
-        </button>
-        <button class="navitem" data-view="floor" title="The Floor — the roster as a character select, every stat earned">
+        <button class="navitem" data-view="floor" title="The Floor — your org as a character select, every level and stat earned">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg>
           <span>The Floor</span>
         </button>
@@ -1036,9 +1053,9 @@ tr.flash td{animation:rowflash 2.2s ease-out}
         </div>
       </div>
 
-      <!-- ============ ROSTER ============ -->
-      <div class="page" id="page-roster">
-        <div class="pagehead"><h1>Roster</h1><p>Your org, live. Drag to pan, scroll to zoom, click a member to open their profile and take command.</p></div>
+      <!-- ============ THE FLOOR ============ -->
+      <div class="page" id="page-floor">
+        <div class="pagehead"><h1>The Floor</h1><p>Your org, live. Drag to pan, scroll to zoom, click a member to open their sheet. Every level, stat, and achievement is derived from the ledger — verified outcomes only, nothing authored, and the members never see it.</p></div>
         <div class="canvaswrap" id="canvasWrap">
           <div class="stage" id="stage"></div>
           <div class="canvashint">drag · scroll · click a card</div>
@@ -1048,12 +1065,6 @@ tr.flash td{animation:rowflash 2.2s ease-out}
             <button onclick="resetView()" title="Reset view" aria-label="Reset view">⌂</button>
           </div>
         </div>
-      </div>
-
-      <!-- ============ THE FLOOR ============ -->
-      <div class="page" id="page-floor">
-        <div class="pagehead"><h1>The Floor</h1><p>Your roster as a character select. Every level, stat, and achievement below is derived from the ledger — verified outcomes only, nothing authored, and the members never see it.</p></div>
-        <div class="floorgrid" id="floorGrid"><div class="empty">Loading the floor…</div></div>
       </div>
 
       <!-- ============ OPERATIONS ============ -->
@@ -1292,33 +1303,9 @@ tr.flash td{animation:rowflash 2.2s ease-out}
   </div>
 </div>
 
-<div class="drawerwrap" id="drawerWrap">
-  <div class="drawer" role="dialog" aria-modal="true" aria-labelledby="pName">
-    <div class="dwr-head">
-      <div class="avatar" id="pAvatar"></div>
-      <div class="who">
-        <h3 id="pName"></h3>
-        <div class="drole" id="pRole"></div>
-        <div class="chiprow" id="pMeta"></div>
-      </div>
-      <button class="btn sm" onclick="closeProfile()">Close</button>
-    </div>
-    <div class="dwr-tabs">
-      <button class="dwr-tab active" data-tab="overview">Overview</button>
-      <button class="dwr-tab" data-tab="activity">Activity</button>
-      <button class="dwr-tab" data-tab="artifacts">Artifacts</button>
-      <button class="dwr-tab" data-tab="prompt">Prompt</button>
-      <button class="dwr-tab" data-tab="manage">Manage</button>
-    </div>
-    <div class="dwr-body">
-      <div class="dwr-sec active" id="tab-overview"></div>
-      <div class="dwr-sec" id="tab-activity"></div>
-      <div class="dwr-sec" id="tab-artifacts"></div>
-      <div class="dwr-sec" id="tab-prompt"></div>
-      <div class="dwr-sec" id="tab-manage"></div>
-    </div>
-  </div>
-</div>
+<!-- The old roster profile drawer (#drawerWrap) is unhooked — its tab panels
+     live on inside the Floor sheet as profCommandHtml/profActivityHtml/
+     profArtifactsHtml/profPromptHtml/profManageHtml. -->
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -1351,7 +1338,7 @@ document.getElementById('sbTrigger').addEventListener('click', () => {
 /* Hub tenancy: served under /f/<firm> the server stamps data-base on <html>;
    standalone it's absent and BASE is ''. Every API URL goes through BASE. */
 const BASE = document.documentElement.dataset.base || '';
-const VIEWS = {dashboard:'Dashboard', roster:'Roster', floor:'The Floor', ops:'Operations', goals:'Goals & spend', docs:'Deliverables', runs:'Runs', records:'Records', genspend:'Gen Spend', settings:'Settings', system:'System'};
+const VIEWS = {dashboard:'Dashboard', floor:'The Floor', ops:'Operations', goals:'Goals & spend', docs:'Deliverables', runs:'Runs', records:'Records', genspend:'Gen Spend', settings:'Settings', system:'System'};
 
 /* Re-Train lives in the hub's founding flow (/next). Under the hub, BASE is
    /f/<firm> — lift the id and point the Settings button at the Equip step
@@ -1377,6 +1364,7 @@ function show(view){
   // the floor with that member's sheet — the shareable clip URL.
   let floorMember = null;
   if(view && view.startsWith('floor/')){ floorMember = view.slice(6); view = 'floor'; }
+  if(view === 'roster') view = 'floor';   // legacy route — Roster folded into The Floor
   const custom = CUSTOM_VIEWS[view];
   // Fullscreen custom views replace the whole window (a standalone app), never embed.
   if(custom && custom.mode === 'fullscreen'){ window.location.href = BASE + '/view/' + encodeURIComponent(view); return; }
@@ -1390,8 +1378,10 @@ function show(view){
   app.classList.remove('mobile-open');
   const wantHash = '#/' + view + (floorMember ? '/' + floorMember : '');
   if(location.hash !== wantHash) history.replaceState(null, '', wantHash);
-  if(view === 'roster' && !viewInit) requestAnimationFrame(fitCanvas);
-  if(view === 'floor') loadFloor(floorMember);
+  if(view === 'floor'){
+    if(!viewInit) requestAnimationFrame(fitCanvas);
+    loadFloor(floorMember);
+  }
   if(view === 'genspend') fetchGenBalance();
   if(view === 'system') loadSysconfig();
   if(custom && !custom.loaded) loadCustomFragment(view);
@@ -1836,7 +1826,7 @@ function render(){
 
   withScrollKept([], () => {
     renderStats(S); renderGates(S); renderEscalations(S); renderRecent(S);
-    renderRosterCanvas(S); renderPipeline(S); renderGoals(S); renderCosts(S);
+    renderPipeline(S); renderGoals(S); renderCosts(S);
     renderDocs(S); renderRuns(S); renderRecords(S); renderGenSpend(S); renderSettings(S);
     updateEngagement();
     if(currentView === 'floor'){ loadFloor(); paintFloorActivity(); }
@@ -2103,8 +2093,10 @@ function renderRecent(S){
   `<div class="lrow"><button class="btn sm" onclick="show('records')">View full audit feed</button></div>`;
 }
 
-/* ======================= ROSTER CANVAS ======================= */
-const CARD_W = 228, CARD_H = 110, GAP_X = 36, GAP_Y = 92;
+/* ======================= THE FLOOR CANVAS ======================= */
+/* Hierarchy layout sized for the gamified floor card; the Board node keeps
+   its compact plate (BOARD_H) so edges anchor at its real bottom edge. */
+const CARD_W = 232, CARD_H = 312, GAP_X = 36, GAP_Y = 96, BOARD_H = 110;
 let view = {x: 60, y: 40, k: 1};
 let viewInit = false;
 
@@ -2179,56 +2171,6 @@ function avatarImg(name){
   return key ? `<img src="${BASE}/avatars/${key}.png" alt="" loading="lazy" onerror="this.remove()">` : '';
 }
 
-function renderRosterCanvas(S){
-  const stage = document.getElementById('stage');
-  if(!stage) return;
-  const members = S.roster || [];
-  if(!members.length){ stage.innerHTML = '<div class="empty" style="padding:20px">No members yet.</div>'; return; }
-  const {pos, kids} = layoutRoster(members);
-  const allX = Object.values(pos).map(p => p.x);
-  const allY = Object.values(pos).map(p => p.y);
-  const w = Math.max(...allX) + CARD_W, h = Math.max(...allY) + CARD_H + 40;
-  stage.dataset.w = w; stage.dataset.h = h;
-
-  let edges = '';
-  const drawKids = (pid) => (kids[pid] || []).forEach(cid => {
-    const a = pos[pid], b = pos[cid];
-    const d = edgePath(a.x + CARD_W/2, a.y + CARD_H, b.x + CARD_W/2, b.y);
-    edges += `<path class="edge-base" d="${d}"/><path class="edge-flow" d="${d}"/>`;
-    drawKids(cid);
-  });
-  drawKids('BOARD');
-
-  const byId = Object.fromEntries(members.map(m => [m.id, m]));
-  const firmName = (S.firm || {}).name || 'the firm';
-  const cards = ['BOARD', ...members.map(m => m.id)].map(id => {
-    const pt = pos[id];
-    if(id === 'BOARD'){
-      return `<div class="mcard board" style="left:${pt.x}px;top:${pt.y}px">
-        <div class="mtop"><div class="avatar">YOU${avatarImg('board')}</div>
-        <div><div class="mname">THE BOARD</div><div class="mrole">Operator — ${esc(firmName)}</div></div></div>
-        <div class="mfoot"><span class="sdot ok"></span>commanding from this dashboard</div></div>`;
-    }
-    const m = byId[id];
-    const running = ((S.runs || []).some(r => r.status === 'running' && r.member_id === m.id));
-    const working = m.current_units.length > 0;
-    const active = m.status === 'active' && (running || working);
-    const dotCls = m.status !== 'active' ? 'warn' : (working ? 'ok' : '');
-    const stateTxt = m.status !== 'active' ? m.status : (running ? 'running' : (working ? 'working' : 'idle'));
-    return `<div class="mcard${active ? ' working' : ''}" style="left:${pt.x}px;top:${pt.y}px" onclick="openProfile('${esc(m.id)}')"
-        role="button" tabindex="0" onkeydown="if(event.key==='Enter')openProfile('${esc(m.id)}')" title="Open ${esc(m.name)}">
-      <div class="mtop"><div class="avatar">${esc(initials(m.name))}${avatarImg(m.name)}</div>
-        <div style="min-width:0"><div class="mname">${esc(m.name)}</div><div class="mrole">${esc(m.role || '')}</div></div></div>
-      <div class="mfoot"><span class="sdot ${dotCls}"></span>${stateTxt} · load ${m.load} · ${timeAgo(m.last_activated)}</div>
-      <div class="mcu">${working ? `→ ${esc(m.current_units[0].id)} ${esc(m.current_units[0].name)}` : '&nbsp;'}</div>
-    </div>`;
-  }).join('');
-
-  stage.innerHTML = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${edges}</svg>` + cards;
-  if(!viewInit) fitCanvas();
-  else applyView();
-}
-
 /* pan + zoom */
 (function(){
   const wrap = document.getElementById('canvasWrap');
@@ -2272,24 +2214,28 @@ const BURN_HINT = {
 const TRACK_GLYPH = {service:'♜', craft:'⚒', honesty:'⚑', goal:'◎'};
 
 async function loadFloor(memberId){
-  const el = document.getElementById('floorGrid');
+  const stage = document.getElementById('stage');
   const stale = !FLOOR || (Date.now() - floorFetchedAt > 10000);
+  let fetched = false;
   if(stale && !floorLoading){
     floorLoading = true;
     try{
       const r = await fetch(BASE + '/api/floor');
       const d = await r.json();
-      if(d && d.members){ FLOOR = d; floorFetchedAt = Date.now(); }
+      if(d && d.members){ FLOOR = d; floorFetchedAt = Date.now(); fetched = true; }
       else if(!FLOOR){
-        el.innerHTML = '<div class="empty">The Floor needs a dashboard server restart — the running server predates it (API said: ' + esc((d && d.error) || 'no response') + ').</div>';
+        stage.innerHTML = '<div class="empty" style="padding:20px">The Floor needs a dashboard server restart — the running server predates it (API said: ' + esc((d && d.error) || 'no response') + ').</div>';
         floorLoading = false; return;
       }
     }catch(e){
-      if(!FLOOR){ el.innerHTML = '<div class="empty">Could not reach the floor: ' + esc(String(e)) + '</div>'; floorLoading = false; return; }
+      if(!FLOOR){ stage.innerHTML = '<div class="empty" style="padding:20px">Could not reach the floor: ' + esc(String(e)) + '</div>'; floorLoading = false; return; }
     }
     floorLoading = false;
   }
-  renderFloor();
+  // Rebuild the canvas only when the floor data actually moved (or first paint) —
+  // state ticks repaint activity via paintFloorActivity, never the whole stage.
+  if(fetched || (FLOOR && !stage.dataset.w)) renderFloor();
+  else paintFloorActivity();
   if(memberId) openSheet(memberId);
 }
 
@@ -2344,9 +2290,10 @@ function tierBand(m){
     <div class="xwhy">${esc(TIER_WHY)}${sovTag}</div>`;
 }
 
-function floorCard(m){
+function floorCard(m, pt){
   const st = m.stats;
-  return `<div class="fcard${m.status !== 'active' ? ' dim' : ''}" data-member="${esc(m.id)}" role="button" tabindex="0"
+  return `<div class="fcard on-canvas${m.status !== 'active' ? ' dim' : ''}" data-member="${esc(m.id)}" role="button" tabindex="0"
+      style="left:${pt.x}px;top:${pt.y}px"
       onclick="openSheet('${esc(m.id)}')" onkeydown="if(event.key==='Enter')openSheet('${esc(m.id)}')"
       title="Open ${esc(m.name)}&#39;s sheet">
     <div class="lvwrap">${ringSvg(m, 74)}<div class="avatar">${esc(initials(m.name))}${avatarImg(m.name)}</div>
@@ -2373,12 +2320,42 @@ function floorCard(m){
   </div>`;
 }
 
+/* The Floor canvas: the org hierarchy (Board → leads → members) drawn as a
+   pan/zoom stage, every node the full gamified floor card. One payload
+   (/api/floor) builds both the tree and the cards. */
 function renderFloor(){
-  const el = document.getElementById('floorGrid');
-  if(!el || !FLOOR) return;
-  const ms = FLOOR.members || [];
-  el.innerHTML = ms.length ? ms.map(floorCard).join('')
-    : '<div class="empty">No members yet — found the firm and the floor fills itself.</div>';
+  const stage = document.getElementById('stage');
+  if(!stage || !FLOOR) return;
+  const members = FLOOR.members || [];
+  if(!members.length){
+    stage.innerHTML = '<div class="empty" style="padding:20px">No members yet — found the firm and the floor fills itself.</div>';
+    return;
+  }
+  const {pos, kids} = layoutRoster(members);
+  const allX = Object.values(pos).map(p => p.x);
+  const allY = Object.values(pos).map(p => p.y);
+  const w = Math.max(...allX) + CARD_W, h = Math.max(...allY) + CARD_H + 40;
+  stage.dataset.w = w; stage.dataset.h = h;
+
+  let edges = '';
+  const drawKids = (pid) => (kids[pid] || []).forEach(cid => {
+    const a = pos[pid], b = pos[cid];
+    const d = edgePath(a.x + CARD_W/2, a.y + (pid === 'BOARD' ? BOARD_H : CARD_H), b.x + CARD_W/2, b.y);
+    edges += `<path class="edge-base" d="${d}"/><path class="edge-flow" d="${d}"/>`;
+    drawKids(cid);
+  });
+  drawKids('BOARD');
+
+  const firmName = ((FLOOR.firm || {}).name) || ((STATE || {}).firm || {}).name || 'the firm';
+  const bpt = pos.BOARD;
+  const boardCard = `<div class="mcard board" style="left:${(bpt.x + (CARD_W - 228) / 2).toFixed(0)}px;top:${bpt.y}px">
+      <div class="mtop"><div class="avatar">YOU${avatarImg('board')}</div>
+      <div><div class="mname">THE BOARD</div><div class="mrole">Operator — ${esc(firmName)}</div></div></div>
+      <div class="mfoot"><span class="sdot ok"></span>commanding from this dashboard</div></div>`;
+  stage.innerHTML = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${edges}</svg>`
+    + boardCard + members.map(m => floorCard(m, pos[m.id])).join('');
+  if(!viewInit) fitCanvas();
+  else applyView();
   paintFloorActivity();
 }
 
@@ -2390,7 +2367,7 @@ let _floorSpyTimer = null;
 let _floorSpyState = {};   // memberId -> {runId, cursor, line}
 
 function paintFloorActivity(){
-  const grid = document.getElementById('floorGrid');
+  const grid = document.getElementById('stage');
   if(!grid || currentView !== 'floor') { syncFloorSpy({}); return; }
   const byMember = {};
   activeRuns().forEach(r => { if(!byMember[r.member_id]) byMember[r.member_id] = r; });
@@ -2470,12 +2447,15 @@ async function floorSpyTick(){
   }
 }
 
-function openSheet(memberId){
+async function openSheet(memberId){
+  if(!FLOOR){ await loadFloor(); }   // sheet reachable from anywhere (run panel, MEM- refs)
   const m = ((FLOOR || {}).members || []).find(x => x.id === memberId);
   if(!m){ toast('No sheet for ' + memberId + ' on this floor', true); return; }
   const wrap = document.getElementById('floorWrap');
   if(sheetCtx === memberId && wrap.classList.contains('show')) return;
   sheetCtx = memberId;
+  profileCtx = memberId;   // command/manage actions post against the open sheet
+  sheetProfile = null;     // operational tabs lazy-load per member
   document.getElementById('floorSheet').innerHTML =
     '<button class="sclose" onclick="closeSheet()" aria-label="Close sheet">✕</button>' +
     '<div class="sheetscroll">' + sheetHtml(m) + '</div>';
@@ -2493,7 +2473,7 @@ function openSheet(memberId){
 function closeSheet(){
   closePalette();
   document.getElementById('floorWrap').classList.remove('show');
-  sheetCtx = null;
+  sheetCtx = null; profileCtx = null; sheetProfile = null;
   if(currentView === 'floor' && location.hash !== '#/floor') history.replaceState(null, '', '#/floor');
 }
 document.getElementById('floorWrap').addEventListener('click', e => {
@@ -2859,16 +2839,83 @@ function sheetHtml(m){
         <span class="sltick" id="sltick"></span>
       </div>
     </div>
-    <div class="szone"><div class="zlabel">Loadout <span class="zn">wired at Train · carried on every run · click + to equip</span></div>
-      <div class="sockwall" id="sockwall">${sockwallHtml(m)}</div>${roleLoadoutHtml(m)}</div>
-    <div class="szone"><div class="zlabel">Contract <span class="zn">gates need your sign-off · deny rules are enforced</span></div>
-      ${oaths}${seals}${dial}</div>
-    <div class="zsplit">
-      <div class="szone"><div class="zlabel">Record <span class="zn">derived from the ledger</span></div>
-        <div class="statblock">${statblock}</div></div>
-      <div class="szone"><div class="zlabel">Achievements <span class="zn">earned, never granted${FLOOR && FLOOR.goal_completed ? ' · firm goal HIT' : ''}</span></div>
-        <div class="medals">${medals}</div></div>
-    </div>`;
+    <div class="stabs" role="tablist" aria-label="Member record sections">
+      ${[['dossier','Dossier'],['command','Command'],['activity','Activity'],['artifacts','Artifacts'],['prompt','Prompt'],['manage','Manage']].map(([k,label]) =>
+        `<button class="stab${k === 'dossier' ? ' active' : ''}" data-stab="${k}" role="tab"
+           aria-selected="${k === 'dossier'}" onclick="sheetTab('${k}')">${label}</button>`).join('')}
+    </div>
+    <div class="stab-sec active" id="s-tab-dossier">
+      <div class="szone"><div class="zlabel">Loadout <span class="zn">wired at Train · carried on every run · click + to equip</span></div>
+        <div class="sockwall" id="sockwall">${sockwallHtml(m)}</div>${roleLoadoutHtml(m)}</div>
+      <div class="szone"><div class="zlabel">Contract <span class="zn">gates need your sign-off · deny rules are enforced</span></div>
+        ${oaths}${seals}${dial}</div>
+      <div class="zsplit">
+        <div class="szone"><div class="zlabel">Record <span class="zn">derived from the ledger</span></div>
+          <div class="statblock">${statblock}</div></div>
+        <div class="szone"><div class="zlabel">Achievements <span class="zn">earned, never granted${FLOOR && FLOOR.goal_completed ? ' · firm goal HIT' : ''}</span></div>
+          <div class="medals">${medals}</div></div>
+      </div>
+    </div>
+    <div class="stab-sec" id="s-tab-command" role="tabpanel"></div>
+    <div class="stab-sec" id="s-tab-activity" role="tabpanel"></div>
+    <div class="stab-sec" id="s-tab-artifacts" role="tabpanel"></div>
+    <div class="stab-sec" id="s-tab-prompt" role="tabpanel"></div>
+    <div class="stab-sec" id="s-tab-manage" role="tabpanel"></div>`;
+}
+
+/* ---- the sheet's operational tabs — the old drawer's depth, dossier skin ----
+   Dossier renders from the floor payload; the other five lazy-load one
+   /api/member/<id> on first open and fill every panel at once. */
+let sheetProfile = null;
+async function sheetTab(name){
+  const sheet = document.getElementById('floorSheet');
+  if(!sheet) return;
+  sheet.querySelectorAll('.stab').forEach(b => {
+    const on = b.dataset.stab === name;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on);
+  });
+  sheet.querySelectorAll('.stab-sec').forEach(s => s.classList.toggle('active', s.id === 's-tab-' + name));
+  if(name === 'dossier' || !sheetCtx) return;
+  const host = document.getElementById('s-tab-' + name);
+  if(host && host.dataset.filled) return;
+  if(!sheetProfile || (sheetProfile.member || {}).id !== sheetCtx){
+    if(host) host.innerHTML = '<div class="empty" style="padding:22px 0">Pulling the record…</div>';
+    try{
+      const r = await fetch(BASE + '/api/member/' + encodeURIComponent(sheetCtx));
+      const P = await r.json();
+      if(P.error){ if(host) host.innerHTML = '<div class="empty">' + esc(P.error) + '</div>'; return; }
+      sheetProfile = P;
+    }catch(e){
+      if(host) host.innerHTML = '<div class="empty">Could not reach the ledger: ' + esc(String(e)) + '</div>';
+      return;
+    }
+  }
+  fillSheetTabs();
+}
+function fillSheetTabs(){
+  const P = sheetProfile;
+  if(!P) return;
+  promptRaw = P.prompt_preview || '';
+  const fill = (id, html) => {
+    const el = document.getElementById('s-tab-' + id);
+    if(el){ el.innerHTML = html; el.dataset.filled = '1'; }
+  };
+  fill('command', profCommandHtml(P));
+  fill('activity', profActivityHtml(P));
+  fill('artifacts', profArtifactsHtml(P));
+  fill('prompt', profPromptHtml(P));
+  fill('manage', profManageHtml(P));
+}
+/* After a write (note, manage save, run rating) the open sheet's tabs refresh
+   in place — same member, fresh ledger read, active tab untouched. */
+async function refreshSheetProfile(){
+  if(!sheetCtx) return;
+  try{
+    const r = await fetch(BASE + '/api/member/' + encodeURIComponent(sheetCtx));
+    const P = await r.json();
+    if(!P.error){ sheetProfile = P; fillSheetTabs(); }
+  }catch(e){ /* next open refetches */ }
 }
 
 /* ======================= MEMBER PROFILE ======================= */
@@ -2889,53 +2936,25 @@ async function copyPrompt(){
     toast(ok ? 'Prompt copied to clipboard' : 'Copy failed — select the text manually', !ok);
   }
 }
-document.querySelectorAll('.dwr-tab').forEach(t => t.addEventListener('click', () => {
-  document.querySelectorAll('.dwr-tab').forEach(x => x.classList.toggle('active', x === t));
-  document.querySelectorAll('.dwr-sec').forEach(x => x.classList.toggle('active', x.id === 'tab-' + t.dataset.tab));
-}));
-function closeProfile(){ document.getElementById('drawerWrap').classList.remove('show'); profileCtx = null; }
-document.getElementById('drawerWrap').addEventListener('click', e => { if(e.target.id === 'drawerWrap') closeProfile(); });
+/* The drawer is unhooked — members open through the Floor sheet everywhere.
+   These aliases keep every historical call site (run panel, MEM- entity refs,
+   unit jumps) landing on the one profile. */
+function closeProfile(){ closeSheet(); }
+async function openProfile(memberId){ openSheet(memberId); }
 
-async function openProfile(memberId){
-  try{
-    const r = await fetch(BASE + '/api/member/' + encodeURIComponent(memberId));
-    const P = await r.json();
-    if(P.error){ toast(P.error, true); return; }
-    profileCtx = memberId;
-    renderProfile(P);
-    document.getElementById('drawerWrap').classList.add('show');
-  }catch(e){ toast('Could not load profile: ' + e, true); }
-}
-
-function renderProfile(P){
-  const m = P.member, st = P.stats;
-  document.getElementById('pAvatar').innerHTML = esc(initials(m.name)) + avatarImg(m.name);
-  document.getElementById('pName').textContent = m.name;
-  document.getElementById('pRole').textContent = m.role || '';
+/* ---- stowed drawer panels, re-skinned for the sheet ---- */
+function profCommandHtml(P){
+  const m = P.member;
   const mgr = m.reports_to_member_id
     ? (P.members.find(x => x.id === m.reports_to_member_id)?.name || m.reports_to_member_id)
     : 'THE BOARD';
-  const statusDot = m.status === 'active' ? 'ok' : 'warn';
-  document.getElementById('pMeta').innerHTML = `
-    <span class="chip"><span class="cl">ID</span> <span class="mono" style="font-size:11px">${esc(m.id)}</span></span>
-    <span class="chip"><span class="sdot ${statusDot}"></span> ${esc(m.status)}</span>
-    <span class="chip"><span class="cl">Contract</span> ${esc(P.contract ? P.contract.name : 'none')}</span>
-    <span class="chip"><span class="cl">Reports to</span> ${esc(mgr)}</span>`;
-
-  // Overview
-  document.getElementById('tab-overview').innerHTML = `
-    <div class="pstats">
-      <div class="pstat"><div class="k">RUNS</div><div class="v">${st.runs_total}</div></div>
-      <div class="pstat"><div class="k">SUCCESS</div><div class="v">${st.success_rate != null ? st.success_rate + '%' : '—'}</div></div>
-      <div class="pstat"><div class="k">UNITS DONE</div><div class="v">${st.units_done}</div></div>
-      <div class="pstat"><div class="k">SPEND</div><div class="v">${money(st.total_cost_usd)}</div></div>
-      <div class="pstat"><div class="k">AVG RUN</div><div class="v">${st.avg_duration_sec != null ? dur(st.avg_duration_sec) : '—'}</div></div>
-      <div class="pstat"><div class="k">FAILED</div><div class="v">${st.runs_failed}</div></div>
-      <div class="pstat" title="${st.runs_rated || 0} of ${st.runs_total} runs rated by the Board${st.run_score_recent != null ? ' · recent ' + st.run_score_recent + '/5' : ''}"><div class="k">QUALITY</div><div class="v">${st.run_score_avg != null ? st.run_score_avg + '/5' : '—'}</div></div>
-      <div class="pstat"><div class="k">ESCALATIONS</div><div class="v">${st.escalations_raised}</div></div>
-      <div class="pstat"><div class="k">LAST ACTIVE</div><div class="v" style="font-size:13px">${timeAgo(m.last_activated)}</div></div>
+  return `
+    <div class="statblock" style="grid-template-columns:1fr;margin-bottom:20px">
+      <div class="stl"><span class="sk">Contract</span><span class="dots"></span><span class="sv">${esc(P.contract ? P.contract.name : 'none')}</span></div>
+      <div class="stl"><span class="sk">Reports to</span><span class="dots"></span><span class="sv">${esc(mgr)}</span></div>
+      <div class="stl"><span class="sk">Last active</span><span class="dots"></span><span class="sv">${timeAgo(m.last_activated)}</span></div>
     </div>
-    ${m.description ? `<div class="seclabel">About</div><p style="color:var(--brand-text-secondary);font-size:13px;margin-bottom:18px">${esc(m.description)}</p>` : ''}
+    ${m.description ? `<div class="seclabel">About</div><p class="stab-about">${esc(m.description)}</p>` : ''}
     ${P.current_units.length ? `<div class="seclabel">Currently on</div>
       <div class="listcard" style="margin-bottom:18px">${P.current_units.map(u =>
         `<div class="lrow"><span class="mono" style="font-size:11px;color:var(--brand-text-dim)">${esc(u.id)}</span><span class="grow">${esc(u.name)}</span>${pill(u.status)}</div>`).join('')}</div>` : ''}
@@ -2957,9 +2976,10 @@ function renderProfile(P){
       <input id="pNoteInput" placeholder="Standing direction for ${esc(m.name)}…">
       <button class="btn primary sm" onclick="postMemberNote()">Add note</button>
     </div>`;
+}
 
-  // Activity
-  document.getElementById('tab-activity').innerHTML = `
+function profActivityHtml(P){
+  return `
     <div class="seclabel">Recent runs</div>
     <div class="listcard" style="margin-bottom:20px">${P.recent_runs.length ? P.recent_runs.map(r => `
       <div class="lrow"><span class="mono" style="font-size:11px;color:var(--brand-text-dim)">${esc(r.id)}</span>
@@ -2970,12 +2990,13 @@ function renderProfile(P){
     <div class="listcard">${P.records.length ? P.records.map(r => `
       <div class="evt"><span class="t">${timeAgo(r.timestamp)}</span>
         <span class="e"><span class="type neutral">${esc(r.event_type)}</span> → ${esc(r.target_entity_type)} <span class="mono" style="font-size:11px">${esc(r.target_entity_id)}</span></span></div>`).join('') : '<div class="evt"><span class="empty">Nothing yet.</span></div>'}</div>`;
+}
 
-  // Artifacts — grouped by category, collapsible, click to read
+function profArtifactsHtml(P){
   const groups = {};
   (P.artifacts || []).forEach(a => (groups[a.type] = groups[a.type] || []).push(a));
   const cats = Object.keys(groups).sort();
-  document.getElementById('tab-artifacts').innerHTML = cats.length ? `
+  return cats.length ? `
     <div class="seclabel">${P.artifacts.length} artifact${P.artifacts.length === 1 ? '' : 's'} produced — grouped by type</div>` +
     cats.map((c, i) => `
       <div class="acat ${cats.length === 1 || i === 0 ? 'open' : ''}">
@@ -2990,22 +3011,24 @@ function renderProfile(P){
           </div>`).join('')}</div>
       </div>`).join('')
     : '<div class="empty">Nothing produced yet. Their first deliverable will land here.</div>';
+}
 
-  // Prompt
-  promptRaw = P.prompt_preview || '';
-  document.getElementById('tab-prompt').innerHTML = `
+function profPromptHtml(P){
+  return `
     <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px">
       <div class="seclabel" style="margin-bottom:0;flex:1">Assembled prompt preview — what this member actually receives</div>
       <button class="btn sm" onclick="copyPrompt()">Copy to clipboard</button>
     </div>
     <div class="promptpre">${esc(P.prompt_preview)}</div>`;
+}
 
-  // Manage
+function profManageHtml(P){
+  const m = P.member;
   const contractOpts = P.contracts.map(c =>
     `<option value="${esc(c.id)}" ${c.id === (m.contract_id || '') ? 'selected' : ''}>${esc(c.name)} (${esc(c.id)})</option>`).join('');
   const mgrOpts = ['<option value="">THE BOARD (direct)</option>'].concat(P.members.map(x =>
     `<option value="${esc(x.id)}" ${x.id === (m.reports_to_member_id || '') ? 'selected' : ''}>${esc(x.name)} (${esc(x.id)})</option>`)).join('');
-  document.getElementById('tab-manage').innerHTML = `
+  return `
     <div class="field"><label>Role</label><input id="fRole" value="${esc(m.role || '')}"></div>
     <div class="field"><label>Description</label><textarea id="fDesc">${esc(m.description || '')}</textarea></div>
     <div class="field"><label>Status</label><select id="fStatus">
@@ -3045,7 +3068,7 @@ async function postMemberNote(){
   const body = input.value.trim();
   if(!body || !profileCtx) return;
   const out = await postAction('comment-create/member', {parent_entity_id: profileCtx, body});
-  if(out.ok){ toast('Standing note added — shapes every future run'); openProfile(profileCtx); }
+  if(out.ok){ toast('Standing note added — shapes every future run'); refreshSheetProfile(); }
   else toast(out.error || 'Failed', true);
 }
 async function saveMember(){
@@ -3057,7 +3080,7 @@ async function saveMember(){
     reports_to_member_id: document.getElementById('fMgr').value || null,
     contract_id: document.getElementById('fContract').value || null,
   });
-  if(out.ok){ toast('Member updated'); lastHash = null; poll(); openProfile(profileCtx); }
+  if(out.ok){ toast('Member updated'); lastHash = null; poll(); floorFetchedAt = 0; loadFloor(); refreshSheetProfile(); }
   else toast(out.error || 'Update failed', true);
 }
 async function saveInstructions(){
@@ -3075,7 +3098,7 @@ async function saveSovereign(){
   const out = await postAction('member-sovereign/' + encodeURIComponent(profileCtx), {capabilities: caps});
   if(out.ok){
     toast(caps.length ? 'Sovereign override set — bypasses the ladder' : 'Override cleared — the ladder gates again');
-    lastHash = null; poll(); openProfile(profileCtx);
+    lastHash = null; poll(); floorFetchedAt = 0; loadFloor(); refreshSheetProfile();
   } else toast(out.error || 'Save failed', true);
 }
 
@@ -3515,8 +3538,9 @@ async function submitRate(){
   if(out.ok){
     toast(`Run rated ${rateCtx.score}/5 — every stat recomputes`);
     closeRate(); lastHash = null; poll();
+    floorFetchedAt = 0;
     if(currentView === 'floor') loadFloor();
-    if(document.getElementById('drawerWrap').classList.contains('show') && profileCtx) openProfile(profileCtx);
+    refreshSheetProfile();
   } else {
     toast(out.error || 'Rating failed', true);
   }
@@ -3912,7 +3936,6 @@ document.addEventListener('keydown', e => {
   if(document.getElementById('docOverlay').classList.contains('show')) closeDoc();
   if(document.getElementById('workOverlay').classList.contains('show')) closeWork();
   if(document.getElementById('goalOverlay').classList.contains('show')) closeGoal();
-  if(document.getElementById('drawerWrap').classList.contains('show')) closeProfile();
   if(document.getElementById('runWrap').classList.contains('show')) closeRunPanel();
   if(!document.getElementById('equipPalette').hidden){ closePalette(); return; }
   if(document.getElementById('floorWrap').classList.contains('show')) closeSheet();
