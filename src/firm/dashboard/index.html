@@ -772,12 +772,35 @@ tr.flash td{animation:rowflash 2.2s ease-out}
 .hright .bandcell + .bandcell{margin-top:16px}
 .hright .sheetlive{flex-wrap:wrap;margin-top:18px}
 .hright .sheetlive .sltick{flex-basis:100%;text-align:left;margin-top:5px}
-.hright .dial{margin:0 0 16px;flex-wrap:wrap}
-.hright .dial .dhint{flex-basis:100%;margin-top:5px}
+.hright .dial{margin:0 0 16px;flex-wrap:wrap;justify-content:flex-start}
+.hright .dial .dhint{flex-basis:100%;margin-top:5px;text-align:left;margin-left:0}
+.dial.clickable{cursor:pointer;transition:border-color .15s, box-shadow .15s}
+.dial.clickable:hover{border-color:rgba(var(--brand-primary-rgb),.45);
+  box-shadow:0 0 12px rgba(var(--brand-primary-rgb),.12)}
+.dial.clickable:focus-visible{outline:2px solid var(--brand-primary);outline-offset:2px}
+.dial .dchev{margin-left:auto;color:var(--brand-text-dim);font-size:10px}
+/* model cards — pick the burn tier, no dropdown */
+.modelpick{display:flex;flex-direction:column;gap:8px;margin:-6px 0 16px}
+.modelpick[hidden]{display:none}
+.modelpick .mpick{display:grid;grid-template-columns:auto auto 1fr;align-items:baseline;gap:6px 10px;
+  text-align:left;padding:10px 13px;border:1px solid var(--brand-border);border-radius:10px;
+  background:var(--brand-elevated);cursor:pointer;
+  transition:border-color .15s, box-shadow .15s, transform .15s}
+.modelpick .mpick:hover{border-color:rgba(var(--brand-primary-rgb),.5);transform:translateY(-1px);
+  box-shadow:0 4px 14px rgba(0,0,0,.3)}
+.modelpick .mpick.cur{border-color:var(--brand-primary);box-shadow:0 0 12px rgba(var(--brand-primary-rgb),.18)}
+.modelpick .mpick:focus-visible{outline:2px solid var(--brand-primary);outline-offset:2px}
+.modelpick .mseg{font:600 10px var(--font-mono);color:var(--brand-primary)}
+.modelpick .mname{font:700 11px var(--font-mono);letter-spacing:.14em;color:var(--brand-text)}
+.modelpick .mcur{justify-self:end;font:600 8.5px var(--font-mono);letter-spacing:.16em;text-transform:uppercase;
+  color:var(--brand-primary);border:1px solid rgba(var(--brand-primary-rgb),.45);border-radius:9999px;padding:2px 8px}
+.modelpick .mhint{grid-column:1 / -1;font-size:10.5px;line-height:1.45;color:var(--brand-text-dim)}
 /* contract splits: gates on the left, deny rules on the right */
 .contractcols{display:grid;grid-template-columns:1fr 1fr;gap:14px 30px;align-items:start}
 .contractcols .ccol{min-width:0}
-.contractcols .sealshelf{margin-top:0}
+.contractcols .sealshelf{margin:2px 0 10px;font-size:10.5px;letter-spacing:.2em;font-weight:600;color:var(--brand-text-secondary)}
+.contractcols .sealshelf + .toolgroup{margin-top:0}
+.contractcols .oath:first-of-type{padding-top:0}
 @media(max-width:880px){.contractcols{grid-template-columns:1fr}}
 .classline{margin-top:2px}
 @media(max-width:980px){
@@ -2756,6 +2779,34 @@ document.getElementById('floorWrap').addEventListener('click', e => {
   else closeSheet();
 });
 
+/* Budget dial → model cards. The write lands on the member's CONTRACT
+   (contract-model action, pulse_config.model — the canonical cost lever),
+   so the floor card, sheet, and every run boot re-derive from one place. */
+function toggleModelPick(ev){
+  if(ev) ev.stopPropagation();
+  const p = document.getElementById('modelPick');
+  if(p) p.hidden = !p.hidden;
+}
+async function pickModel(model){
+  if(!sheetCtx) return;
+  if(!sheetProfile || (sheetProfile.member || {}).id !== sheetCtx){
+    try{
+      const r = await fetch(BASE + '/api/member/' + encodeURIComponent(sheetCtx));
+      const P = await r.json();
+      if(!P.error) sheetProfile = P;
+    }catch(e){}
+  }
+  const c = sheetProfile && sheetProfile.contract;
+  if(!c){ toast('No contract on this member — assign one in Manage first', true); return; }
+  const out = await postAction('contract-model/' + encodeURIComponent(c.id), {model});
+  if(out.ok){
+    toast(model ? 'Model set to ' + model + ' — every future run boots on it' : 'Override cleared — inherits the account default');
+    floorFetchedAt = 0; await loadFloor();
+    const id = sheetCtx; sheetCtx = null;
+    openSheet(id);   // rebuild the sheet so dial, chips, and cards agree
+  } else toast(out.error || 'Model change failed', true);
+}
+
 /* Cycle the open sheet through the roster — wraps at both ends. */
 function cycleSheet(dir){
   const ms = ((FLOOR || {}).members || []);
@@ -3071,7 +3122,7 @@ function sheetHtml(m){
     const byTool = {};
     m.seals.forEach(s => { const t = s.tool || ''; (byTool[t] = byTool[t] || []).push(s); });
     const tools = Object.keys(byTool).sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
-    seals = `<div class="sealshelf">Deny rules — enforced by the runtime</div>` +
+    seals = `<div class="zlabel sealshelf">Deny rules <span class="zn">enforced by the runtime</span></div>` +
       tools.map(t => `<div class="toolgroup"${d()}>
         <div class="tghead">${t ? esc(t) : 'unlabeled'}${t ? '' : '<span class="tgn">wired before tool tagging — a re-Train labels these</span>'}</div>
         <div class="sealrow">${byTool[t].map(s =>
@@ -3082,11 +3133,22 @@ function sheetHtml(m){
   }
   const bm = String(m.budget.model || '').toLowerCase();
   const segs = bm === 'opus' ? 3 : bm === 'sonnet' ? 2 : bm === 'haiku' ? 1 : 0;
-  const dial = `<div class="dial"${d()}>
+  const dial = `<div class="dial clickable"${d()} role="button" tabindex="0" title="Change the model this member runs on"
+      onclick="toggleModelPick(event)" onkeydown="if(event.key==='Enter')toggleModelPick(event)">
       <span class="dk">Budget</span>
       <span class="dsegs">${[1,2,3].map(i => `<span class="dseg${i <= segs ? ' lit' : ''}"></span>`).join('')}</span>
       <span class="dname">${esc(bm || 'account default')}</span>
+      <span class="dchev" aria-hidden="true">▾</span>
       <span class="dhint">${esc(BURN_HINT[bm] || 'No override — inherits your account default.')}${m.budget.timeout_sec ? ' · ' + m.budget.timeout_sec + 's timeout' : ''}</span>
+    </div>
+    <div class="modelpick" id="modelPick" hidden>
+      ${['opus','sonnet','haiku',''].map(x => `
+      <button class="mpick${x === bm ? ' cur' : ''}" onclick="event.stopPropagation();pickModel('${x}')">
+        <span class="mseg">${x ? BURN[x] : '▯▯▯'}</span>
+        <span class="mname">${x ? x.toUpperCase() : 'DEFAULT'}</span>
+        ${x === bm ? '<span class="mcur">current</span>' : ''}
+        <span class="mhint">${esc(x ? BURN_HINT[x] : 'No override — inherits your account default.')}</span>
+      </button>`).join('')}
     </div>`;
 
   const st = m.stats;
