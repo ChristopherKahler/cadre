@@ -222,6 +222,7 @@ def spawn_turn(
     on_session: Callable[[str], None] | None = None,
     on_activity: Callable[[str], None] | None = None,
     on_event: Callable[[dict[str, Any]], None] | None = None,
+    on_spawn: Callable[[Any], None] | None = None,
 ) -> TurnResult:
     """One board turn's process: spawn → stream-tap → parse. Pure runner —
     the caller composed the argv and env; nothing here knows a transport.
@@ -247,6 +248,14 @@ def spawn_turn(
         )
     except OSError as exc:
         return TurnResult(False, None, "", f"claude failed to exec: {exc}")
+
+    # *on_spawn* hands the caller the live process handle — the seam an
+    # operator-facing interrupt needs (kill THIS turn, keep the session).
+    if on_spawn is not None:
+        try:
+            on_spawn(proc)
+        except Exception:
+            pass   # a provider bug must not kill the turn
 
     stderr_box: list[str] = []
     drain = threading.Thread(
@@ -302,6 +311,30 @@ def spawn_turn(
         return TurnResult(False, session_id, "", f"exit {proc.returncode}: {stderr_tail[0]}")
     return TurnResult(not is_error, session_id, result_text,
                       "" if not is_error else "session reported an error")
+
+
+def relay_register(session_id: str, title: str) -> bool:
+    """Bind *session_id* to a stable relay *title* (re-binding is safe).
+
+    Rail-spawned ``--print`` sessions never self-register — no operator ran
+    ``base relay register`` inside them — so :func:`relay_steer`'s title
+    lookup always missed and every mid-flight message silently fell back to
+    queueing. The rail daemon holds both halves (the announced session id
+    and its own stable name for the thread), so it binds them the moment
+    the session announces itself; the session's own hook activity keeps the
+    binding live for the rest of the turn. Best-effort: no BASE, no bind —
+    the queue fallback stays honest."""
+    base = find_base()
+    if not base:
+        return False
+    try:
+        done = subprocess.run(
+            [base, "relay", "register", "--as", title, "--session", session_id],
+            capture_output=True, text=True, timeout=10,
+        )
+        return done.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 def relay_steer(

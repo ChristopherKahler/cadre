@@ -2673,6 +2673,7 @@ _HUB_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Cadre — Boardrooms</title>
+<link rel="icon" id="favicon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2315181c'/%3E%3Ctext x='13' y='21.5' font-family='monospace' font-size='17' font-weight='700' fill='%23e8e9e4' text-anchor='middle'%3EC%3C/text%3E%3Ccircle cx='23.5' cy='23.5' r='7.5' fill='%2315181c'/%3E%3Ccircle cx='23.5' cy='23.5' r='5' fill='%23e5a83a'/%3E%3C/svg%3E">
 <style>
 :root{--canvas:#0f1211;--card:#161a18;--border:#262b28;--border-hi:#33403a;--text:#e8ebe9;
   --dim:#8a938e;--mono:#6b746f;--ok:#22c55e;--warn:#eab308;--gold:#d4a94a;--danger:#ef4444}
@@ -2726,12 +2727,29 @@ function ago(iso){
   if(s < 129600) return Math.round(s/3600) + 'h ago';
   return Math.round(s/86400) + 'd ago';
 }
+/* Favicon status dot — green while any firm is genuinely pulsing, amber when
+   the whole floor is quiet. Stale runs don't count: a dead pulse isn't work.
+   Plate stays dark in both themes; the tab strip is the browser's, not ours. */
+let _favState = null;
+function setFavicon(active){
+  const st = active ? 'running' : 'idle';
+  if(st === _favState) return;   // re-setting href refetches the icon
+  _favState = st;
+  const dot = active ? '#43a047' : '#e5a83a';
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'>`
+    + `<rect width='32' height='32' rx='7' fill='#15181c'/>`
+    + `<text x='13' y='21.5' font-family='monospace' font-size='17' font-weight='700' fill='#e8e9e4' text-anchor='middle'>C</text>`
+    + `<circle cx='23.5' cy='23.5' r='7.5' fill='#15181c'/>`
+    + `<circle cx='23.5' cy='23.5' r='5' fill='${dot}'/></svg>`;
+  document.getElementById('favicon').href = 'data:image/svg+xml,' + encodeURIComponent(svg);
+}
 async function load(){
   try{
     const r = await fetch('/api/hub');
     const data = await r.json();
     const firms = data.firms || [];
     const activeN = firms.filter(f => f.running > f.stale_runs).length;
+    setFavicon(activeN > 0);
     document.getElementById('sub').textContent =
       firms.length + ' firm' + (firms.length === 1 ? '' : 's') + ' · one door'
       + (activeN ? ' · ' + activeN + ' active' : '') + '.';

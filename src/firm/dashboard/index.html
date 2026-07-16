@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cadre Boardroom</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2343a047'/%3E%3Ctext x='16' y='22' font-family='monospace' font-size='18' font-weight='700' fill='white' text-anchor='middle'%3EC%3C/text%3E%3C/svg%3E">
+<link rel="icon" id="favicon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2315181c'/%3E%3Ctext x='13' y='21.5' font-family='monospace' font-size='17' font-weight='700' fill='%23e8e9e4' text-anchor='middle'%3EC%3C/text%3E%3Ccircle cx='23.5' cy='23.5' r='7.5' fill='%2315181c'/%3E%3Ccircle cx='23.5' cy='23.5' r='5' fill='%23e5a83a'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@500;600;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -1949,6 +1949,23 @@ function setLive(ok){
   document.getElementById('liveWrap').classList.toggle('stale', !ok);
   document.getElementById('liveText').textContent = ok ? (sseOk ? 'LIVE · PUSH' : 'LIVE') : 'OFFLINE';
 }
+
+/* ---- favicon status dot — green while a pulse has Members running, amber
+   when the floor is idle. The plate stays dark in both themes: the tab strip
+   is the browser's, not ours, and a light strip would wash out the dots. ---- */
+let _favState = null;
+function syncFavicon(S){
+  const st = ((S || {}).runs || []).some(r => r.status === 'running') ? 'running' : 'idle';
+  if(st === _favState) return;   // re-setting href refetches the icon; only churn on a real transition
+  _favState = st;
+  const dot = st === 'running' ? '#43a047' : '#e5a83a';
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'>`
+    + `<rect width='32' height='32' rx='7' fill='#15181c'/>`
+    + `<text x='13' y='21.5' font-family='monospace' font-size='17' font-weight='700' fill='#e8e9e4' text-anchor='middle'>C</text>`
+    + `<circle cx='23.5' cy='23.5' r='7.5' fill='#15181c'/>`
+    + `<circle cx='23.5' cy='23.5' r='5' fill='${dot}'/></svg>`;
+  document.getElementById('favicon').href = 'data:image/svg+xml,' + encodeURIComponent(svg);
+}
 function withScrollKept(ids, fn){
   const pos = {};
   ids.forEach(id => { const el = document.getElementById(id); if(el) pos[id] = el.scrollTop; });
@@ -2103,6 +2120,7 @@ function render(){
   const S = STATE;
   const firm = S.firm || {};
   document.title = `${firm.name || firm.id} — Boardroom`;
+  syncFavicon(S);
   document.getElementById('dashTitle').textContent = firm.name ? `${firm.name} — Boardroom` : 'Boardroom';
   document.getElementById('dashDesc').textContent = firm.north_star || '';
   // Dismissable per firm — the Board heard it; don't nag on every visit.

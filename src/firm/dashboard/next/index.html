@@ -317,7 +317,7 @@ body.vista::after{opacity:.7;animation:city-breathe 26s ease-in-out infinite}
 .kpi.live{border-color:color-mix(in srgb,var(--green) 45%,transparent)}
 .kpi.live .kv{color:var(--green)}
 
-.deskcols{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:var(--s6);align-items:start}
+.deskcols{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:var(--s6);align-items:start}
 @media(max-width:980px){
   .deskcols{grid-template-columns:1fr}
   .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -1066,6 +1066,66 @@ input.voice{padding:11px var(--s4)}
   }
 }
 @keyframes softpulse{0%,100%{opacity:.25}50%{opacity:1}}
+
+/* --- Co-Board Chat widget — a floating rail onto the chat daemon, drawn once
+   at the body root so a view repaint never wipes it. Self-hides when the chat
+   addon isn't configured. -------------------------------------------------- */
+#cbwidget{position:fixed;z-index:200;right:calc(20px + env(safe-area-inset-right));
+  bottom:calc(20px + env(safe-area-inset-bottom));display:none}
+#cbwidget.ready{display:block}
+#cblaunch{width:52px;height:52px;border-radius:var(--r-full);border:1px solid var(--line-hi);
+  background:var(--green);color:#fff;font-size:22px;line-height:1;cursor:grab;
+  display:grid;place-items:center;box-shadow:var(--lift);touch-action:none;
+  transition:transform .12s ease,box-shadow .12s ease}
+#cblaunch:hover{transform:translateY(-1px);box-shadow:0 10px 30px rgba(0,0,0,.35)}
+#cblaunch.dragging{cursor:grabbing;transform:none}
+#cbwidget.open #cblaunch{transform:scale(.9);opacity:.85}
+/* z-index:1 — the panel must paint OVER the launcher bubble: they are siblings
+   and the bubble comes later in the DOM, so wherever a dragged bubble meets the
+   open panel the circle would otherwise sit on top of the chat. */
+#cbpanel{position:absolute;right:0;bottom:64px;width:min(400px,92vw);height:min(620px,74vh);z-index:1;
+  display:none;flex-direction:column;background:var(--surface);border:1px solid var(--line-hi);
+  border-radius:var(--r-lg,14px);overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.45)}
+#cbwidget.open #cbpanel{display:flex}
+/* placement flips to stay on-screen — see place(): above the midline drops
+   down, near the left edge anchors left. Desktop only; mobile is fullscreen. */
+@media (min-width:721px){
+  #cbwidget.dropdown #cbpanel{top:64px;bottom:auto}
+  #cbwidget.dropleft #cbpanel{left:0;right:auto}
+}
+/* resize grip — rides the panel's FREE corner (flips with the placement
+   modes; the anchored corner never moves). Max size clamps at 735×735. */
+#cbgrip{--grip:var(--line-hi);position:absolute;z-index:3;width:20px;height:20px;
+  touch-action:none;left:0;top:0;cursor:nwse-resize}
+#cbgrip:hover,#cbgrip.dragging{--grip:var(--green)}
+#cbgrip::after{content:"";position:absolute;inset:5px;width:8px;height:8px;border-radius:2px;
+  border:2px solid var(--grip);border-right:none;border-bottom:none}
+#cbwidget.dropdown #cbpanel #cbgrip{top:auto;bottom:0;cursor:nesw-resize}
+#cbwidget.dropdown #cbpanel #cbgrip::after{border:2px solid var(--grip);border-right:none;border-top:none}
+#cbwidget.dropleft #cbpanel #cbgrip{left:auto;right:0;cursor:nesw-resize}
+#cbwidget.dropleft #cbpanel #cbgrip::after{border:2px solid var(--grip);border-left:none;border-bottom:none}
+#cbwidget.dropdown.dropleft #cbpanel #cbgrip{cursor:nwse-resize}
+#cbwidget.dropdown.dropleft #cbpanel #cbgrip::after{border:2px solid var(--grip);border-left:none;border-top:none}
+@media (max-width:720px){#cbgrip{display:none}}
+#cbhead{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line);
+  background:var(--bg,var(--surface))}
+#cbhead b{font-size:13px;color:var(--ink);font-weight:600;flex:1;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#cbhead .dot{width:7px;height:7px;border-radius:var(--r-full);background:var(--green)}
+#cbhead a,#cbhead button{border:1px solid var(--line);background:transparent;color:var(--muted,var(--ink));
+  width:28px;height:28px;border-radius:8px;cursor:pointer;display:grid;place-items:center;
+  font-size:14px;text-decoration:none}
+#cbhead a:hover,#cbhead button:hover{border-color:var(--line-hi);color:var(--ink)}
+#cbframe{flex:1;width:100%;border:0;background:#0f1211}
+/* per-floor chat button — deliberately loud so it reads as the fast path */
+.act.chat,.act.chat:hover{border-color:color-mix(in srgb,var(--green) 45%,transparent);
+  color:var(--green);background:var(--green-dim);opacity:1}
+.act.chat.on{background:var(--green);color:#fff}
+.frow .facts .act.chat{opacity:1}   /* stays lit even before the row is hovered */
+@media (max-width:720px){
+  #cbpanel{position:fixed;inset:0;width:100vw;height:100dvh;border-radius:0;bottom:auto;right:auto}
+  #cbwidget.open #cblaunch{display:none}
+}
 </style>
 </head>
 <body>
@@ -1160,6 +1220,7 @@ const S = { firms: [], job: null, cursor: 0, thoughts: [], proposal: null,
             leanMode: false,
             notes: '', notesTimer: null, dragging: false,
             deploy: null, runsOpen: false,
+            cb: null,
             error: null };
 
 /* ------------------------------------------------------------------ chrome */
@@ -1335,6 +1396,8 @@ function floorRow(f, n){
         <span>$${(f.spend_usd || 0).toFixed(2)} payroll</span>
         <span>${esc(ago(f.last_run_at))}</span>
         <span class="acts">
+          ${chatConfigured() ? `<button class="act chat" data-chat="${esc(f.id)}"
+            title="Chat the Co-Board for ${esc(f.name)} — fresh session, right here">💬 Chat</button>` : ''}
           <button class="act" data-summon="${esc(f.id)}"
             title="Open a Co-Board terminal on this firm — blank session">Summon</button>
           <button class="act" data-deploy="${esc(f.id)}"
@@ -1455,6 +1518,9 @@ function wireRail(){
       const f = S.firms.find(x => x.id === b.dataset.copyboot);
       if(f) copyText(b, bootPointer(f));
     };
+  }
+  for(const b of document.querySelectorAll('[data-chat]')){
+    b.onclick = (e) => { e.stopPropagation(); openChat(b.dataset.chat); };
   }
 }
 
@@ -1719,6 +1785,7 @@ async function viewDesk(refresh = true){
         <span class="fstats">${needsN ? `<span class="sw">${needsN} waiting</span> · ` : ''}${liveN ? `<span class="sr">${liveN} running</span> · ` : ''}${f.shipped_this_week || 0} shipped/wk · ${esc(ago(f.last_run_at))}</span>
       </div>
       <span class="facts">
+        ${chatConfigured() ? `<button class="act chat" data-chat="${esc(f.id)}" title="Chat the Co-Board for ${esc(f.name)} — fresh session">💬</button>` : ''}
         <button class="act" data-pulse="${esc(f.id)}" title="Pulse — wake whatever is due">⟳</button>
         <button class="act" data-summon="${esc(f.id)}" title="Open a Co-Board terminal — blank session">▶</button>
         <button class="act" data-deploy="${esc(f.id)}" title="Pick gates and escalations, then open a targeted session">☰</button>
@@ -3849,13 +3916,187 @@ async function route(){
   viewBoardroom();
 }
 
-// Framework extensions load once at boot — the chrome and the desk rack both
-// read S.hubExts. An empty registry simply renders nothing but the panel.
+/* ---------------------------------------------------------- chat widget ---
+   A floating rail onto the cadre-chat daemon. Its URL comes from the same
+   read seam the extension fragment uses (/api/next/rail → chat.link_url). The
+   widget is drawn once at the body root so a view repaint never wipes it, and
+   every firm's 💬 button drives it scoped to that firm (?firm=<id>) — you chat
+   the Co-Board without leaving the hub. */
+/* The widget is a generic hub surface: core renders a docked iframe for ANY
+   framework extension that registers surface:"widget", and per-floor 💬
+   buttons only for one that also accepts firm scoping (scoped:true). Core
+   names no addon — uninstall the addon (its registry file goes) and every
+   trace here self-removes on the next load. */
+function dockedChatExt(){ return (S.hubExts || []).find(x => x.surface === 'widget') || null; }
+function chatConfigured(){ const x = dockedChatExt(); return !!(x && x.scoped); }
+function chatUrl(){ const x = dockedChatExt(); return x ? (x.url || '') : ''; }
+
+function buildChatWidget(){
+  if(S.cb || !dockedChatExt()) return;
+  const base = chatUrl();
+  if(!base) return;
+
+  const el = document.createElement('div');
+  el.id = 'cbwidget';
+  el.innerHTML = `
+    <div id="cbpanel">
+      <div id="cbhead">
+        <span class="dot"></span>
+        <b id="cbtitle">Co-Board Chat</b>
+        <a id="cbnew" target="_blank" rel="noopener" title="Open in a new tab">↗</a>
+        <button id="cbfull" title="Replace this window with the full chat">⤢</button>
+        <button id="cbclose" title="Close">✕</button>
+      </div>
+      <iframe id="cbframe" title="Co-Board Chat" src="about:blank"></iframe>
+      <div id="cbgrip" title="drag to resize"></div>
+    </div>
+    <button id="cblaunch" title="Chat the Co-Board" aria-label="Chat the Co-Board">💬</button>`;
+  document.body.appendChild(el);
+  el.classList.add('ready');
+
+  const frame = el.querySelector('#cbframe');
+  const launch = el.querySelector('#cblaunch');
+  const nt = el.querySelector('#cbnew');
+  const panel = el.querySelector('#cbpanel');
+  let current = base, loaded = false;
+
+  const urlFor = (firm) => firm ? base + (base.includes('?') ? '&' : '?') + 'firm=' + encodeURIComponent(firm) : base;
+  const CB_MAX = 735;   // resize ceiling, both axes
+  const savedSize = () => {
+    try{ return JSON.parse(localStorage.getItem('cbwidget-size') || 'null') || {}; }
+    catch(e){ return {}; }
+  };
+  const place = () => {
+    // keep the panel on-screen: bubble above the vertical midline → drop down,
+    // below it → open up; near the left edge → anchor left. Height caps to the
+    // room on the chosen side so it never runs off the top or bottom. A saved
+    // operator-chosen size (the corner grip) wins inside those caps.
+    if(window.innerWidth <= 720){ panel.style.height = ''; panel.style.width = ''; el.classList.remove('dropdown', 'dropleft'); return; }
+    const r = launch.getBoundingClientRect();
+    const vh = window.innerHeight, vw = window.innerWidth;
+    const down = (r.top + r.height / 2) < vh / 2;
+    const room = (down ? (vh - r.bottom) : r.top) - 16;
+    const want = savedSize();
+    panel.style.height = Math.max(240, Math.min(want.h || 620, CB_MAX, room)) + 'px';
+    panel.style.width = want.w
+      ? Math.max(300, Math.min(want.w, CB_MAX, vw - 24)) + 'px' : '';
+    el.classList.toggle('dropdown', down);
+    el.classList.toggle('dropleft',
+      (r.right - Math.min(parseInt(panel.style.width, 10) || 400, vw * 0.92)) < 12);
+  };
+  const show = () => { place(); el.classList.add('open'); };
+  const setTitle = (firm) => el.querySelector('#cbtitle').textContent =
+    firm ? ('Co-Board · ' + firm) : 'Co-Board Chat';
+
+  S.cb = {
+    openScoped(firm){                       // fresh session, scoped to one firm
+      current = urlFor(firm);
+      frame.src = current; loaded = true;   // always reload → a new conversation
+      nt.href = current; setTitle(firm); show();
+    },
+    togglePortfolio(){                      // the launcher's own click — no scope
+      if(el.classList.contains('open')){ el.classList.remove('open'); return; }
+      if(!loaded){ current = base; frame.src = current; loaded = true; }
+      nt.href = current; show();
+    },
+  };
+  el.querySelector('#cbclose').onclick = () => el.classList.remove('open');
+  el.querySelector('#cbfull').onclick = () => location.assign(current);
+
+  // restore a saved corner offset
+  try{
+    const p = JSON.parse(localStorage.getItem('cbwidget-pos') || 'null');
+    if(p && Number.isFinite(p.right) && Number.isFinite(p.bottom)){
+      el.style.right = p.right + 'px'; el.style.bottom = p.bottom + 'px';
+    }
+  }catch(e){}
+
+  // drag the bubble; a press that barely moves is a click (toggle), not a drag
+  let sx = 0, sy = 0, moved = false, dragging = false;
+  launch.addEventListener('pointerdown', (e) => {
+    sx = e.clientX; sy = e.clientY; moved = false; dragging = true;
+    launch.setPointerCapture(e.pointerId);
+    launch.classList.add('dragging');
+  });
+  launch.addEventListener('pointermove', (e) => {
+    if(!dragging) return;
+    if(Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) > 5) moved = true;
+    if(!moved) return;
+    const pad = 8, w = el.offsetWidth || 52, h = launch.offsetHeight || 52;
+    let right = window.innerWidth - e.clientX - w / 2;
+    let bottom = window.innerHeight - e.clientY - h / 2;
+    right = Math.max(pad, Math.min(right, window.innerWidth - w - pad));
+    bottom = Math.max(pad, Math.min(bottom, window.innerHeight - h - pad));
+    el.style.right = right + 'px'; el.style.bottom = bottom + 'px';
+  });
+  launch.addEventListener('pointerup', (e) => {
+    dragging = false; launch.classList.remove('dragging');
+    try{ launch.releasePointerCapture(e.pointerId); }catch(_){}
+    if(moved){
+      localStorage.setItem('cbwidget-pos',
+        JSON.stringify({right: parseInt(el.style.right, 10) || 20,
+                        bottom: parseInt(el.style.bottom, 10) || 20}));
+    }else{
+      S.cb.togglePortfolio();
+    }
+  });
+
+  // resize via the corner grip — pointer capture keeps the drag alive over the
+  // iframe; the anchored edges (from the placement mode) never move.
+  const grip = el.querySelector('#cbgrip');
+  let rs = null;
+  grip.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const r = panel.getBoundingClientRect();
+    rs = {left: el.classList.contains('dropleft') ? r.left : null,
+          right: el.classList.contains('dropleft') ? null : r.right,
+          top: el.classList.contains('dropdown') ? r.top : null,
+          bottom: el.classList.contains('dropdown') ? null : r.bottom};
+    grip.setPointerCapture(e.pointerId);
+    grip.classList.add('dragging');
+    frame.style.pointerEvents = 'none';   // the iframe must not swallow the drag
+  });
+  grip.addEventListener('pointermove', (e) => {
+    if(!rs) return;
+    const w = rs.right != null ? rs.right - e.clientX : e.clientX - rs.left;
+    const h = rs.bottom != null ? rs.bottom - e.clientY : e.clientY - rs.top;
+    panel.style.width = Math.max(300, Math.min(CB_MAX, w, window.innerWidth - 24)) + 'px';
+    panel.style.height = Math.max(240, Math.min(CB_MAX, h, window.innerHeight - 88)) + 'px';
+  });
+  const endResize = (e) => {
+    if(!rs) return;
+    rs = null;
+    grip.classList.remove('dragging');
+    frame.style.pointerEvents = '';
+    try{ grip.releasePointerCapture(e.pointerId); }catch(_){}
+    localStorage.setItem('cbwidget-size', JSON.stringify(
+      {w: parseInt(panel.style.width, 10) || 0,
+       h: parseInt(panel.style.height, 10) || 0}));
+  };
+  grip.addEventListener('pointerup', endResize);
+  grip.addEventListener('pointercancel', endResize);
+
+  window.addEventListener('resize', () => { if(el.classList.contains('open')) place(); });
+}
+
+function openChat(firm){
+  if(S.cb){ S.cb.openScoped(firm); return; }
+  const base = chatUrl();
+  if(base) window.open(base + (base.includes('?') ? '&' : '?') + 'firm=' + encodeURIComponent(firm),
+                       '_blank', 'noopener');
+}
+
+// Framework extensions load once at boot — the chrome, the desk rack, the
+// per-floor 💬 buttons and the docked widget all read S.hubExts. An empty
+// registry renders nothing extra; uninstalling an addon removes its file and
+// everything it drove disappears on the next load.
 (async () => {
   try{
     const r = await GET('/api/next/hub-extensions');
     S.hubExts = r.extensions || [];
-    if(S.hubExts.length) route();   // repaint so the chrome picks them up
+    if(dockedChatExt()) buildChatWidget();
+    if(S.hubExts.length) route();   // repaint so chrome + buttons pick them up
   }catch(e){}
 })();
 

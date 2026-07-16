@@ -28,7 +28,7 @@ def registry_dir() -> Path:
     return path
 
 
-def validate(package: Any) -> tuple[dict[str, str] | None, str]:
+def validate(package: Any) -> tuple[dict[str, Any] | None, str]:
     """(entry, "") for a valid hub manifest, (None, reason) otherwise.
     Strict on purpose — a rejected upload names exactly what's wrong."""
     if not isinstance(package, dict):
@@ -43,20 +43,31 @@ def validate(package: Any) -> tuple[dict[str, str] | None, str]:
     if not _URL_RE.match(url):
         return None, "url must be http(s):// with no spaces or quotes"
     icon = str(package.get("icon") or "").strip()[:8]
-    return {"id": ext_id, "title": title, "url": url, "icon": icon}, ""
+    # surface: how the hub renders this extension. "chrome" (default) is a link
+    # icon; "widget" asks the hub to dock it as a floating iframe. "scoped" says
+    # the widget accepts a ?firm=<id> deep link (per-floor quick-chat). Both are
+    # generic capabilities — core still names no addon.
+    surface = str(package.get("surface") or "chrome").strip().lower()
+    if surface not in ("chrome", "widget"):
+        return None, "surface must be 'chrome' or 'widget'"
+    entry: dict[str, Any] = {"id": ext_id, "title": title, "url": url,
+                             "icon": icon, "surface": surface}
+    if surface == "widget" and bool(package.get("scoped")):
+        entry["scoped"] = True
+    return entry, ""
 
 
-def save(entry: dict[str, str]) -> Path:
+def save(entry: dict[str, Any]) -> Path:
     path = registry_dir() / f"{entry['id']}.json"
     path.write_text(json.dumps(entry, indent=1), encoding="utf-8")
     return path
 
 
-def load_all() -> list[dict[str, str]]:
-    entries: list[dict[str, str]] = []
+def load_all() -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
     for path in registry_dir().glob("*.json"):
         try:
-            entry, err = validate(json.loads(path.read_text(encoding="utf-8")))
+            entry, _ = validate(json.loads(path.read_text(encoding="utf-8")))
         except (OSError, json.JSONDecodeError):
             continue
         if entry is not None:   # a hand-broken file just doesn't render
