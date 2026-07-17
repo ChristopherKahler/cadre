@@ -3542,6 +3542,8 @@ function sheetHtml(m){
     ['Shipped', st.units_shipped, 'closed with a registered deliverable'],
     ['Gates', st.gates_approved + ' / ' + st.gates_raised, 'approved / raised'],
     ['Escalations', st.escalations_raised, 'the honesty stat'],
+    ['Signal', st.signals_real + ' real / ' + st.signals_noise + ' noise',
+      'Board-actioned finds' + (st.signal_assists ? ' · ' + st.signal_assists + ' assists' : '')],
     ['Spend', money(st.spend_usd), 'all time'],
     ['$ / deliverable', st.cost_per_deliverable != null ? money(st.cost_per_deliverable) : '—',
       st.deliverables + ' deliverables registered'],
