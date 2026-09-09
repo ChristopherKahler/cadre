@@ -189,10 +189,10 @@ def test_active_roster_renders_full_chrisai_structure() -> None:
         assert '<active-roster members="3">' in out
         assert "[BOARD] — Chris Kahler (Board / Founder)" in out
         assert "[MANAGERS]" in out
-        assert "[MEM-002] Sterling (CMO) — (no contract wired yet)" in out
+        assert "[MEM-002] Sterling (CMO) — no contract" in out
         assert "[INDIVIDUAL CONTRIBUTORS]" in out
         assert "[MEM-001] Quill (Blog Author) reports to Sterling — /quill:run" in out
-        assert "[MEM-003] Sage (Content Strategist) reports to Sterling — (no contract wired yet)" in out
+        assert "[MEM-003] Sage (Content Strategist) reports to Sterling — no contract" in out
         assert "BEHAVIOR: This context is PASSIVE AWARENESS ONLY." in out
         assert out.rstrip().endswith("</active-roster>")
     finally:

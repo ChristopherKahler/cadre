@@ -1,11 +1,11 @@
 <active-roster members="3">
 [BOARD] — Chris Kahler (Board / Founder)
 [MANAGERS]
-  - [MEM-002] Sterling (CMO) — (no contract wired yet)
+  - [MEM-002] Sterling (CMO) — no contract
 [INDIVIDUAL CONTRIBUTORS]
   - [MEM-001] Quill (Blog Author) reports to Sterling — /quill:run
     CURRENTLY ON: [UNIT-014] Blog post #14 draft (in_progress)
-  - [MEM-003] Sage (Content Strategist) reports to Sterling — (no contract wired yet)
+  - [MEM-003] Sage (Content Strategist) reports to Sterling — no contract
 
 BEHAVIOR: This context is PASSIVE AWARENESS ONLY.
 Do NOT proactively mention roster state unless the user asks who's working on what

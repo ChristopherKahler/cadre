@@ -382,8 +382,48 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
             else:
                 dblock.release(conn, firm_id, holder)
                 result["lock"] = "stale-cleared"
+        # A signalled process cannot finalize its own row, so abort owns it.
+        # Without this the run stays status='running' forever and every
+        # "is this firm busy" reader believes a run that is already dead.
+        # Not for a remote holder: those runs belong to the other machine.
+        if result.get("lock") != "remote-holder":
+            result["runs_finalized"] = _finalize_orphans(conn, firm_id)
+            conn.commit()
     finally:
         conn.close()
 
     print(json.dumps(result))
     return 0
+
+
+def _finalize_orphans(conn: Any, firm_id: str) -> list[str]:
+    """Close every member_run still marked running for this firm.
+
+    Goes through ``on_run_end`` rather than an UPDATE so the usage_event and
+    records rows a normal finish writes are written here too -- an aborted run
+    that leaves no trace on Records is invisible to the Board reviewing what
+    happened.
+    """
+    from firm.hooks.run_record import on_run_end
+
+    rows = conn.execute(
+        "SELECT id FROM member_run WHERE firm_id = ? AND status = 'running'",
+        (firm_id,),
+    ).fetchall()
+    closed: list[str] = []
+    for row in rows:
+        run_id = row["id"] if hasattr(row, "keys") else row[0]
+        try:
+            on_run_end(
+                conn,
+                firm_id=firm_id,
+                run_id=run_id,
+                final_status="failed",
+                notes="aborted by the Board (firm pulse --abort)",
+                error={"reason": "aborted", "by": "board"},
+            )
+            closed.append(run_id)
+        except Exception as exc:                     # never let one bad row
+            print(json.dumps({"warn": "could not finalize",  # abort the abort
+                              "run_id": run_id, "error": str(exc)}))
+    return closed

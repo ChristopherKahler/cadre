@@ -1408,6 +1408,30 @@ def perform_action(
             entity_id,
             body.get("body") or "",
         )
+    if action == "pulse-abort":
+        # Stop a live pulse from the dashboard. Shells the CLI rather than
+        # reimplementing it: the abort path owns SIGTERM, the cross-process
+        # lock, and finalizing orphaned runs, and a second implementation of
+        # that would drift from the first.
+        import subprocess
+        import sys as _sys
+        row = conn.execute("PRAGMA database_list").fetchone()
+        ws = Path(str(row[2])).parent.parent if row and row[2] else None
+        if ws is None:
+            return {"ok": False, "reason": "no local workspace for this firm"}
+        proc = subprocess.run(
+            [_sys.executable, "-m", "firm", "pulse", "--abort",
+             "--workspace", str(ws)],
+            capture_output=True, text=True, timeout=120,
+            stdin=subprocess.DEVNULL,
+        )
+        try:
+            out = json.loads(proc.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            out = {"ok": proc.returncode == 0,
+                   "stdout": proc.stdout[-800:], "stderr": proc.stderr[-800:]}
+        return out
+
     if action == "base-domain":
         # Rebuild the firm's BASE domain block from its live roster, so the
         # firm's own graph reaches its Members with no `base recall`. The

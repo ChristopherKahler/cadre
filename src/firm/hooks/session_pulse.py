@@ -30,6 +30,8 @@ SELECT
   m.reports_to_member_id,
   manager.name       AS manager_name,
   c.runtime_config   AS runtime_config_json,
+  c.id               AS contract_id,
+  c.pulse_config     AS pulse_config_json,
   u.id               AS claimed_unit_id,
   u.name             AS claimed_unit_name,
   u.status           AS claimed_unit_status
@@ -64,6 +66,25 @@ def _entry_command(runtime_config_json: str | None) -> str | None:
     return cmd if isinstance(cmd, str) and cmd else None
 
 
+def _tier(pulse_config_json: str | None) -> str:
+    """The model tier a Member runs on, for the roster's passive-awareness line.
+
+    Contracts carry a model alias, not an id, so this stays correct across
+    releases. An empty budget inherits the operator's session default, which is
+    a real fact about that Member and worth saying out loud -- an inheriting
+    contract silently spends at the top tier.
+    """
+    if not pulse_config_json:
+        return "inherits the default model"
+    try:
+        cfg = json.loads(pulse_config_json)
+    except (json.JSONDecodeError, TypeError):
+        return "inherits the default model"
+    if not isinstance(cfg, dict):
+        return "inherits the default model"
+    model = str(cfg.get("model") or "").strip()
+    return f"runs on {model}" if model else "inherits the default model"
+
 def _fetch_operator(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any] | None:
     row = conn.execute(
         "SELECT operator FROM firm WHERE id = ?", (firm_id,)
@@ -84,10 +105,14 @@ def _render_member_line(row: sqlite3.Row, is_contributor: bool) -> str:
     mem_id = row["member_id"]
     name = row["member_name"]
     role = row["member_role"]
-    if row["runtime_config_json"]:
-        entry = _entry_command(row["runtime_config_json"]) or "(no entry command)"
-    else:
-        entry = "(no contract wired yet)"
+    # Key on the CONTRACT, never on runtime_config: that column is optional
+    # (prompt.py falls back to the workspace for cwd, and entry_command is read
+    # nowhere else), and nothing in founding or wiring writes it. Keying on it
+    # made every founded firm announce its own roster as unwired.
+    entry = _entry_command(row["runtime_config_json"])
+    if not entry:
+        entry = _tier(row["pulse_config_json"]) if row["contract_id"] \
+            else "no contract"
     prefix = f"  - [{mem_id}] {name} ({role})"
     if is_contributor and row["manager_name"]:
         prefix += f" reports to {row['manager_name']}"
