@@ -1260,6 +1260,8 @@ function runsIndicator(){
               title="Pick gates and escalations, then open a targeted session">☰ Deploy</button>
             <button class="act" data-copyboot="${esc(f.id)}"
               title="Copy a boot prompt for a session that's already open">⧉ Boot</button>
+            <button class="act" data-stop="${esc(f.id)}"
+              title="Stop this firm's pulse — signals the members and closes out their runs">■ Stop</button>
           </div>
         </div>`).join('')}
     </div>
@@ -1525,6 +1527,29 @@ function wireRail(){
       e.stopPropagation();
       const f = S.firms.find(x => x.id === b.dataset.copyboot);
       if(f) copyText(b, bootPointer(f));
+    };
+  }
+  for(const b of document.querySelectorAll('[data-stop]')){
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      const was = b.textContent;
+      b.disabled = true; b.textContent = '…';
+      let r;
+      try{ r = await POST('/f/' + b.dataset.stop + '/api/action/pulse-abort/firm', {}); }
+      catch(err){ r = {ok: false, error: String(err)}; }
+      b.textContent = r.ok ? '✓' : '✕';
+      if(r.ok){
+        b.classList.add('on');
+        const n = ((r.result || r).runs_finalized || []).length;
+        b.title = n ? plural(n, 'run') + ' closed out' : 'pulse stopped';
+        // The pill counts live runs; reload so it stops claiming this one.
+        try{ S.firms = (await GET("/api/next/hub")).firms || []; repaint(); }catch(err){}
+      } else {
+        b.title = r.error || 'could not stop the pulse';
+      }
+      setTimeout(() => {
+        b.textContent = was; b.classList.remove('on'); b.disabled = false;
+      }, 2200);
     };
   }
   for(const b of document.querySelectorAll('[data-chat]')){
@@ -3763,7 +3788,8 @@ async function viewAlive(fid){
               title="Wake the firm every ${i}">${i}</button>`).join('')}
         </div>
         <div class="fc-actions">
-          <button class="btn primary" id="fc-pulse">Pulse the firm</button>
+          <button class="btn ${running ? 'danger' : 'primary'}" id="fc-pulse"
+            >${running ? '\u25a0 Stop the pulse' : 'Pulse the firm'}</button>
           <button class="btn" onclick="location.href='/f/${esc(fid)}/'">Walk the floor</button>
         </div>
         <div id="fc-said"></div>
@@ -3792,6 +3818,27 @@ async function viewAlive(fid){
 
   document.getElementById('fc-pulse').onclick = async () => {
     const btn = document.getElementById('fc-pulse');
+    // Stop, when the card is showing a live run. A firm holds one pulse at a
+    // time, so this control is never ambiguous about which run it ends.
+    if(btn.classList.contains('danger')){
+      btn.disabled = true; btn.textContent = 'Stopping…';
+      const saidS = document.getElementById('fc-said');
+      let sr;
+      try{ sr = await POST('/f/' + fid + '/api/action/pulse-abort/firm', {}); }
+      catch(e){ sr = {ok: false, error: 'Could not reach the firm.'}; }
+      if(!sr.ok){
+        saidS.innerHTML = `<div class="oops" style="margin:var(--s3) 0 0">${esc(sr.error || 'The pulse would not stop.')}</div>`;
+        btn.disabled = false; btn.textContent = '\u25a0 Stop the pulse';
+        return;
+      }
+      const closed = ((sr.result || sr).runs_finalized || []).length;
+      saidS.innerHTML = `<div class="hint" style="margin-top:var(--s4)">Pulse stopped${closed ? ' — ' + plural(closed, 'run') + ' closed out' : ''}.</div>`;
+      document.getElementById('firmcard').classList.remove('live');
+      document.getElementById('fc-pip').classList.remove('live');
+      S.watching = null;
+      viewAlive(fid);
+      return;
+    }
     btn.disabled = true; btn.textContent = 'Waking the floor…';
     const said = document.getElementById('fc-said');
     // Remember the last pulse report BEFORE firing, so we only trust a newer one.
@@ -3830,7 +3877,9 @@ async function viewAlive(fid){
       document.getElementById('fc-pip-t').textContent = 'Waking';
       said.innerHTML = `<div class="alive" style="margin-top:var(--s4)">
         ${plural(live || sum.ran, 'member')} took the floor. Walk it to watch, or let it work.</div>`;
-      btn.textContent = 'Pulse sent';
+      btn.classList.remove('primary'); btn.classList.add('danger');
+      btn.textContent = '\u25a0 Stop the pulse';
+      btn.disabled = false;
       watchFloor(fid);
     } else if(sum){
       const reasons = Object.entries(sum.skip_reasons || {})
