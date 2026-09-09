@@ -174,6 +174,19 @@ def diagnose(workspace: Path, firm_id: str, *,
              + ", ".join(modelless)) if modelless else
             f"{len(contracts)} contract(s) set"))
 
+        # 5b. the firm's BASE domain — mechanical.
+        # A firm whose domains.toml carries no domain block (or a stale one)
+        # injects nothing firm-specific into its Members: base falls back to
+        # the operator's global tier and the firm's own graph is reachable
+        # only by an explicit `base recall`, which is the tool call the
+        # mechanism exists to remove. Derived from the roster, so --fix it.
+        from firm.services import base_domain as _base_domain
+        _bd_ok, _bd_detail = _base_domain.is_current(workspace, firm_id, conn)
+        checks.append(_check(
+            "base-domain", "The firm's graph reaches its Members",
+            _bd_ok, "mechanical", _bd_detail,
+            fix="rebuild .base/domains.toml from the roster"))
+
         # 6. goal — board
         goals = repo.find(conn, "goal", firm_id=firm_id)
         firm_goal = any((g.get("parent_entity_type"), g.get("parent_entity_id"))
@@ -314,6 +327,13 @@ def fix(workspace: Path, firm_id: str, checks: list[dict[str, Any]], *,
         if "ghost-units" in failed:
             sched.clear_failed(f"{_UNIT_PREFIX}{firm_id}")
             did.append("ghost-units: failure residue cleared")
+        if "base-domain" in failed:
+            from firm.services import base_domain as _base_domain
+            res = _base_domain.sync(workspace, firm_id, conn=conn)
+            did.append("base-domain: rebuilt from the roster "
+                       f"({len(res.get('keywords') or [])} triggers)"
+                       if res.get("ok") else
+                       f"base-domain: {res.get('reason')}")
         if "denials" in failed:
             n = policy_svc.ingest_denials(conn, workspace, firm_id)
             did.append(f"denials: {n} ingested")

@@ -37,13 +37,21 @@ from firm.pulse.spawn import resolve_claude_bin
 # Without strict, a headless run under --dangerously-skip-permissions inherits the
 # operator's entire personal MCP fleet (387 tools incl. Gmail/Slack/Drive, measured
 # 2026-07-10). A founding agent needs to read two docs and write JSON. It gets files.
+# What the firm-founding agents run on. Not in the Member vocabulary by
+# default — Board 2026-09-09: fable is wired in and selectable, opus is the
+# working ceiling for Members. Must stay above _FOUNDING_FLAGS, which
+# reads it at import time.
+_TOP_TIER = "opus"
+
 _FOUNDING_FLAGS = [
     "--print",
     # Board ruling 2026-07-13: the firm only gets created once — architect it
-    # with Opus 4.8 at max effort, never the operator's session default. The
+    # on the top tier at max effort, never the operator's session default. The
     # stage choreography absorbs the latency; quality is the point. Shared by
     # the wiring and Co-Board briefing agents (they import these flags).
-    "--model", "claude-opus-4-8",
+    # Alias, never a pinned id: a pin goes stale silently the next time
+    # Anthropic ships a tier (it sat on claude-opus-4-8 through Opus 5).
+    "--model", _TOP_TIER,
     "--effort", "max",
     "--output-format", "stream-json",
     "--verbose",
@@ -96,7 +104,9 @@ _TIMEOUT_SEC = 300
 # (Board ruling 2026-07-14: Cooper's single run — 30 min, $13.99, 7.6M cache
 # reads — because no contract set a model and all four Members inherited Opus.
 # The founding slate now staffs the model like it staffs the org.)
-_MODEL_TIERS = ("opus", "sonnet", "haiku")
+# Aliases only. Claude Code resolves each to the current model in that tier,
+# so a new release re-points them with no edit here.
+_MODEL_TIERS = ("fable", "opus", "sonnet", "haiku")
 _DEFAULT_MODEL = "sonnet"
 
 _jobs: dict[str, dict[str, Any]] = {}
@@ -189,7 +199,7 @@ Return ONLY a JSON object, no prose before or after, no code fence:
       "owns": "One sentence: the outcome they are accountable for.",
       "operation": "The name of the Operation they work in — must match one above exactly",
       "leads": true or false,
-      "model": "opus, sonnet, or haiku — the Claude tier this Member runs on",
+      "model": "opus, sonnet, or haiku — the Claude tier this Member runs on (fable exists above opus; do not use it unless the Board asks)",
       "skills": ["skill or command names they'd carry — [] if none obvious"],
       "gates": ["what this Member must get Board approval for, in plain words"]
     }}
@@ -997,7 +1007,9 @@ def _preset_token_value(root: Path, kind: str, ref: str, key: str) -> str:
     return ""
 
 
-def _scaffold_base_graph(workspace: Path) -> bool:
+def _scaffold_base_graph(workspace: Path,
+                         firm_id: str = "",
+                         proposal: dict[str, Any] | None = None) -> bool:
     """Give the newborn firm its BASE workspace — the firm's own memory.
 
     Every founded firm gets `.base/` (graph, domains.toml, global registry
@@ -1018,9 +1030,13 @@ def _scaffold_base_graph(workspace: Path) -> bool:
             env={"HOME": str(Path.home()),
                  "PATH": os.environ.get("PATH") or "/usr/bin:/bin"},
         )
-        return proc.returncode == 0
+        if proc.returncode != 0:
+            return False
     except (OSError, subprocess.TimeoutExpired):
         return False
+    from firm.services import base_domain
+    base_domain.sync(workspace, firm_id, proposal=proposal or {})
+    return True
 
 
 def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
@@ -1061,7 +1077,7 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
     workspace.mkdir(parents=True, exist_ok=True)
     if run_init(workspace, force=False, demo=False, install_hooks_flag=False) != 0:
         return {"ok": False, "error": "could not initialize the firm workspace"}
-    base_graph = _scaffold_base_graph(workspace)
+    base_graph = _scaffold_base_graph(workspace, fid, proposal)
 
     conn = connect(get_db_path(workspace))
     try:

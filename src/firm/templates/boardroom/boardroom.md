@@ -59,7 +59,7 @@ For every decision item:
 | Board direction on a unit / member / doc | `comment-create/<unit|member|document>` — body `{"parent_entity_id","body"}` |
 | Request deliverable revision | `doc-revision/<DOC-id>` — body `{"body": "direction"}` |
 | Update a goal metric | `goal-metric/<GL-id>` — body `{"current": N}` |
-| Model cost lever | `contract-model/<CON-id>` — body `{"model": "opus|sonnet|haiku|"}` (empty inherits default) |
+| Model cost lever | `contract-model/<CON-id>` — body `{"model": "fable|opus|sonnet|haiku|"}` (empty inherits default) |
 | Equip a member | `member-equip/<MEM-id>` — body `{"kind": "mcp|skills|commands|cli|knowledge", "name": "..."}` (knowledge instead takes `{"path": "...", "teaches": "..."}`). Writes the contract loadout; an MCP equip also materializes the spec into the firm's `.mcp.json` with secrets as `${KEY}` placeholders — surface `needs_keys` from the result so the Board fills the vault. CLI names are presence-checked, and uncataloged wrappers (`gws-acct` and kin) are equippable: the preflight no longer fails closed on tools outside its probe catalog (fork 014, landed 2026-07-14). |
 | Unequip a member | `member-unequip/<MEM-id>` — body `{"kind", "name"}`. An MCP unequip touches the loadout only — the server stays in the firm's `.mcp.json` (firm-wide armory; pruning is Train's call). |
 | Wake the firm | `pulse/now` — then poll `/f/<firm>/api/pulse-status` and report the real outcome (0-ran pulses must say why) |
@@ -150,6 +150,64 @@ Diagnose → say what happened in one plain sentence → propose the fix tier (s
 | **Charter** (rules/loadouts) | anything weakening a structural NEVER | Never in this session — draft the amendment, open a Gate |
 
 Recurring failures are field reports: when the same failure shows up twice, log it so the pattern catalog keeps compounding.
+
+## Step 5 — Founding a firm from this seat
+
+The dashboard's `#/found` route can do this too. The reason to do it here is
+that founding is a **conversation** — the Board describes a firm, you argue with
+the proposal, and the org changes before it is ever committed. A text box and a
+reroll button cannot do that.
+
+Same endpoints the SPA calls, same board token from Step 0. Nothing new to install.
+
+| Intent | Call |
+|---|---|
+| Propose an org from a brief | `POST /api/next/found` — body `{"brief": "..."}` → `{"job_id": "..."}` |
+| Watch the founding agent think | `GET /api/next/found/<job_id>?cursor=N` — poll ~4s, relay the narration as it arrives |
+| Change the proposal | `POST /api/next/reshuffle` — body `{"proposal": {...}, "note": "<the Board's words>"}` |
+| Abandon it | `POST /api/next/cancel` — body `{"job_id": "..."}` |
+| Hire the firm | `POST /api/next/commit` — body `{"proposal": {...}}` |
+| Readiness report | `GET /api/next/readiness/<firm-id>` |
+| Write the charter | `POST /api/next/wire` — body `{"firm_id": "...", "mcp": [], "folders": [], "voice": ""}`, then poll the same status route |
+| Commit the charter | `POST /api/next/wire-commit` — body `{"firm_id": "...", "plan": {...}, "keys": {}}` |
+
+**The order, and the rules that bind each step:**
+
+1. **Sharpen the brief before sending it.** The founding agent gets one brief and
+   builds a whole org from it. Ask what the firm is accountable for and what its
+   number is; a firm with no number cannot fail, only be busy, and `commit`
+   rejects a proposal with no north star anyway.
+2. **Relay the narration.** The founding agent is spawned with
+   `--include-partial-messages` and a narration contract specifically so the Board
+   can watch it reason. Do not swallow that and report a result — stream it.
+3. **Take a position on the proposal.** Present it as an org, never as JSON. Then
+   do what Step 2 requires of every decision: recommend, argue once if you think
+   the Board is wrong, then execute their call. Each round of changes is one
+   `reshuffle` carrying their note verbatim.
+4. **Never commit without an explicit verdict.** Founding a firm is a Board act
+   and the same rule that governs a Gate governs this: silence is not a verdict.
+   Unbounded reshuffle rounds are fine; an unasked-for commit is not.
+5. **Check the wire, then say it plainly.** After `commit`, run `readiness` and
+   report what is missing. A newborn firm has no charter until `wire` runs, so
+   say so rather than letting the Board think the firm is finished.
+6. **Offer the brief immediately.** Step 0 says a firm with no
+   `.firm/boardroom/BRIEF.md` is one you are flying blind on. Founding is the only
+   moment its context is fresh — offer to write it before the session moves on.
+
+**The BASE wire is not optional and it is not automatic-looking.** A firm's own
+graph reaches its Members only when its domain has BOTH a block in
+`.base/domains.toml` AND at least one rule; a matched domain with zero rules is
+dropped from injection whatever its graph holds (measured 2026-09-09 —
+`domains_matched` read `['GLOBAL']` on a firm with a perfect block and a 3.7MB
+graph, then `['GLOBAL', 'chief-of-staff']` the moment one rule existed).
+`commit` now does both. Verify it rather than assuming, and repair it in place:
+
+- Check: `firm doctor` — the finding is "The firm's graph reaches its Members".
+- Repair, mechanical: `firm doctor --fix`, or
+  `POST /f/<firm>/api/action/base-domain/firm` to rebuild the block from the live
+  roster without leaving this seat.
+- Rebuild after every hire. The block's triggers ARE the roster, so a Member
+  hired later is invisible to it until it is rebuilt.
 
 ## Hard rules (unchanged by this seat)
 

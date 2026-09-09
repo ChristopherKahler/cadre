@@ -153,28 +153,81 @@ def expected_mcp_servers(cwd: str | None) -> list[str]:
     return list(servers)
 
 
+def _is_execable(path: str) -> bool:
+    """True only if the kernel can actually exec this file.
+
+    ``shutil.which`` checks the execute BIT, which a broken shim satisfies.
+    The nvm-installed ``claude`` on some machines is a shell stub with no
+    shebang pointing at a ``claude.exe`` that was never installed; exec'ing it
+    raises OSError(errno.ENOEXEC) and the founding agent dies with a message
+    that reads like a Cadre bug. Accept an ELF image or a real shebang, which
+    is what execve itself will accept.
+    """
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(4)
+    except OSError:
+        return False
+    return head[:4] == b"\x7fELF" or head[:2] == b"#!"
+
+
 def resolve_claude_bin() -> tuple[str | None, str]:
     """Resolve the claude binary Members run on.
 
-    Order: ``$CADRE_CLAUDE_BIN`` (explicit, must be executable) → ``shutil.which``.
-    Returns (path-or-None, detail) — detail carries the honest failure reason so
-    callers never surface a bare EACCES as a permissions bug.
+    Order: ``$CADRE_CLAUDE_BIN`` (explicit, must be executable) -> every
+    ``claude`` on PATH, first one the kernel can actually exec -> the native
+    install at ``~/.local/bin/claude``. Returns (path-or-None, detail); detail
+    carries the honest failure reason so callers never surface a bare EACCES
+    as a permissions bug, or an ENOEXEC as a missing binary.
     """
     env_bin = os.environ.get("CADRE_CLAUDE_BIN")
     if env_bin:
         if os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
+            if not _is_execable(env_bin):
+                return None, (
+                    f"CADRE_CLAUDE_BIN={env_bin} has the execute bit but is "
+                    "neither an ELF binary nor a script with a shebang -- "
+                    "exec would fail with ENOEXEC"
+                )
             return env_bin, f"CADRE_CLAUDE_BIN={env_bin}"
         return None, (
-            f"CADRE_CLAUDE_BIN={env_bin} is not an executable file — "
+            f"CADRE_CLAUDE_BIN={env_bin} is not an executable file -- "
             "fix the env var or unset it to fall back to PATH lookup"
         )
-    found = shutil.which("claude")
-    if found:
-        return found, f"PATH resolution: {found}"
+
+    # Walk the whole PATH rather than taking shutil.which's first hit: a
+    # systemd-spawned hub inherits a different PATH order than the operator's
+    # login shell, and the first hit there can be the dead nvm shim.
+    rejected: list[str] = []
+    seen: set[str] = set()
+    entries = (os.environ.get("PATH") or "").split(os.pathsep)
+    entries.append(os.path.join(os.path.expanduser("~"), ".local", "bin"))
+    for directory in entries:
+        if not directory:
+            continue
+        cand = os.path.join(directory, "claude")
+        if cand in seen:
+            continue
+        seen.add(cand)
+        if not (os.path.isfile(cand) and os.access(cand, os.X_OK)):
+            continue
+        if _is_execable(cand):
+            note = f"PATH resolution: {cand}"
+            if rejected:
+                note += f" (skipped un-execable: {', '.join(rejected)})"
+            return cand, note
+        rejected.append(cand)
+
+    if rejected:
+        return None, (
+            "every `claude` found is un-execable (no ELF header, no shebang): "
+            + ", ".join(rejected)
+            + " -- install the native CLI or point CADRE_CLAUDE_BIN at one"
+        )
     return None, (
-        "no runnable `claude` on PATH and CADRE_CLAUDE_BIN unset — "
+        "no runnable `claude` on PATH and CADRE_CLAUDE_BIN unset -- "
         "the Member runtime is not wired (set CADRE_CLAUDE_BIN to an "
-        "executable claude, e.g. the nvm bin path)"
+        "executable claude, e.g. ~/.local/bin/claude)"
     )
 
 

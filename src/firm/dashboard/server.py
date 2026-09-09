@@ -1408,6 +1408,29 @@ def perform_action(
             entity_id,
             body.get("body") or "",
         )
+    if action == "base-domain":
+        # Rebuild the firm's BASE domain block from its live roster, so the
+        # firm's own graph reaches its Members with no `base recall`. The
+        # Boardroom calls this while the Board is setting a firm up, and
+        # after any hire; `firm doctor --fix` calls the same function.
+        from firm.services import base_domain
+        row = conn.execute("PRAGMA database_list").fetchone()
+        ws = Path(str(row[2])).parent.parent if row and row[2] else None
+        if ws is None:
+            return {"ok": False, "reason": "no local workspace for this firm"}
+        res = base_domain.sync(ws, firm_id_of(conn, body), conn=conn)
+        if res.get("ok"):
+            log_event(
+                conn,
+                firm_id=firm_id_of(conn, body),
+                event_type="firm.updated",
+                actor={"type": "board", "id": None},
+                target_ref={"type": "firm", "id": firm_id_of(conn, body)},
+                details={"base_domain.keywords": res.get("keywords"),
+                         "base_domain.changed": res.get("changed")},
+            )
+        return res
+
     if action == "contract-model":
         # Per-contract model + timeout override (pulse_config — the cost lever).
         # entity_id = contract id; body.model = alias/full id (empty = inherit);
