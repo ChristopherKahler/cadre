@@ -112,3 +112,33 @@ def test_macos_branch_opens_a_command_file(monkeypatch, tmp_path):
     assert r["ok"] is True
     assert calls["argv"][0] == "open"
     assert calls["argv"][1].endswith(".command")
+
+
+def test_boardroom_claude_lands_byte_for_byte(tmp_path):
+    """The shipped template must arrive verbatim, on every platform.
+
+    ensure_boardroom_claude lays down a file Cadre ships, the same job
+    cli/templates.py does with write_bytes. Written as text it went through
+    two platform-dependent transforms at once: the locale codec, which on
+    Windows is cp1252 and cannot carry the arrows the boardroom templates
+    hold, and newline translation.
+
+    Measured on Windows 10 / Python 3.12.6 before the fix: a 3673-byte
+    template landed as 3741 bytes. Sixty-eight extra bytes for sixty-eight
+    lines. Nothing failed and nothing warned; the file was simply not the
+    file.
+
+    Asserting on bytes is the whole point. read_text on both sides would
+    apply the same two transforms to each and agree with itself.
+    """
+    target = tmp_path / "CLAUDE.md"
+    launch.ensure_boardroom_claude(tmp_path)
+    assert target.read_bytes() == launch._BOARDROOM_CLAUDE.read_bytes()
+
+
+def test_boardroom_claude_never_overwrites_what_the_operator_owns(tmp_path):
+    """Write-if-missing: the file ships with Cadre, the operator owns it after."""
+    target = tmp_path / "CLAUDE.md"
+    target.write_bytes(b"the operator edited this\n")
+    launch.ensure_boardroom_claude(tmp_path)
+    assert target.read_bytes() == b"the operator edited this\n"

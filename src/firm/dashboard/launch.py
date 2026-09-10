@@ -56,11 +56,14 @@ def ensure_boardroom_claude(root: str | Path) -> None:
     target = Path(root) / "CLAUDE.md"
     if target.exists():
         return
-    # Both halves explicit: an encoding-less write re-encodes to the
-    # platform locale (cp1252 on Windows) and mangles or refuses any
-    # character the template picks up later.
-    target.write_text(_BOARDROOM_CLAUDE.read_text(encoding="utf-8"),
-                      encoding="utf-8")
+    # Bytes, not text, for the same reason cli/templates.py:89 installs its
+    # families with write_bytes: this lays down a shipped artifact and the
+    # artifact should arrive verbatim. A text write re-encodes through the
+    # platform locale (cp1252 on Windows, which cannot carry the arrows the
+    # template holds) AND translates the line endings: measured on Windows
+    # 10 / Python 3.12.6, a 3673-byte template landed as 3741 bytes, one
+    # extra byte for each of its 68 lines.
+    target.write_bytes(_BOARDROOM_CLAUDE.read_bytes())
 
 
 def _write_script(cwd: str, prompt: str, claude: str, suffix: str = ".sh") -> str:
