@@ -1,0 +1,85 @@
+# Release — fires only on a version tag, never on a push to a branch.
+#
+# What it does today: builds the wheel and the source distribution, proves the
+# wheel installs into an empty environment and imports, and attaches both files
+# to a GitHub Release.
+#
+# What it deliberately does NOT do: publish to PyPI. That step is written below
+# and stays skipped until the repository actually has a PYPI_API_TOKEN secret,
+# so tagging can never publish by accident before the Board decides to. Nothing
+# here needs editing when that day comes; adding the secret is the whole switch.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build and verify the distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+          ls -l dist/
+
+      # Same discriminator as the tests workflow. A release that cannot be
+      # installed is worse than no release, and the only way to know is to
+      # install it somewhere that has nothing else in it.
+      - name: Prove the wheel installs and imports from an empty environment
+        run: |
+          python -m venv /tmp/rel
+          /tmp/rel/bin/python -m pip install --upgrade pip
+          /tmp/rel/bin/python -m pip install dist/*.whl
+          /tmp/rel/bin/python -c "import firm, firm.mcp.tools; print('import ok')"
+          /tmp/rel/bin/cadre --version
+          /tmp/rel/bin/firm --version
+
+      - name: Check that the tag matches the packaged version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(/tmp/rel/bin/python -c "import importlib.metadata as m; print(m.version('cadre'))")
+          echo "tag=$TAG packaged=$PKG"
+          if [ -n "$TAG" ] && [ "$TAG" != "$PKG" ]; then
+            echo "The tag and the packaged version disagree. Fix pyproject.toml or the tag." >&2
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Attach the distribution to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Stays skipped until the secret exists. This is the switch: no secret,
+    # no publish, and a tag remains a safe thing to push.
+    if: ${{ vars.PUBLISH_TO_PYPI == 'true' }}
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
