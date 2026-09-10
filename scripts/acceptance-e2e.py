@@ -119,7 +119,34 @@ def venv_bin(venv: Path, name: str) -> Path:
     return d / (name + (".exe" if IS_WIN else ""))
 
 
+def _make_output_utf8_safe() -> None:
+    """Never let this harness die on its own report.
+
+    The harness echoes child stdout, and `cadre doctor` prints U+2713. On
+    Windows a redirected or piped stdout is cp1252, which cannot encode that
+    character, so printing it raises UnicodeEncodeError and the harness exits 1
+    — indistinguishable, to a reader, from the product failing.
+
+    Measured on a real Windows host with PYTHONIOENCODING cleared: redirected
+    stdout reports cp1252; `print("\u2713")` exits 1 with an EMPTY output file;
+    after this call it exits 0 and writes E2 9C 93.
+
+    errors="replace" rather than "strict": a stray undecodable byte in some
+    child's output must not take the run down either. A mangled glyph in a
+    report is a cosmetic loss; a dead harness is a lost measurement.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            # Older Python, or a stream that is not a TextIOWrapper (pytest
+            # capture, a pipe wrapper). Degrading to whatever the platform
+            # gives us is correct; refusing to run is not.
+            pass
+
+
 def main() -> int:
+    _make_output_utf8_safe()
     ap = argparse.ArgumentParser()
     ap.add_argument("--keep", action="store_true",
                     help="leave the sandbox on disk for inspection")
