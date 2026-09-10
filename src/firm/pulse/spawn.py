@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 
 
 # ---------------------------------------------------------------------------
@@ -153,22 +154,64 @@ def expected_mcp_servers(cwd: str | None) -> list[str]:
     return list(servers)
 
 
+# Header prefixes an exec will accept, by platform. A shebang travels
+# everywhere POSIX; the native image format does not travel at all.
+#
+# Enumerating only ELF is what made Cadre unusable off Linux: every Mach-O
+# binary on macOS and every PE binary on Windows read as un-execable, so
+# resolve_claude_bin refused the real `claude`, spawn_member_run returned
+# "spawn aborted before exec", and `firm pulse` reported "runtime-not-wired"
+# on a machine where the runtime was installed and fine. The operator-facing
+# message even named ELF, which is meaningless on the host reading it.
+_SHEBANG = b"#!"
+_ELF = b"\x7fELF"
+_MACHO: tuple[bytes, ...] = (
+    b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",   # Mach-O 32-bit, BE / LE
+    b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",   # Mach-O 64-bit, BE / LE
+    b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",   # universal ("fat"), BE / LE
+    b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca",   # universal 64-bit, BE / LE
+)
+
+
+def _native_format() -> str:
+    """What this host's exec accepts, for operator-facing messages."""
+    if sys.platform == "darwin":
+        return "Mach-O"
+    if sys.platform == "win32":
+        return "PE"
+    return "ELF"
+
+
 def _is_execable(path: str) -> bool:
-    """True only if the kernel can actually exec this file.
+    """True only if this host can actually exec this file.
 
     ``shutil.which`` checks the execute BIT, which a broken shim satisfies.
     The nvm-installed ``claude`` on some machines is a shell stub with no
     shebang pointing at a ``claude.exe`` that was never installed; exec'ing it
     raises OSError(errno.ENOEXEC) and the founding agent dies with a message
-    that reads like a Cadre bug. Accept an ELF image or a real shebang, which
-    is what execve itself will accept.
+    that reads like a Cadre bug. So sniff the header for what execve itself
+    will accept -- but for THIS kernel, not for Linux.
+
+    Windows is deliberately not header-sniffed. ENOEXEC-on-a-shebang-less-stub
+    is a POSIX failure mode; Windows decides executability by extension, and a
+    ``.cmd``/``.bat`` wrapper carries no magic number at all. CreateProcess
+    either resolves the file or raises, and spawn_member_run already reports
+    that honestly -- a header gate there rejects working wrappers and buys
+    nothing.
+
+    Read at call time rather than import time so the platform branch is
+    testable from any host.
     """
     try:
         with open(path, "rb") as fh:
             head = fh.read(4)
     except OSError:
         return False
-    return head[:4] == b"\x7fELF" or head[:2] == b"#!"
+    if sys.platform == "win32":
+        return True
+    if sys.platform == "darwin":
+        return head.startswith((_SHEBANG, *_MACHO))
+    return head.startswith((_SHEBANG, _ELF))
 
 
 def resolve_claude_bin() -> tuple[str | None, str]:
@@ -186,8 +229,8 @@ def resolve_claude_bin() -> tuple[str | None, str]:
             if not _is_execable(env_bin):
                 return None, (
                     f"CADRE_CLAUDE_BIN={env_bin} has the execute bit but is "
-                    "neither an ELF binary nor a script with a shebang -- "
-                    "exec would fail with ENOEXEC"
+                    f"neither a {_native_format()} image nor a script with a "
+                    "shebang -- exec would fail with ENOEXEC"
                 )
             return env_bin, f"CADRE_CLAUDE_BIN={env_bin}"
         return None, (
@@ -220,7 +263,8 @@ def resolve_claude_bin() -> tuple[str | None, str]:
 
     if rejected:
         return None, (
-            "every `claude` found is un-execable (no ELF header, no shebang): "
+            f"every `claude` found is un-execable (no {_native_format()} "
+            "header, no shebang): "
             + ", ".join(rejected)
             + " -- install the native CLI or point CADRE_CLAUDE_BIN at one"
         )

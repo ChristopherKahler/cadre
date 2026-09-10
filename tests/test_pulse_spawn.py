@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from unittest import mock
 
 import pytest
@@ -13,7 +14,10 @@ from firm.pulse.spawn import (
     SpawnResult,
     _active_pids,
     _CLAUDE_FLAGS,
+    _is_execable,
+    _MACHO,
     expected_mcp_servers,
+    resolve_claude_bin,
     spawn_member_run,
 )
 
@@ -658,3 +662,108 @@ class TestUsageFallbackWithoutResult:
         })]
         parsed = parse_stream("\n".join(lines))
         assert parsed["usage"]["input_tokens"] == 0
+# ═══════════════════════════════════════════════════════════════════════════
+# Executable-format probe — the regression that took CI red on two OSes
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestExecFormatProbe:
+    r"""``_is_execable`` must answer for THIS host, not for Linux.
+
+    The bug this pins: the probe accepted only ``\x7fELF`` and ``#!``, and ran
+    unchanged on every platform. macOS binaries are Mach-O and Windows
+    binaries are PE, so off Linux every real ``claude`` read as un-execable,
+    ``resolve_claude_bin`` returned None, and ``spawn_member_run`` aborted
+    before exec. No Member could run on macOS or Windows at all, and the CI
+    suite was red on both legs for a month. The function had no test.
+    """
+
+    @staticmethod
+    def _stub(tmp_path, name, head):
+        p = tmp_path / name
+        p.write_bytes(head + b"\x00" * 60)
+        p.chmod(0o755)
+        return str(p)
+
+    def test_linux_accepts_elf_and_shebang(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert _is_execable(self._stub(tmp_path, "elf", b"\x7fELF"))
+        assert _is_execable(self._stub(tmp_path, "sh", b"#!/bin/sh\n"))
+
+    def test_linux_still_rejects_a_foreign_image(self, tmp_path, monkeypatch):
+        # Not pedantry: a Linux kernel genuinely cannot exec these, and the
+        # probe's whole job is to say so before the founding agent dies of a
+        # bare ENOEXEC. Widening the fix to "accept everything" would lose it.
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert not _is_execable(self._stub(tmp_path, "macho", b"\xcf\xfa\xed\xfe"))
+        assert not _is_execable(self._stub(tmp_path, "pe", b"MZ\x90\x00"))
+        assert not _is_execable(self._stub(tmp_path, "stub", b"claude --print"))
+
+    def test_darwin_accepts_every_mach_o_flavour(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "darwin")
+        for i, magic in enumerate(_MACHO):
+            path = self._stub(tmp_path, "macho%d" % i, magic)
+            assert _is_execable(path), "rejected Mach-O magic " + magic.hex()
+        assert _is_execable(self._stub(tmp_path, "sh", b"#!/bin/sh\n"))
+
+    def test_darwin_accepts_the_bin_echo_ci_actually_uses(self, tmp_path, monkeypatch):
+        # macos-26-arm64's /bin/echo is a Mach-O image. CI sets
+        # CADRE_CLAUDE_BIN=/bin/echo, the probe rejected it, and that single
+        # rejection produced all six macOS failures.
+        monkeypatch.setattr(sys, "platform", "darwin")
+        assert _is_execable(self._stub(tmp_path, "echo", b"\xcf\xfa\xed\xfe"))
+
+    def test_windows_accepts_a_pe_image(self, tmp_path, monkeypatch):
+        # Both magics measured on a real Windows install: claude.EXE and the
+        # cmd.exe / python.exe that CI and UAT point CADRE_CLAUDE_BIN at.
+        monkeypatch.setattr(sys, "platform", "win32")
+        assert _is_execable(self._stub(tmp_path, "claude.exe", b"MZx\x00"))
+        assert _is_execable(self._stub(tmp_path, "cmd.exe", b"MZ\x90\x00"))
+
+    def test_windows_accepts_a_magic_less_wrapper(self, tmp_path, monkeypatch):
+        # A .cmd/.bat shim carries no magic number and is still executable, so
+        # Windows gets no header gate at all. This is why the fix is not
+        # "also accept MZ": that would still reject working wrappers.
+        monkeypatch.setattr(sys, "platform", "win32")
+        assert _is_execable(self._stub(tmp_path, "claude.cmd", b"@echo off\r\n"))
+
+    def test_absent_file_is_never_execable(self, tmp_path, monkeypatch):
+        for platform in ("linux", "darwin", "win32"):
+            monkeypatch.setattr(sys, "platform", platform)
+            assert not _is_execable(str(tmp_path / "nope"))
+
+
+class TestResolverSpeaksTheHostsLanguage:
+    """The resolver's detail string is the operator's only diagnostic, and off
+    Linux it named a format the host does not use — telling a macOS operator
+    their working binary was "not an ELF binary"."""
+
+    @staticmethod
+    def _stub(tmp_path, head):
+        p = tmp_path / "claude"
+        p.write_bytes(head)
+        p.chmod(0o755)
+        return str(p)
+
+    def test_darwin_resolves_a_mach_o_claude(self, tmp_path, monkeypatch):
+        path = self._stub(tmp_path, b"\xcf\xfa\xed\xfe" + b"\x00" * 60)
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setenv("CADRE_CLAUDE_BIN", path)
+        found, detail = resolve_claude_bin()
+        assert found == path, detail
+
+    def test_win32_resolves_a_pe_claude(self, tmp_path, monkeypatch):
+        path = self._stub(tmp_path, b"MZx\x00" + b"\x00" * 60)
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setenv("CADRE_CLAUDE_BIN", path)
+        found, detail = resolve_claude_bin()
+        assert found == path, detail
+
+    def test_rejection_names_the_hosts_own_format(self, tmp_path, monkeypatch):
+        path = self._stub(tmp_path, b"not an image of any kind")
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setenv("CADRE_CLAUDE_BIN", path)
+        found, detail = resolve_claude_bin()
+        assert found is None
+        assert "Mach-O" in detail
+        assert "ELF" not in detail
