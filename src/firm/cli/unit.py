@@ -106,12 +106,21 @@ def run_unit_create(
             print(f"[dry-run] priority: {priority}, depends_on: "
                   f"{', '.join(depends_on or []) or '(none)'}")
             print(f"[dry-run] would write records row: event_type=unit.created, "
-                  f"actor={assignee or 'board'}")
+                  f"actor={caller_member_id() or 'board'}")
             return 0
 
         # The Member queueing the work is the actor — crediting it to the Board
         # would erase who is actually filling the queue.
-        actor = ({"type": "member", "id": assignee} if assignee
+        #
+        # The actor is the CALLER, never the assignee. Those are the same
+        # Member when it queues work for itself, which is why keying on
+        # `assignee` looked right for so long. They diverge in exactly the case
+        # the execution directive now asks for — queueing a follow-up for a
+        # colleague — and keying on the assignee there credits the colleague
+        # who has not touched it yet and erases the Member that actually filled
+        # the queue. Board calls have no caller and stay Board-actored.
+        caller = caller_member_id()
+        actor = ({"type": "member", "id": caller} if caller
                  else {"type": "board", "id": None})
         try:
             unit = create_unit(conn, firm_id, data, actor=actor)

@@ -6,8 +6,10 @@ patched _conn_factory pointing to an in-memory seeded DB.
 
 from __future__ import annotations
 
+import ast
 import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -358,3 +360,89 @@ class TestEscalationTools:
             esc_id, resolution="decided",
         ))
         assert resolved["status"] == "resolved"
+
+
+# ---------------------------------------------------------------------------
+# The tool surface, checked against the source rather than a typed number
+# ---------------------------------------------------------------------------
+
+class TestToolSurfaceIsDerivedFromSource:
+    """The MCP tool surface is compared to the decorators on disk, never to a
+    number somebody typed.
+
+    A hardcoded count goes stale the moment a tool is added, silently, and it
+    did: ``scripts/e2e-test.sh`` asserted 33 against a real surface of 37 until
+    2026-09-10, and the line beneath it printed its own separate hardcoded 33.
+
+    Deriving the expectation from the same registry the assertion reads would
+    make it vacuous — it could never fail. So the second channel is the SOURCE:
+
+      * channel A, the runtime registry FastMCP built when this module imported
+      * channel B, the ``@mcp.tool`` decorators parsed off ``tools.py`` with ast
+
+    They are independent in both directions. A tool registered by some other
+    call appears in A and not B; a decorated function that never registers
+    appears in B and not A. Comparing the NAME SETS rather than the counts also
+    catches a rename that happens to keep the total the same.
+    """
+
+    @staticmethod
+    def _decorated_tool_names() -> set[str]:
+        """Tool names taken from the decorators in tools.py, via ast.
+
+        ast rather than a regex: a regex over source is defeated by a comment,
+        a string, or a line continuation, and reports the miss as a clean zero.
+        """
+        source = Path(mcp_tools.__file__).read_text(encoding="utf-8")
+        names: set[str] = set()
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for dec in node.decorator_list:
+                target = dec.func if isinstance(dec, ast.Call) else dec
+                if isinstance(target, ast.Attribute) and target.attr == "tool":
+                    names.add(node.name)
+        return names
+
+    def test_the_source_reader_can_see_tools_at_all(self):
+        """A reader that reports zero must first prove it can see.
+
+        Without this, a parse that silently found nothing would make the
+        comparison below pass against an empty registry, or fail for a reason
+        that has nothing to do with the surface.
+        """
+        found = self._decorated_tool_names()
+        assert found, (
+            "parsed tools.py and found no @mcp.tool decorators at all. "
+            "The source reader is blind; the comparison below proves nothing."
+        )
+
+    def test_the_runtime_registry_can_see_tools_at_all(self):
+        registered = set(mcp_tools.mcp._tool_manager._tools)
+        assert registered, "the MCP registry is empty; nothing imported"
+
+    def test_runtime_registry_matches_the_decorators_on_disk(self):
+        """The count is derived from the source, never asserted as a literal."""
+        source = self._decorated_tool_names()
+        runtime = set(mcp_tools.mcp._tool_manager._tools)
+
+        only_source = sorted(source - runtime)
+        only_runtime = sorted(runtime - source)
+        assert not only_source, (
+            f"decorated in tools.py but not registered at runtime: {only_source}"
+        )
+        assert not only_runtime, (
+            f"registered at runtime but not decorated in tools.py: {only_runtime}"
+        )
+        assert len(runtime) == len(source)
+
+    def test_every_tool_name_is_firm_prefixed(self):
+        """The README describes the surface as uniformly ``firm_``-prefixed.
+
+        It said otherwise until 2026-09-10, naming nine prefixes that do not
+        exist. This is the check that keeps that sentence honest.
+        """
+        runtime = sorted(mcp_tools.mcp._tool_manager._tools)
+        assert runtime, "empty registry"
+        stray = [n for n in runtime if not n.startswith("firm_")]
+        assert not stray, f"tools without the firm_ prefix: {stray}"

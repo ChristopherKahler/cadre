@@ -2,15 +2,23 @@
 # OSes. Linux and macOS run everything; Windows runs the portable core
 # (scheduler backends, armory, equip, floor, preflight, dashboards) while the
 # POSIX-flavored shell/hook tests are ported incrementally.
+#
+# The clean-install job below is the one that has to stay. See issue #3: a
+# dependency with no upper bound resolved to a major version that removed a
+# module Cadre imports, so `pip install cadre` was broken while every editable
+# development environment stayed green, because each one had frozen the old
+# version months earlier. An editable install in a warm environment cannot see
+# that class of break. A wheel installed into an empty environment can.
 name: tests
 
 on:
   push:
-    branches: [main, "feat/**"]
+    branches: [main, "feat/**", "lane/**", "infra/**"]
   pull_request:
 
 jobs:
   test:
+    name: suite (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -23,9 +31,17 @@ jobs:
           python-version: "3.12"
       - name: Install
         run: python -m pip install -e ".[dev]" || python -m pip install -e . pytest
+      # -o addopts=... overrides pyproject's own "-ra -q" rather than adding
+      # to it. Passing -q here as well gives pytest two of them, and the second
+      # suppresses the summary line. The count was never truly lost, since it
+      # can be recovered by counting the progress characters, but nobody should
+      # have to count dots to learn whether a suite passed. On the Windows job
+      # this matters more than readability: -k selects a subset there, so the
+      # number of tests actually chosen was invisible until the summary
+      # returned it.
       - name: Full suite (POSIX)
         if: runner.os != 'Windows'
-        run: python -m pytest tests -q
+        run: python -m pytest tests -o addopts="-ra -q"
         env:
           PYTHONPATH: src
           # The spawn layer refuses to run without a wired claude runtime —
@@ -34,9 +50,97 @@ jobs:
       - name: Portable core (Windows)
         if: runner.os == 'Windows'
         run: >
-          python -m pytest tests -q
+          python -m pytest tests -o addopts="-ra -q"
           -k "sched or inventory or equip or floor or preflight or heartbeat
           or dashboard or launch or secrets or sysconfig or snapshot or
           seedkit or db or notify"
         env:
           PYTHONPATH: src
+
+  clean-install:
+    name: clean install from the built wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the wheel and the source distribution
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+          ls -l dist/
+
+      - name: Install the wheel into an empty environment
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/python -m pip install --upgrade pip
+          /tmp/clean/bin/python -m pip install dist/*.whl
+          echo "--- what actually resolved ---"
+          /tmp/clean/bin/python -m pip freeze
+
+      # The discriminator. Nothing here adds src to the path, so every import
+      # below resolves out of site-packages. A dependency that installs but
+      # cannot be imported fails on this step and nowhere else.
+      - name: Prove the installed package imports
+        run: |
+          /tmp/clean/bin/python - <<'PY'
+          import importlib
+          # firm.mcp.tools is the canary: it is the module that a major version
+          # bump of the mcp dependency broke, and it imports at package load.
+          for name in ("firm", "firm.mcp.tools", "firm.pulse.spawn",
+                       "firm.dashboard.server", "firm.services.base_domain"):
+              importlib.import_module(name)
+              print("imported", name)
+          PY
+
+      - name: Prove the console scripts resolve
+        run: |
+          /tmp/clean/bin/cadre --version
+          /tmp/clean/bin/firm --version
+
+      - name: Run the suite against the installed package
+        run: |
+          /tmp/clean/bin/python -m pip install pytest
+          /tmp/clean/bin/python -m pytest tests -o addopts="-ra -q"
+        env:
+          CADRE_CLAUDE_BIN: /bin/echo
+
+      # `cadre init` requires the workspace directory to exist already, by
+      # design. Creating it here is not incidental setup: without the mkdir this
+      # step fails with "workspace does not exist", which reads exactly like a
+      # broken package and is not one. That misreading cost a round of
+      # investigation before this job was ever merged.
+      - name: Initialize a firm from the installed package
+        run: |
+          mkdir -p /tmp/smoke-firm
+          /tmp/clean/bin/cadre init /tmp/smoke-firm --demo
+          test -f /tmp/smoke-firm/.firm/firm.db
+          echo "firm database written by the installed package"
+
+      # Package data is separate from importable code and fails separately:
+      # a wheel can import perfectly and still ship no migrations, in which
+      # case every install is broken the first time it touches a database.
+      - name: Prove the wheel carries its data files, not only its code
+        run: |
+          /tmp/clean/bin/python - <<'PY'
+          import pathlib, firm
+          root = pathlib.Path(firm.__file__).parent
+          checks = {
+              "migrations": sorted(root.glob("migrations/*.sql")),
+              "dashboard html": sorted(root.glob("dashboard/*.html")),
+              "templates": sorted(root.glob("templates/**/*.md")),
+          }
+          missing = [name for name, found in checks.items() if not found]
+          for name, found in checks.items():
+              print(f"{name}: {len(found)}")
+          if missing:
+              raise SystemExit("wheel is missing packaged data: " + ", ".join(missing))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 14

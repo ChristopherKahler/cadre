@@ -27,7 +27,13 @@ classifiers = [
 # swallows MCP-server stderr. Three of four firms shipped broken (wastelander
 # ESC-004/RUN-051, 2026-07-08..10); only chrisai worked, via a manual install.
 dependencies = [
-  "mcp>=1.0",
+  # Upper bound is load-bearing, not caution. mcp 2.x renamed FastMCP to
+  # MCPServer and dropped the mcp.server.fastmcp module that
+  # src/firm/mcp/tools.py:16 imports, so an unbounded floor made a clean
+  # `pip install cadre` resolve 2.2.0 and die at import -- pytest collect
+  # rc 2, 0 tests (measured 2026-09-10). Lift this only together with a
+  # port of firm/mcp/tools.py to the 2.x API.
+  "mcp>=1.0,<2",
   # Vault encryption (Fernet). Imported lazily — every non-vault surface
   # works without it, but installs get it so the vault works out of the box.
   "cryptography>=42",

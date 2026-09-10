@@ -501,3 +501,35 @@ def test_complete_outputs_help_lists_the_flag() -> None:
     result = _run_cli("unit", "complete", "--help")
     assert result.returncode == 0
     assert "--outputs" in result.stdout
+
+
+def test_queueing_for_a_colleague_is_attributed_to_the_caller(tmp_path: Path) -> None:
+    """The Member that FILLED the queue is the actor, not the one it queued for.
+
+    These two are the same Member when it queues work for itself, which is why
+    keying the actor on the assignee looked correct. They diverge in exactly the
+    case the execution directive now asks for, and keying on the assignee there
+    credits a colleague who has not touched the Unit and erases whoever actually
+    did the queueing. Measured live on 2026-09-10: MEM-002 queued UNIT-005 for
+    MEM-003 during its run and Records named MEM-003 as the creator.
+    """
+    _seed_workspace(tmp_path)
+    result = _run_cli(
+        "unit", "create", "--name", "Follow-up for a colleague",
+        "--project", "PRJ-010", "--assignee", "MEM-002",
+        "--workspace", str(tmp_path),
+        env={"CADRE_MEMBER_ID": "MEM-001"},
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+
+    rows = _rows(tmp_path, "SELECT * FROM records WHERE event_type = 'unit.created'")
+    assert len(rows) == 1
+    assert rows[0]["actor_type"] == "member"
+    assert rows[0]["actor_id"] == "MEM-001", (
+        "the Unit was queued BY MEM-001 FOR MEM-002; Records must name the "
+        "caller, not the assignee"
+    )
+
+    # The assignment itself is unchanged — only the attribution moved.
+    units = _rows(tmp_path, "SELECT * FROM unit WHERE name = 'Follow-up for a colleague'")
+    assert units[0]["assignee_member_id"] == "MEM-002"

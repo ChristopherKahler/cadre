@@ -6,7 +6,7 @@ Two things the unit tests cannot show on their own:
    validated Unit even when the pulse process itself carries a Member
    identity, which happens the moment a Member (which has a shell) fires a
    pulse.
-2. The denial is actionable: a Member told to "escalate via firm_escalate"
+2. The denial is actionable: a Member told to "escalate via: `firm escalation raise --title \"<one line>\"`"
    must actually be able to escalate. If that path were gated too, the hint
    would be a dead end.
 """
@@ -174,7 +174,7 @@ def test_sibling_without_key_is_denied_and_can_escalate(
     with pytest.raises(AuthorityError) as exc:
         complete_unit(conn, "chrisai", unit, sib)
 
-    assert exc.value.payload["hint"] == "escalate via firm_escalate"
+    assert exc.value.payload["hint"] == "escalate via: `firm escalation raise --title \"<one line>\"`"
     assert get(conn, "unit", unit)["status"] != "done"  # nothing happened
 
     # The hint must be honest: escalating is NOT gated, so the denied member
