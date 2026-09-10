@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from firm.core import repo
+from firm.pulse.spawn import expected_mcp_servers
 from firm.hooks.session_pulse import (
     render_active_roster,
     render_goal_health,
@@ -454,25 +455,66 @@ def _render_execution_directive(
             if isinstance(rc, dict) and rc.get("cwd"):
                 work_dir = rc["cwd"]
 
-    return (
-        "## Execution Rules\n\n"
-        "- Complete the assigned Unit according to its acceptance criteria\n"
-        f"- Work in: {work_dir}\n"
-        "- When done: Report completion status and list outputs produced\n"
-        "- Do NOT modify files outside your assigned scope\n"
-        "- If blocked: Report the blocker clearly instead of guessing\n"
+    lines = [
+        "## Execution Rules",
+        "",
+        "- Complete the assigned Unit according to its acceptance criteria",
+        f"- Work in: {work_dir}",
+        "- When done: Report completion status and list outputs produced",
+        "- Do NOT modify files outside your assigned scope",
+        "- If blocked: Report the blocker clearly instead of guessing",
+        "",
+        "### Your write surface — these are real commands, run them in Bash",
+        "",
+        "Your member id is already in $CADRE_MEMBER_ID and your firm id in "
+        "$FIRM_ID, so every command below fills in --member and --firm-id by "
+        "itself. Run them from your working directory.",
+        "",
         "- If something needs the BOARD (a decision, a blocker only they can "
-        "clear, anything above your authority): raise it with the firm MCP "
-        "tool firm_escalate — it DMs the Board directly the moment you call it. "
-        "Approval requests still go through firm_request_gate (also notifies "
-        "the Board). Duplicate raises of the same open issue are deduped "
-        "automatically, so escalate without fear of spamming\n"
-        "- If your work surfaces follow-up tasks, create Units for them AS YOU GO "
-        "via the firm MCP tools (unit_create — within your Project's scope, "
-        "assigned to the right colleague) instead of doing their work yourself. "
-        "A later pulse activates them in parallel; queued work is throughput, "
-        "hoarded work is a bottleneck"
-    )
+        "clear, anything above your authority), raise it. It DMs the Board the "
+        "moment the command returns, and duplicate raises of the same open "
+        "issue are deduped automatically, so escalate without fear of spamming:",
+        '  firm escalation raise --title "<one line>" --body "<the detail>"',
+        "",
+        "- To ask the Board to APPROVE something before you do it (this is a "
+        "Gate — it stays pending until they decide):",
+        '  firm gate request --action "<what you want to do>" --target-type unit '
+        "--target-id <UNIT-id>",
+        "",
+        "- If your work surfaces follow-up tasks, queue them AS YOU GO instead "
+        "of doing their work yourself. A later pulse activates them in "
+        "parallel; queued work is throughput, hoarded work is a bottleneck:",
+        '  firm unit create --name "<the task>" --project <PRJ-id> '
+        "--assignee <MEM-id of the right colleague>",
+        "",
+        "- Register every deliverable you produce, before you close your Unit. "
+        "A file nobody registered is invisible to the firm:",
+        "  firm doc register --unit <UNIT-id> --path <path to the file>",
+        "",
+        "- Then close the Unit out:",
+        "  firm unit complete <UNIT-id> --outputs <path to the file>",
+    ]
+
+    # The MCP mention is earned, not assumed. Six of twelve firms load no firm
+    # MCP server, and telling those Members to call a tool they do not have is
+    # the defect this section exists to fix.
+    #
+    # Read against ``cwd``, NEVER ``work_dir``: ``work_dir`` can be redirected
+    # by the contract runtime_config above, while the ``.mcp.json`` that the run
+    # actually loads is the one beside ``cwd`` — the same value
+    # contracts/claude_code.py hands to spawn_member_run. Using work_dir here
+    # would promise tools from some other directory config.
+    if "firm" in expected_mcp_servers(cwd):
+        lines += [
+            "",
+            "This firm also loads the firm MCP server, so "
+            "mcp__firm__firm_escalate, mcp__firm__firm_request_gate and "
+            "mcp__firm__firm_create_unit do the same three things from a tool "
+            "call. The commands above work whether or not the server loaded; "
+            "prefer them.",
+        ]
+
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

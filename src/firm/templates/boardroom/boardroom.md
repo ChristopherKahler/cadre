@@ -90,9 +90,11 @@ on it. Standing watch scenarios (poll `member_run` while anything is running):
 
 - **Timeout watch** — a run past ~75% of its contract timeout with no
   deliverable registered gets pinged with the full drill: *"you're at Xm of
-  Ym — register the deliverable you have NOW, write a comprehensive handoff of
-  what remains, and `unit_create` your own continuation unit so the next pulse
-  restarts you where you stopped."* Generative work hits this constantly; a
+  Ym — register the deliverable you have NOW with `firm doc register`, write a
+  comprehensive handoff of what remains, and queue your own continuation unit
+  with `firm unit create --name "<what remains>" --project <PRJ-id> --assignee
+  $CADRE_MEMBER_ID` so the next pulse restarts you where you stopped."*
+  Generative work hits this constantly; a
   warned member ships something and hands off, an unwarned one times out with
   nothing. The steering isn't done until you VERIFY the continuation unit
   exists — check `unit` rows after the run ends, and queue it yourself (same

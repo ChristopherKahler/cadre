@@ -190,9 +190,10 @@ in order, immediately:
    verified done, what remains step by step, every open decision, and the file
    paths and commands the continuation needs. Write it for a stranger — the
    next run has none of your context.
-3. **Queue your own continuation**: `unit_create`, assigned to YOURSELF, with
-   the handoff in its briefing — so the next pulse restarts you exactly where
-   you stopped instead of from zero.
+3. **Queue your own continuation**: `firm unit create --name "<what remains>"
+   --project <PRJ-id> --assignee $CADRE_MEMBER_ID --description "<the handoff>"`
+   — assigned to YOURSELF, with the handoff in its briefing, so the next pulse
+   restarts you exactly where you stopped instead of from zero.
 Timing out with an unregistered deliverable and no continuation unit is a
 failed run. Timing out after this drill is just a shift change.
 
