@@ -211,6 +211,32 @@ def _base_env() -> dict[str, str]:
         value = os.environ.get(passthrough)
         if value:
             env[passthrough] = value
+    if os.name == "nt":
+        # HOME is not how Windows finds a home directory. `Path.home()` reads
+        # USERPROFILE, or HOMEDRIVE+HOMEPATH, and raises RuntimeError when it
+        # can find none of them.
+        #
+        # That is not a hypothetical. `firm/__main__.py` builds its argparse
+        # tree with `default=Path.home() / "firms"`, which runs for EVERY
+        # command before a single argument is parsed. So an env carrying only
+        # HOME is an env in which Cadre cannot start at all:
+        #
+        #     RuntimeError: Could not determine home directory.
+        #
+        # Cadre spawning Cadre through this helper therefore died on Windows
+        # while the same command worked perfectly from a shell. Measured on
+        # Windows 10 / Python 3.12.6 against the installed wheel.
+        #
+        # SYSTEMROOT and friends are here for the same reason one level down:
+        # a Windows process with no SystemRoot cannot load the socket and ssl
+        # machinery the interpreter initialises on import.
+        for win_var in ("USERPROFILE", "HOMEDRIVE", "HOMEPATH", "SYSTEMROOT",
+                        "windir", "TEMP", "TMP", "PATHEXT", "COMSPEC",
+                        "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
+                        "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE"):
+            value = os.environ.get(win_var)
+            if value:
+                env[win_var] = value
     return env
 
 
