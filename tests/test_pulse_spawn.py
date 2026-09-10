@@ -16,6 +16,7 @@ from firm.pulse.spawn import (
     expected_mcp_servers,
     spawn_member_run,
 )
+from tests.platform_marks import spawn_layer_rejects_this_platforms_binaries
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -324,6 +325,7 @@ class TestSpawnCommand:
         assert env["FIRM_ID"] == "lab"
         assert env["CADRE_RUN_ID"] == "RUN-3"
 
+    @spawn_layer_rejects_this_platforms_binaries
     def test_default_cwd_is_none(self):
         mock_proc = mock.MagicMock()
         mock_proc.pid = 1
@@ -339,6 +341,7 @@ class TestSpawnCommand:
 class TestSpawnTimeout:
     """Timeout handling."""
 
+    @spawn_layer_rejects_this_platforms_binaries
     def test_timeout_returns_timed_out_result(self):
         mock_proc = mock.MagicMock()
         mock_proc.pid = 99
@@ -360,6 +363,7 @@ class TestSpawnTimeout:
 class TestSpawnProcessErrors:
     """Process launch failures."""
 
+    @spawn_layer_rejects_this_platforms_binaries
     def test_file_not_found(self):
         with mock.patch(
             "firm.pulse.spawn.subprocess.Popen",
@@ -372,6 +376,7 @@ class TestSpawnProcessErrors:
         assert result.pid is None
         assert result.timed_out is False
 
+    @spawn_layer_rejects_this_platforms_binaries
     def test_os_error(self):
         with mock.patch(
             "firm.pulse.spawn.subprocess.Popen",
@@ -386,6 +391,7 @@ class TestSpawnProcessErrors:
 class TestSpawnPidTracking:
     """PID lifecycle in _active_pids."""
 
+    @spawn_layer_rejects_this_platforms_binaries
     def test_pid_tracked_during_run(self):
         captured_pids: list[dict] = []
 
