@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from unittest import mock
 
 import pytest
@@ -13,10 +14,30 @@ from firm.pulse.spawn import (
     SpawnResult,
     _active_pids,
     _CLAUDE_FLAGS,
+    _is_execable,
+    _MACHO,
     expected_mcp_servers,
+    resolve_claude_bin,
     spawn_member_run,
 )
 from tests.platform_marks import spawn_layer_rejects_this_platforms_binaries
+
+
+def _resolved_bin():
+    """Pin claude-binary resolution so a spawn test exercises Popen only.
+
+    Without this the test reads the HOST's executable format through the
+    ambient ``CADRE_CLAUDE_BIN``: ``resolve_claude_bin`` sniffs the file's
+    magic number, and off Linux the CI stub (``/bin/echo``) is Mach-O or PE,
+    so ``spawn_member_run`` aborted before ever reaching ``Popen``. Five tests
+    in this file passed on Linux and failed on macOS and Windows for that
+    reason alone. A unit test of the Popen path must not depend on what the
+    host's executables look like.
+    """
+    return mock.patch(
+        "firm.pulse.spawn.resolve_claude_bin",
+        return_value=("/usr/bin/claude-test", "test"),
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -332,7 +353,9 @@ class TestSpawnCommand:
         mock_proc.communicate.return_value = ("", "")
         mock_proc.returncode = 0
 
-        with mock.patch("firm.pulse.spawn.subprocess.Popen", return_value=mock_proc) as mock_popen:
+        with _resolved_bin(), mock.patch(
+            "firm.pulse.spawn.subprocess.Popen", return_value=mock_proc,
+        ) as mock_popen:
             spawn_member_run("prompt")
 
         assert mock_popen.call_args.kwargs["cwd"] is None
@@ -351,7 +374,9 @@ class TestSpawnTimeout:
         ]
         mock_proc.returncode = None
 
-        with mock.patch("firm.pulse.spawn.subprocess.Popen", return_value=mock_proc):
+        with _resolved_bin(), mock.patch(
+            "firm.pulse.spawn.subprocess.Popen", return_value=mock_proc,
+        ):
             result = spawn_member_run("prompt", timeout_sec=60)
 
         assert result.timed_out is True
@@ -365,7 +390,7 @@ class TestSpawnProcessErrors:
 
     @spawn_layer_rejects_this_platforms_binaries
     def test_file_not_found(self):
-        with mock.patch(
+        with _resolved_bin(), mock.patch(
             "firm.pulse.spawn.subprocess.Popen",
             side_effect=FileNotFoundError("claude not found"),
         ):
@@ -378,7 +403,7 @@ class TestSpawnProcessErrors:
 
     @spawn_layer_rejects_this_platforms_binaries
     def test_os_error(self):
-        with mock.patch(
+        with _resolved_bin(), mock.patch(
             "firm.pulse.spawn.subprocess.Popen",
             side_effect=OSError("permission denied"),
         ):
@@ -406,7 +431,9 @@ class TestSpawnPidTracking:
         mock_proc.communicate.side_effect = capture_communicate
         mock_proc.returncode = 0
 
-        with mock.patch("firm.pulse.spawn.subprocess.Popen", return_value=mock_proc):
+        with _resolved_bin(), mock.patch(
+            "firm.pulse.spawn.subprocess.Popen", return_value=mock_proc,
+        ):
             spawn_member_run("prompt")
 
         # During communicate, PID 42 should have been tracked
@@ -422,9 +449,17 @@ class TestSpawnPidTracking:
             ("", ""),
         ]
 
-        with mock.patch("firm.pulse.spawn.subprocess.Popen", return_value=mock_proc):
-            spawn_member_run("prompt", timeout_sec=60)
+        with _resolved_bin(), mock.patch(
+            "firm.pulse.spawn.subprocess.Popen", return_value=mock_proc,
+        ):
+            result = spawn_member_run("prompt", timeout_sec=60)
 
+        # Positive first: prove the process path actually ran. Asserting only
+        # "77 is absent" cannot tell cleanup from a spawn that never happened,
+        # and that is exactly how this test stayed green on macOS while every
+        # test around it failed.
+        assert result.pid == 77
+        assert result.timed_out is True
         assert 77 not in _active_pids
 
 
@@ -664,3 +699,211 @@ class TestUsageFallbackWithoutResult:
         })]
         parsed = parse_stream("\n".join(lines))
         assert parsed["usage"]["input_tokens"] == 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Executable-format probe — the regression that took CI red on two OSes
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestExecFormatProbe:
+    r"""``_is_execable`` must answer for THIS host, not for Linux.
+
+    The bug this pins: the probe accepted only ``\x7fELF`` and ``#!``, and ran
+    unchanged on every platform. macOS binaries are Mach-O and Windows
+    binaries are PE, so off Linux every real ``claude`` read as un-execable,
+    ``resolve_claude_bin`` returned None, and ``spawn_member_run`` aborted
+    before exec. No Member could run on macOS or Windows at all, and the CI
+    suite was red on both legs for a month. The function had no test.
+    """
+
+    @staticmethod
+    def _stub(tmp_path, name, head):
+        p = tmp_path / name
+        p.write_bytes(head + b"\x00" * 60)
+        p.chmod(0o755)
+        return str(p)
+
+    def test_linux_accepts_elf_and_shebang(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert _is_execable(self._stub(tmp_path, "elf", b"\x7fELF"))
+        assert _is_execable(self._stub(tmp_path, "sh", b"#!/bin/sh\n"))
+
+    def test_linux_still_rejects_a_foreign_image(self, tmp_path, monkeypatch):
+        # Not pedantry: a Linux kernel genuinely cannot exec these, and the
+        # probe's whole job is to say so before the founding agent dies of a
+        # bare ENOEXEC. Widening the fix to "accept everything" would lose it.
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert not _is_execable(self._stub(tmp_path, "macho", b"\xcf\xfa\xed\xfe"))
+        assert not _is_execable(self._stub(tmp_path, "pe", b"MZ\x90\x00"))
+        assert not _is_execable(self._stub(tmp_path, "stub", b"claude --print"))
+
+    def test_darwin_accepts_every_mach_o_flavour(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "darwin")
+        for i, magic in enumerate(_MACHO):
+            path = self._stub(tmp_path, "macho%d" % i, magic)
+            assert _is_execable(path), "rejected Mach-O magic " + magic.hex()
+        assert _is_execable(self._stub(tmp_path, "sh", b"#!/bin/sh\n"))
+
+    def test_darwin_accepts_the_bin_echo_ci_actually_uses(self, tmp_path, monkeypatch):
+        # macos-26-arm64's /bin/echo is a Mach-O image. CI sets
+        # CADRE_CLAUDE_BIN=/bin/echo, the probe rejected it, and that single
+        # rejection produced all six macOS failures.
+        monkeypatch.setattr(sys, "platform", "darwin")
+        assert _is_execable(self._stub(tmp_path, "echo", b"\xcf\xfa\xed\xfe"))
+
+    def test_windows_accepts_a_pe_image(self, tmp_path, monkeypatch):
+        # Both magics measured on a real Windows install: claude.EXE and the
+        # cmd.exe / python.exe that CI and UAT point CADRE_CLAUDE_BIN at.
+        monkeypatch.setattr(sys, "platform", "win32")
+        assert _is_execable(self._stub(tmp_path, "claude.exe", b"MZx\x00"))
+        assert _is_execable(self._stub(tmp_path, "cmd.exe", b"MZ\x90\x00"))
+
+    def test_windows_accepts_a_magic_less_wrapper(self, tmp_path, monkeypatch):
+        # A .cmd/.bat shim carries no magic number and is still executable, so
+        # Windows gets no header gate at all. This is why the fix is not
+        # "also accept MZ": that would still reject working wrappers.
+        monkeypatch.setattr(sys, "platform", "win32")
+        assert _is_execable(self._stub(tmp_path, "claude.cmd", b"@echo off\r\n"))
+
+    def test_absent_file_is_never_execable(self, tmp_path, monkeypatch):
+        for platform in ("linux", "darwin", "win32"):
+            monkeypatch.setattr(sys, "platform", platform)
+            assert not _is_execable(str(tmp_path / "nope"))
+
+
+class TestResolverSpeaksTheHostsLanguage:
+    """The resolver's detail string is the operator's only diagnostic, and off
+    Linux it named a format the host does not use — telling a macOS operator
+    their working binary was "not an ELF binary"."""
+
+    @staticmethod
+    def _stub(tmp_path, head):
+        p = tmp_path / "claude"
+        p.write_bytes(head)
+        p.chmod(0o755)
+        return str(p)
+
+    def test_darwin_resolves_a_mach_o_claude(self, tmp_path, monkeypatch):
+        path = self._stub(tmp_path, b"\xcf\xfa\xed\xfe" + b"\x00" * 60)
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setenv("CADRE_CLAUDE_BIN", path)
+        found, detail = resolve_claude_bin()
+        assert found == path, detail
+
+    def test_win32_resolves_a_pe_claude(self, tmp_path, monkeypatch):
+        path = self._stub(tmp_path, b"MZx\x00" + b"\x00" * 60)
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setenv("CADRE_CLAUDE_BIN", path)
+        found, detail = resolve_claude_bin()
+        assert found == path, detail
+
+    def test_rejection_names_the_hosts_own_format(self, tmp_path, monkeypatch):
+        path = self._stub(tmp_path, b"not an image of any kind")
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setenv("CADRE_CLAUDE_BIN", path)
+        found, detail = resolve_claude_bin()
+        assert found is None
+        assert "Mach-O" in detail
+        assert "ELF" not in detail
+
+
+class TestSpawnReallyExecs:
+    """The one spawn test here that mocks nothing.
+
+    Every other test in this file patches ``subprocess.Popen``, which is how a
+    probe that rejected the host's own binaries sat in ``resolve_claude_bin``
+    for months behind a green Linux suite: nothing ever exec'd anything, so
+    "the resolver returns a path" and "a Member can actually run" were never
+    the same claim. This drives the whole function against a real process --
+    argv build, exec, pid tracking, capture, cleanup.
+    """
+
+    def test_spawn_execs_a_real_host_binary_and_captures_it(self, monkeypatch):
+        # sys.executable is a real native image on every platform: ELF on
+        # Linux, Mach-O on macOS, PE on Windows. So this also proves the
+        # format probe accepts the host's OWN binaries, which is the whole
+        # regression. The claude flags are not valid interpreter options, so
+        # it exits immediately without reading stdin -- the point is that it
+        # execs at all, not what it prints.
+        monkeypatch.setenv("CADRE_CLAUDE_BIN", sys.executable)
+
+        result = spawn_member_run("hello", timeout_sec=60)
+
+        assert "spawn aborted before exec" not in result.stderr
+        assert isinstance(result.pid, int) and result.pid > 0
+        assert result.returncode is not None
+        assert result.timed_out is False
+        assert result.pid not in _active_pids
+
+
+class TestPathDiscoveryUsesHostFileNames:
+    """The default route, with no CADRE_CLAUDE_BIN set.
+
+    The PATH walk looked for a file named exactly "claude". Windows never
+    creates that name and never runs an extension-less file from a bare
+    command lookup, so a new operator with claude.EXE on PATH was told there
+    was no runnable claude on PATH. The env var was the only working route,
+    which is not an install-and-use story.
+    """
+
+    @staticmethod
+    def _isolate(monkeypatch, tmp_path, platform):
+        # resolve_claude_bin also probes ~/.local/bin. Without redirecting
+        # HOME the real one leaks in and both tests below become meaningless
+        # on any machine that has claude installed -- which is every machine
+        # this is developed on.
+        monkeypatch.setattr(sys, "platform", platform)
+        monkeypatch.delenv("CADRE_CLAUDE_BIN", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path / "nohome"))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path / "nohome"))
+        monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+        monkeypatch.setenv("PATH", str(tmp_path))
+
+    @staticmethod
+    def _write(path, head):
+        path.write_bytes(head + b"\x00" * 60)
+        path.chmod(0o755)
+
+    def test_win32_finds_claude_exe_with_no_bare_claude_present(
+            self, tmp_path, monkeypatch):
+        exe = tmp_path / "claude.EXE"
+        self._write(exe, b"MZx\x00")
+        assert not (tmp_path / "claude").exists()   # the premise under test
+
+        self._isolate(monkeypatch, tmp_path, "win32")
+        found, detail = resolve_claude_bin()
+        assert found == str(exe), detail
+
+    def test_win32_finds_a_cmd_wrapper_too(self, tmp_path, monkeypatch):
+        # PATHEXT order puts .EXE before .CMD, so a lone wrapper has to be
+        # reachable on its own rather than only as a runner-up.
+        wrapper = tmp_path / "claude.CMD"
+        wrapper.write_bytes(b"@echo off\r\n")
+        wrapper.chmod(0o755)
+
+        self._isolate(monkeypatch, tmp_path, "win32")
+        found, detail = resolve_claude_bin()
+        assert found == str(wrapper), detail
+
+    def test_win32_finds_nothing_when_the_directory_holds_neither(
+            self, tmp_path, monkeypatch):
+        # The control. Without it the two tests above pass on any machine
+        # that happens to have a real claude somewhere on PATH, and the
+        # check could not tell a working lookup from a blind one.
+        self._isolate(monkeypatch, tmp_path, "win32")
+        found, detail = resolve_claude_bin()
+        assert found is None, found
+        assert "no runnable" in detail
+
+    def test_posix_is_unchanged_and_ignores_windows_names(
+            self, tmp_path, monkeypatch):
+        # A .EXE is not runnable on Linux, and PATH discovery there must not
+        # start claiming it is just because the Windows branch exists.
+        self._write(tmp_path / "claude.EXE", b"MZx\x00")
+        self._isolate(monkeypatch, tmp_path, "linux")
+        assert resolve_claude_bin()[0] is None
+
+        bare = tmp_path / "claude"
+        self._write(bare, b"\x7fELF")
+        assert resolve_claude_bin()[0] == str(bare)
