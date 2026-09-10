@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 from unittest import mock
 
 import pytest
@@ -21,6 +22,7 @@ from firm.pulse.validate import (
     retry_on_failure,
     validate_output,
 )
+import firm.pulse.validate as validate
 from firm.services._id import PREFIX_REGISTRY, next_id
 
 
@@ -738,3 +740,86 @@ class TestAcScript:
             {"validators": ["ac_script"]}, str(tmp_path), unit=unit_with_outputs,
         )
         assert out.passed is False
+
+
+class TestFindBash:
+    """Which bash runs an AC check script, and which one must be refused.
+
+    Every case below runs on every platform: the Windows behaviour is driven
+    by faking sys.platform and PATH rather than by being on Windows, so the
+    Linux CI leg proves it too. Measured on Windows 10 / Python 3.12.6, the
+    System32 bash.exe returns exit 127 with the separators stripped out of
+    the path, while the Git for Windows bash returns the script's real code.
+    """
+
+    def _no_git_anywhere(self, monkeypatch):
+        monkeypatch.setattr(validate.os.path, "exists", lambda p: False)
+        monkeypatch.delenv("ProgramFiles", raising=False)
+        monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+        monkeypatch.delenv("ProgramW6432", raising=False)
+        monkeypatch.delenv("LOCALAPPDATA", raising=False)
+
+    def test_override_wins(self, tmp_path, monkeypatch):
+        fake = tmp_path / "mybash"
+        fake.write_text("x")
+        monkeypatch.setenv("CADRE_BASH_BIN", str(fake))
+        assert validate.find_bash() == str(fake)
+
+    def test_override_that_is_not_there_is_refused(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CADRE_BASH_BIN", str(tmp_path / "nope"))
+        assert validate.find_bash() is None
+
+    def test_windows_refuses_the_wsl_launcher(self, monkeypatch):
+        """The red arm. This exact binary is what CI was calling."""
+        monkeypatch.delenv("CADRE_BASH_BIN", raising=False)
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(validate.shutil, "which",
+                            lambda n: {"bash": "C:\\Windows\\System32\\bash.EXE"}.get(n))
+        self._no_git_anywhere(monkeypatch)
+        assert validate.find_bash() is None
+
+    def test_windows_refuses_the_store_alias_stub(self, monkeypatch):
+        monkeypatch.delenv("CADRE_BASH_BIN", raising=False)
+        monkeypatch.setattr(sys, "platform", "win32")
+        stub = "C:\\Users\\x\\AppData\\Local\\Microsoft\\WindowsApps\\bash.exe"
+        monkeypatch.setattr(validate.shutil, "which",
+                            lambda n: {"bash": stub}.get(n))
+        self._no_git_anywhere(monkeypatch)
+        assert validate.find_bash() is None
+
+    def test_windows_accepts_a_real_windows_bash(self, monkeypatch):
+        monkeypatch.delenv("CADRE_BASH_BIN", raising=False)
+        monkeypatch.setattr(sys, "platform", "win32")
+        git_bash = "C:\\Program Files\\Git\\bin\\bash.exe"
+        monkeypatch.setattr(validate.shutil, "which",
+                            lambda n: {"bash": git_bash}.get(n))
+        assert validate.find_bash() == git_bash
+
+    def test_windows_falls_back_to_git_for_windows(self, monkeypatch):
+        monkeypatch.delenv("CADRE_BASH_BIN", raising=False)
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(validate.shutil, "which",
+                            lambda n: {"bash": "C:\\Windows\\System32\\bash.exe"}.get(n))
+        monkeypatch.setenv("ProgramFiles", "C:\\Program Files")
+        wanted = validate.os.path.join(
+            "C:\\Program Files", "Git", "bin", "bash.exe")
+        monkeypatch.setattr(validate.os.path, "exists", lambda p: p == wanted)
+        assert validate.find_bash() == wanted
+
+    def test_no_bash_at_all_reports_a_reason_not_a_crash(self, monkeypatch):
+        monkeypatch.delenv("CADRE_BASH_BIN", raising=False)
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(validate.shutil, "which", lambda n: None)
+        self._no_git_anywhere(monkeypatch)
+        runner, why = validate._script_runner("scripts/verify.sh")
+        assert runner == []
+        assert "WSL launcher" in why
+
+
+class TestScriptRunner:
+    def test_python_check_runs_under_this_interpreter(self):
+        """python3 on the Windows PATH is a Store alias stub, and is never the
+        firm venv even when it resolves. sys.executable always is."""
+        runner, why = validate._script_runner("scripts/check.py")
+        assert runner == [sys.executable, "scripts/check.py"]
+        assert why == ""

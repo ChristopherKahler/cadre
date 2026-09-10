@@ -21,6 +21,7 @@ import pytest
 from firm.core.migrate import apply_migrations
 from firm.core.repo import create
 from firm.dashboard import auth as board_auth
+from firm.secrets import fsperm
 from firm.dashboard.server import make_hub_handler
 
 
@@ -95,7 +96,7 @@ class TestBoardToken:
         path = board_auth.board_token_path()
         assert path == cadre_home / "board.token"
         assert path.read_text().strip() == first
-        assert (path.stat().st_mode & 0o777) == 0o600
+        assert fsperm.owner_only(path), fsperm.describe(path)
 
     def test_rotation_needs_no_restart(self, cadre_home: Path):
         board_auth.board_token()
@@ -186,7 +187,8 @@ class TestBoardPassword:
         stored = board_auth.board_password_path().read_text()
         assert "correct horse battery staple" not in stored
         assert stored.startswith(board_auth.PASSWORD_SCHEME + "$")
-        assert (board_auth.board_password_path().stat().st_mode & 0o777) == 0o600
+        assert fsperm.owner_only(board_auth.board_password_path()), \
+            fsperm.describe(board_auth.board_password_path())
 
         status, _ = _request(f"{url}/f/alpha/api/action/member-authority/MEM-001",
                              "POST", {"grant": True},

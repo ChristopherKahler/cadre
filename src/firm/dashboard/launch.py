@@ -56,7 +56,11 @@ def ensure_boardroom_claude(root: str | Path) -> None:
     target = Path(root) / "CLAUDE.md"
     if target.exists():
         return
-    target.write_text(_BOARDROOM_CLAUDE.read_text(encoding="utf-8"))
+    # Both halves explicit: an encoding-less write re-encodes to the
+    # platform locale (cp1252 on Windows) and mangles or refuses any
+    # character the template picks up later.
+    target.write_text(_BOARDROOM_CLAUDE.read_text(encoding="utf-8"),
+                      encoding="utf-8")
 
 
 def _write_script(cwd: str, prompt: str, claude: str, suffix: str = ".sh") -> str:

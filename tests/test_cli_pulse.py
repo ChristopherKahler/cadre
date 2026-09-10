@@ -12,6 +12,7 @@ from firm.core.migrate import apply_migrations
 from firm.core.repo import create
 from firm.hooks.session_pulse import render_budget_health
 from firm.pulse.orchestrator import ActivationSummary
+from tests.platform_marks import spawn_layer_rejects_this_platforms_binaries
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +155,7 @@ class TestRunPulseCli:
         call_kwargs = mock_pulse.call_args
         assert call_kwargs.kwargs.get("dry_run") is True or call_kwargs[1].get("dry_run") is True
 
+    @spawn_layer_rejects_this_platforms_binaries
     @mock.patch("firm.cli.pulse.dblock")
     @mock.patch("firm.cli.pulse.pulse")
     @mock.patch("firm.cli.pulse.connect")

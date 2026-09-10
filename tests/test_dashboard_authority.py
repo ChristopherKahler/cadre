@@ -106,7 +106,9 @@ def test_toggle_unknown_member_raises() -> None:
 
 
 def test_manage_tab_renders_the_toggle() -> None:
-    html = _INDEX_HTML.read_text()
+    # The dashboard HTML carries non-Latin-1 characters, so an
+    # encoding-less read resolves to cp1252 on Windows and dies.
+    html = _INDEX_HTML.read_text(encoding="utf-8")
     assert "setAuthority(" in html
     assert "member-authority/" in html
     assert "fAuthComment" in html
