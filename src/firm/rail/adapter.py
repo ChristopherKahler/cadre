@@ -28,31 +28,6 @@ from typing import Any, Callable
 _HTTP_TIMEOUT_SEC = 15
 
 
-def ensure_cli_shim(prog: str) -> str | None:
-    """Make *prog* reachable from any shell: a ``~/.local/bin`` shim that
-    execs this interpreter's venv console script. pip-installing an addon
-    into the framework venv doesn't put its CLI on the operator's PATH —
-    every addon's ``setup``/``enable`` calls this so it never has to be a
-    manual step. Returns the shim path when (re)written, None otherwise."""
-    import stat
-    import sys
-    target = Path(sys.executable).parent / prog
-    if not target.exists():
-        return None
-    bin_dir = Path.home() / ".local" / "bin"
-    shim = bin_dir / prog
-    body = f'#!/usr/bin/env bash\nexec "{target}" "$@"\n'
-    try:
-        if shim.exists() and shim.read_text(encoding="utf-8") == body:
-            return None
-        bin_dir.mkdir(parents=True, exist_ok=True)
-        shim.write_text(body, encoding="utf-8")
-        shim.chmod(shim.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        return str(shim)
-    except OSError:
-        return None
-
-
 class HubClient:
     """Calls into a running chat hub. Never raises — transport failures come
     back as ``{"ok": False, "reason": …}`` so callers handle hub errors and
