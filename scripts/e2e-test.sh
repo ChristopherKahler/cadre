@@ -110,6 +110,83 @@ grep -q 'cadre-session-pulse.py' "$WORKSPACE/.claude/settings.json" \
     && pass "hook registered in settings.json" \
     || fail "hook not registered"
 
+# Registered is not running, and two things hide the difference.
+#
+# The checks above pass on a hook that can never execute. Running it naively
+# here would not catch that either: `source activate` above put $VENV_DIR/bin
+# on PATH, so bare `python3` is the venv python and imports firm happily, and
+# on a developer box an editable-install .pth puts firm on the path for every
+# interpreter besides. Claude Code has neither.
+#
+# So the command is read back out of settings.json -- never chosen here, since
+# what cadre init wired IS the thing under test -- and run with the venv off
+# PATH, VIRTUAL_ENV unset and user site suppressed.
+HOOK_CMD=$(python3 - "$WORKSPACE/.claude/settings.json" <<'PY' || true
+import json, sys
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    raise SystemExit(1)
+for entry in (data.get("hooks") or {}).get("SessionStart") or []:
+    for h in entry.get("hooks") or [entry]:
+        cmd = h.get("command") or ""
+        if "cadre-session-pulse" in cmd:
+            print(cmd)
+            raise SystemExit(0)
+raise SystemExit(1)
+PY
+)
+[ -n "$HOOK_CMD" ] || fail "no SessionStart command for the session-pulse hook in settings.json"
+
+# Claude Code expands this one variable at invocation; leaving it literal would
+# test a path that does not exist and blame the hook for it. Nothing else is
+# expanded -- the interpreter stays exactly as registered.
+HOOK_CMD=${HOOK_CMD//\$CLAUDE_PROJECT_DIR/$WORKSPACE}
+HOOK_CMD=${HOOK_CMD//\$\{CLAUDE_PROJECT_DIR\}/$WORKSPACE}
+
+SESSION_PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vx "$VENV_DIR/bin" | paste -sd: -)
+HOOK_PAYLOAD=$(printf '{"session_id": "e2e-test", "cwd": "%s"}' "$WORKSPACE")
+
+run_hook_as_registered() {
+    printf '%s' "$HOOK_PAYLOAD" | env -u VIRTUAL_ENV \
+        PATH="$SESSION_PATH" PYTHONNOUSERSITE=1 FIRM_SRC= \
+        sh -c "cd '$WORKSPACE' && $HOOK_CMD" 2>&1 || true
+}
+
+HOOK_OUT=$(run_hook_as_registered)
+case "$HOOK_OUT" in
+    *active-roster*)
+        pass "the hook AS REGISTERED emits the roster outside the venv" ;;
+    *)
+        echo "    command: $HOOK_CMD"
+        echo "    output:  ${#HOOK_OUT} bytes"
+        fail "the registered hook emitted no roster outside the venv -- it exits 0 and says nothing, which its contract reads as 'no firm here'" ;;
+esac
+
+# RED ARM. The two arms differ by exactly one thing: the recorded interpreter
+# path. Remove it and a firm that IS here must go quiet on stdout and LOUD on
+# stderr, which is the third state the fix introduced.
+#
+# Not `-s`: the hook reads the recorded path and puts it on sys.path itself, so
+# it serves the roster whichever interpreter invoked it. An arm built on that
+# premise reports the fix as a defect.
+MARKER="$WORKSPACE/.firm/python-path"
+[ -f "$MARKER" ] || fail "no $MARKER recorded, so the red arm below would prove nothing"
+cp "$MARKER" "$MARKER.e2e-saved"
+rm -f "$MARKER"
+HOOK_OUT_RED=$(run_hook_as_registered)
+mv "$MARKER.e2e-saved" "$MARKER"
+
+case "$HOOK_OUT_RED" in
+    *active-roster*)
+        fail "RED ARM: the hook still emitted a roster with its recorded path removed, so the check above cannot discriminate" ;;
+    *"could not be imported"*)
+        pass "RED ARM: with the recorded path removed the hook goes quiet and says why" ;;
+    *)
+        echo "    output: ${#HOOK_OUT_RED} bytes"
+        fail "RED ARM: the hook emitted no roster but said nothing about why -- that silence is exactly what an empty directory looks like" ;;
+esac
+
 # ---------------------------------------------------------------------------
 # 5. Demo firm structure
 # ---------------------------------------------------------------------------
