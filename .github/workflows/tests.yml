@@ -37,7 +37,17 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
+      # Full history, not the depth-1 default. The runner fetches exactly one
+      # ref, named after the branch that was pushed:
+      #   fetch --no-tags --prune --depth=1 origin +<sha>:refs/remotes/origin/<branch>
+      # So on a push to main, origin/main exists; on a push to a lane branch it
+      # does not exist at all. tests/services/test_base_extension.py derives the
+      # dependency guard from origin/main and skips when no baseline ref
+      # resolves, so without this the guard would never actually run on the
+      # branches it exists to guard — green, and checking nothing.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

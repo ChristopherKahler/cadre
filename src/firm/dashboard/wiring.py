@@ -863,5 +863,23 @@ def commit(root: Path, firm_id: str, plan: dict[str, Any],
     except Exception as exc:
         return {"ok": False, "error": f"could not arm the policy gate: {exc}"}
 
+    # The write-back gate. This is the ONE BLOCKING Stop hook Cadre installs
+    # (ibis' ruling caps the blocking hook at one, not the number of hooks).
+    # It is armed here rather than left to the operator because the firm's own
+    # seeded rule already tells every Member to write what it learned back, and
+    # a rule nothing checks is a rule that gets skipped on exactly the runs
+    # whose lessons are worth the most.
+    #
+    # Its other half is `base cadre learn`, which writes the marker this gate
+    # reads. Installing the gate without that command would block every Member
+    # forever, so the two ship together or not at all.
+    try:
+        from firm.cli.install_hooks import install_writeback_hook
+
+        _, gate_msgs = install_writeback_hook(workspace)
+        wrote.extend(f"writeback:{m}" for m in gate_msgs[:1])
+    except Exception as exc:
+        return {"ok": False, "error": f"could not arm the write-back gate: {exc}"}
+
     return {"ok": True, "firm_id": firm_id, "wrote": wrote,
             "charter": str(workspace / "CLAUDE.md")}
