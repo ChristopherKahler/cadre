@@ -494,7 +494,7 @@ The pulse hook gives Chris Board-level visibility. The server gives Members auto
 
 ### Preserve (no changes)
 
-- `install/firm-session-pulse.py` - session-start hook entrypoint
+- `src/firm/hooks/session_pulse_entry.py` - session-start hook entrypoint (the one copy)
 - `install/hook-installer.py` - hook registration
 - `src/firm/hooks/session_pulse.py` - pulse renderer (add `<budget-health>` tag)
 - `src/firm/core/db.py` - SQLite connection helpers
