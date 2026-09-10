@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -477,3 +479,153 @@ def test_wiring_a_firm_arms_the_writeback_gate(tmp_path):
     assert blocked.returncode == 2, (
         "the wire step armed a gate that does not fire: " + blocked.stderr)
     assert "U-1" in blocked.stderr
+
+
+# ---------------------------------------------------------------------------
+# The deadlock this pair could create, and the guard against it
+# ---------------------------------------------------------------------------
+
+#: The briefing exactly as it read BEFORE the gate existed. It is the control:
+#: back then it was a harmless wrong string, because nothing checked whether a
+#: Member wrote anything back. The moment the gate shipped it became a deadlock
+#: - the Member does precisely what its briefing says, the gate blocks at exit
+#: 2, and the briefing never names the command that clears it. A guard that
+#: cannot fail on THIS text is not guarding anything.
+BRIEFING_BEFORE_THE_GATE = (
+    "Closing one: `firm unit complete <id> --member MEM-001 --outputs <file>`. "
+    "Queue follow-up with `firm unit create`, and record what you learned with "
+    "`base learn --domain <project> --entity MEM-001 --text \"...\"` before "
+    "you finish.")
+
+
+def _verb_the_gate_demands(stderr: str, unit_id: str) -> str:
+    """The command the gate really tells a Member to run, out of its own stderr.
+
+    Read off the rendered message rather than imported from a constant. Two
+    surfaces reading one constant still drift when only one of them is wired to
+    it, and that is the failure being guarded - so the guard compares what the
+    two surfaces actually SAY.
+    """
+    found = re.search(r"Record it now:\s+(.+?)\s+" + re.escape(unit_id), stderr)
+    assert found, (
+        "the gate's message no longer contains a command in the shape this "
+        f"guard reads, so it checked nothing. stderr was: {stderr!r}")
+    return found.group(1).strip()
+
+
+def _a_briefing_for(member_id: str, tmp_path: Path) -> str:
+    from firm.core import repo
+    from firm.core.db import get_db_path
+    from firm.core.migrate import apply_migrations
+    from firm.services import brief
+
+    db = get_db_path(tmp_path)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    apply_migrations(conn)
+    repo.create(conn, "firm", {"id": FIRM, "name": "Test Firm"})
+    repo.create(conn, "member", {"id": member_id, "firm_id": FIRM,
+                                 "name": "Pen", "role": "Writer"})
+    repo.create(conn, "operation", {"id": "OPS-1", "firm_id": FIRM, "name": "Ops"})
+    repo.create(conn, "project", {"id": "PRJ-1", "firm_id": FIRM,
+                                  "operation_id": "OPS-1", "name": "Alpha",
+                                  "status": "in_progress", "due_date": "2026-12-31"})
+    repo.create(conn, "unit", {"id": "UNT-1", "firm_id": FIRM, "name": "Work",
+                               "project_id": "PRJ-1",
+                               "assignee_member_id": member_id,
+                               "status": "pending"})
+    try:
+        return brief.render(conn, FIRM, member_id)
+    finally:
+        conn.close()
+
+
+def test_the_briefing_names_the_verb_the_gate_demands(tmp_path):
+    """A Member that obeys its own briefing must not be trapped by the gate.
+
+    This is the whole reason the briefing and the gate render from one
+    constant. Before the fix the briefing said `base learn --domain <project>
+    --entity MEM-001`, which records a note and writes NO marker - so a Member
+    following its instructions to the letter closed a Unit, wrote back exactly
+    as told, and was still blocked, with nothing on screen naming the command
+    that would release it.
+
+    The guard deliberately does not compare two constants. It runs the real
+    gate, reads the command out of the stderr a Member would actually see, and
+    requires the rendered briefing to contain that same command.
+    """
+    workspace = tmp_path / "firm"
+    workspace.mkdir()
+    writeback.record_closure(workspace, FIRM, ME, "U-1")
+    blocked = _run_gate(_gate_at(tmp_path), workspace)
+    assert blocked.returncode == 2, "the gate did not block, so it demanded nothing"
+
+    demanded = _verb_the_gate_demands(blocked.stderr, "U-1")
+    briefing = _a_briefing_for(ME, tmp_path / "ws")
+
+    assert demanded in briefing, (
+        f"the gate demands {demanded!r} but the briefing never names it. A "
+        f"Member that does what its briefing says is then blocked with no way "
+        f"out on screen. Briefing was:\n{briefing}")
+
+    # The control. Without it this is a substring search that would pass just
+    # as happily over a briefing that names nothing at all.
+    assert demanded not in BRIEFING_BEFORE_THE_GATE, (
+        "the control text no longer fails this guard, so the guard cannot tell "
+        "a briefing that names the right verb from one that does not")
+
+
+def test_the_briefing_does_not_send_a_member_to_a_verb_that_writes_no_marker(tmp_path):
+    """The specific wrong turn, named so it cannot come back quietly.
+
+    `base learn --domain ... --entity ...` is a real command and it does record
+    a note. That is exactly why it is dangerous here: it succeeds, so the
+    Member has no reason to think anything is wrong, and it leaves no marker,
+    so the gate keeps blocking.
+    """
+    briefing = _a_briefing_for(ME, tmp_path / "ws")
+    assert "base learn --domain" not in briefing, (
+        "the briefing sends the Member to a command that records a note and "
+        "writes no marker, which reads as success and still deadlocks")
+
+
+@pytest.mark.parametrize("verb", ["CLOSE_VERB", "WRITE_BACK_VERB"])
+def test_the_verb_a_member_is_told_to_run_actually_resolves(verb):
+    """One constant feeding both surfaces makes them agree; it does not make
+    them right.
+
+    Change the constant to nonsense and the gate and the briefing agree
+    perfectly on a command that does not exist. Every guard above stays green,
+    because they all compare the two surfaces to each other. This is the only
+    one that asks the parser.
+
+    `base cadre <x>` reaches the same argparse as `firm <x>` — the extension's
+    command handler forwards to it — so the tail is what has to resolve.
+    """
+    value = getattr(writeback, verb)
+    words = value.split()
+    assert words[:2] == ["base", "cadre"], (
+        f"{verb} is {value!r}, which is not a `base cadre ...` invocation, so "
+        f"this guard cannot tell what to resolve")
+    tail = words[2]
+    done = subprocess.run([sys.executable, "-m", "firm", tail, "--help"],
+                          capture_output=True, text=True, timeout=60,
+                          cwd=str(Path(__file__).resolve().parents[2]))
+    assert done.returncode == 0, (
+        f"{verb} tells a Member to run `{value}`, but `firm {tail} --help` "
+        f"exits {done.returncode} - the command does not exist. stderr: "
+        + (done.stderr or "").strip())
+
+
+def test_that_resolve_guard_can_actually_fail():
+    """Must-fail canary. The guard above is a subprocess check, so prove the
+    parser really does reject a verb that is not there — otherwise a broken
+    invocation would read as a pass."""
+    done = subprocess.run([sys.executable, "-m", "firm", "notaverb", "--help"],
+                          capture_output=True, text=True, timeout=60,
+                          cwd=str(Path(__file__).resolve().parents[2]))
+    assert done.returncode != 0, (
+        "the firm parser accepted a verb that does not exist, so the resolve "
+        "guard above cannot discriminate")

@@ -577,7 +577,7 @@ def main() -> int:
         "You closed " + str(len(owed)) + " Unit(s) and recorded nothing about "
         "them: " + listed + ". The next run starts from the firm's graph, so a "
         "lesson you do not write is a lesson the firm pays for twice. Record it "
-        "now: base cadre learn --unit " + first + " --text " + Q +
+        "now: __WRITE_BACK_VERB__ " + first + " --text " + Q +
         "what this taught" + Q + " "
         "-- one call per Unit listed. Use --type correction if it was a mistake "
         "worth not repeating. Then finish.",
@@ -594,8 +594,25 @@ if __name__ == "__main__":
 
 
 def render_writeback_hook() -> str:
-    """The gate script, as it lands on disk."""
-    return _WRITEBACK_HOOK_TEMPLATE
+    """The gate script, as it lands on disk.
+
+    The verb is substituted in from ``writeback.WRITE_BACK_VERB`` rather than
+    written into the template, so the command the gate demands on stderr and
+    the command the briefing tells a Member to run cannot drift apart. They
+    drifted once already, and once the gate shipped that drift stopped being a
+    typo and became a deadlock: the Member does exactly what its briefing says,
+    the gate blocks, and the briefing never names the command that clears it.
+    """
+    from firm.services.writeback import WRITE_BACK_VERB
+
+    rendered = _WRITEBACK_HOOK_TEMPLATE.replace("__WRITE_BACK_VERB__",
+                                                WRITE_BACK_VERB)
+    if "__WRITE_BACK_VERB__" in rendered:
+        raise AssertionError(
+            "the gate template's verb placeholder was renamed but this "
+            "substitution was not, so the gate would ship telling a Member to "
+            "run a literal placeholder")
+    return rendered
 
 
 def _register_writeback_hook(settings: dict) -> bool:

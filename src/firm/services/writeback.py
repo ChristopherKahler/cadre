@@ -40,6 +40,19 @@ from pathlib import Path
 from typing import Any
 
 WRITEBACK_DIRNAME = "writeback"
+
+#: The two verbs a Member is told to use, in one place because two surfaces name
+#: them and a Member obeys whichever it happens to read.
+#:
+#: Before the gate existed, a briefing naming the wrong verb cost nothing. With
+#: the gate it is a deadlock: the Member does exactly what its briefing says,
+#: the gate blocks, and the briefing never mentions the command that clears it.
+#: So the gate's stderr and the briefing are rendered from THESE, and the test
+#: that guards them compares the two rendered artifacts rather than these
+#: constants - two surfaces reading one constant still drift if only one of them
+#: is actually wired to it.
+CLOSE_VERB = "base cadre complete"
+WRITE_BACK_VERB = "base cadre learn --unit"
 OPEN_SUFFIX = ".open.json"
 LEARNED_SUFFIX = ".learned.json"
 
@@ -288,9 +301,9 @@ def run_complete(workspace: Path | None = None, *, unit_id: str,
         return code
     noted = record_closure(root, firm, member, unit_id)
     if noted["debt"]:
-        print(f"write-back owed on {unit_id} — record what it taught with "
-              f"`base cadre learn --unit {unit_id} --text \"...\"` before you "
-              "finish, or the session will not close.")
+        print(f"write-back owed on {unit_id} — record what it taught "
+              f"with `{WRITE_BACK_VERB} {unit_id} --text \"...\"` before "
+              "you finish, or the session will not close.")
     else:
         print(f"write-back for {unit_id}: {noted['reason']}")
     return 0

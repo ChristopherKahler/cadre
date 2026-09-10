@@ -199,11 +199,30 @@ def test_the_briefing_stays_small(conn):
 
 
 def test_it_names_the_route_for_closing_a_unit(conn):
+    """The route moved, and the reason is a deadlock rather than a preference.
+
+    This asserted `firm unit complete` and `base learn`. Both are real commands
+    and both still work — but neither writes the write-back marker, and the
+    Stop gate now blocks a session that closed a Unit without one. A Member
+    following the old briefing to the letter would close its Unit, write back
+    exactly as instructed, succeed at both, and still be blocked with nothing
+    on screen naming the command that releases it.
+
+    So the briefing names the two verbs that feed the gate. They are read from
+    the same constants the gate's own message is rendered from, and
+    tests/services/test_writeback.py compares the two RENDERED surfaces so they
+    cannot drift apart again.
+    """
+    from firm.services.writeback import CLOSE_VERB, WRITE_BACK_VERB
+
     _unit(conn, "UNIT-001", assignee="MEM-001")
     out = brief.render(conn, FIRM, "MEM-001")
-    assert "firm unit complete" in out
-    assert "firm unit create" in out
-    assert "base learn" in out
+    assert CLOSE_VERB in out
+    assert WRITE_BACK_VERB in out
+    assert "firm unit create" in out, "queueing follow-up work is unchanged"
+    assert "base learn --domain" not in out, (
+        "the old write-back route records a note and writes no marker, so it "
+        "reads as success and still deadlocks the session")
 
 
 def test_it_teaches_no_tool_that_does_not_exist(conn):

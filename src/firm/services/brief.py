@@ -27,6 +27,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from firm.services.writeback import CLOSE_VERB, WRITE_BACK_VERB
+
 # Read off the CHECK constraint on unit.status, not from memory:
 #   pending, in_progress, blocked, in_review, done, cancelled
 # A Unit is this Member's business until it is done or cancelled. Listing the
@@ -117,10 +119,11 @@ def render(conn: Any, firm_id: str, member_id: str | None) -> str:
             lines.append(f"Projects: {', '.join(projects)}")
 
     lines.append(
-        "Closing one: `firm unit complete <id> --member " + member_id +
-        " --outputs <file>`. Queue follow-up with `firm unit create`, and "
-        "record what you learned with `base learn --domain <project> --entity "
-        + member_id + " --text \"...\"` before you finish.")
+        "Closing one: `" + CLOSE_VERB + " <id> --outputs <file>`. That opens a "
+        "write-back debt on the Unit, and your session will not end until you "
+        "settle it: `" + WRITE_BACK_VERB + " <id> --text \"what it taught\"`, "
+        "one call per Unit you closed. Use `--type correction` for a mistake "
+        "worth not repeating. Queue follow-up work with `firm unit create`.")
     lines.append(
         "Your firm's rules and decisions arrive separately, in the "
         f"[DOMAIN: {firm_id}] and [{firm_id} CONTEXT] blocks — they are not "
