@@ -185,11 +185,21 @@ pass "no duplicate entities after re-run"
 step "8. MCP server surface (import + tool count)"
 python3 <<PY
 from firm.mcp.tools import mcp
+# 37, measured 2026-09-10 three independent ways on the same tree: the runtime
+# registry in a wheel installed into a fresh venv, the runtime registry in the
+# source checkout, and a count of @mcp.tool decorators in
+# src/firm/mcp/tools.py. It read 33 until today and the number had drifted.
+#
+# This asserts the surface has not changed by accident. It is EXPECTED to fail
+# when the MCP-to-CLI migration retires tools (docs/MCP-TO-CLI-MIGRATION.md,
+# phases 3 to 5) -- when it does, re-count and move the number, do not delete
+# the check.
+EXPECTED = 37
 count = len(mcp._tool_manager._tools)
-assert count == 33, f'expected 33 MCP tools, got {count}'
-print(f'  33 MCP tools registered')
+assert count == EXPECTED, f'expected {EXPECTED} MCP tools, got {count}'
+print(f'  {count} MCP tools registered')
 PY
-pass "MCP surface intact (33 tools)"
+pass "MCP surface intact (37 tools)"
 
 # ---------------------------------------------------------------------------
 # Done
