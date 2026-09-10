@@ -22,6 +22,23 @@ from firm.pulse.spawn import (
 )
 
 
+def _resolved_bin():
+    """Pin claude-binary resolution so a spawn test exercises Popen only.
+
+    Without this the test reads the HOST's executable format through the
+    ambient ``CADRE_CLAUDE_BIN``: ``resolve_claude_bin`` sniffs the file's
+    magic number, and off Linux the CI stub (``/bin/echo``) is Mach-O or PE,
+    so ``spawn_member_run`` aborted before ever reaching ``Popen``. Five tests
+    in this file passed on Linux and failed on macOS and Windows for that
+    reason alone. A unit test of the Popen path must not depend on what the
+    host's executables look like.
+    """
+    return mock.patch(
+        "firm.pulse.spawn.resolve_claude_bin",
+        return_value=("/usr/bin/claude-test", "test"),
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Parser tests (pure function — no subprocess)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -334,7 +351,9 @@ class TestSpawnCommand:
         mock_proc.communicate.return_value = ("", "")
         mock_proc.returncode = 0
 
-        with mock.patch("firm.pulse.spawn.subprocess.Popen", return_value=mock_proc) as mock_popen:
+        with _resolved_bin(), mock.patch(
+            "firm.pulse.spawn.subprocess.Popen", return_value=mock_proc,
+        ) as mock_popen:
             spawn_member_run("prompt")
 
         assert mock_popen.call_args.kwargs["cwd"] is None
@@ -352,7 +371,9 @@ class TestSpawnTimeout:
         ]
         mock_proc.returncode = None
 
-        with mock.patch("firm.pulse.spawn.subprocess.Popen", return_value=mock_proc):
+        with _resolved_bin(), mock.patch(
+            "firm.pulse.spawn.subprocess.Popen", return_value=mock_proc,
+        ):
             result = spawn_member_run("prompt", timeout_sec=60)
 
         assert result.timed_out is True
@@ -365,7 +386,7 @@ class TestSpawnProcessErrors:
     """Process launch failures."""
 
     def test_file_not_found(self):
-        with mock.patch(
+        with _resolved_bin(), mock.patch(
             "firm.pulse.spawn.subprocess.Popen",
             side_effect=FileNotFoundError("claude not found"),
         ):
@@ -377,7 +398,7 @@ class TestSpawnProcessErrors:
         assert result.timed_out is False
 
     def test_os_error(self):
-        with mock.patch(
+        with _resolved_bin(), mock.patch(
             "firm.pulse.spawn.subprocess.Popen",
             side_effect=OSError("permission denied"),
         ):
@@ -404,7 +425,9 @@ class TestSpawnPidTracking:
         mock_proc.communicate.side_effect = capture_communicate
         mock_proc.returncode = 0
 
-        with mock.patch("firm.pulse.spawn.subprocess.Popen", return_value=mock_proc):
+        with _resolved_bin(), mock.patch(
+            "firm.pulse.spawn.subprocess.Popen", return_value=mock_proc,
+        ):
             spawn_member_run("prompt")
 
         # During communicate, PID 42 should have been tracked
@@ -420,9 +443,17 @@ class TestSpawnPidTracking:
             ("", ""),
         ]
 
-        with mock.patch("firm.pulse.spawn.subprocess.Popen", return_value=mock_proc):
-            spawn_member_run("prompt", timeout_sec=60)
+        with _resolved_bin(), mock.patch(
+            "firm.pulse.spawn.subprocess.Popen", return_value=mock_proc,
+        ):
+            result = spawn_member_run("prompt", timeout_sec=60)
 
+        # Positive first: prove the process path actually ran. Asserting only
+        # "77 is absent" cannot tell cleanup from a spawn that never happened,
+        # and that is exactly how this test stayed green on macOS while every
+        # test around it failed.
+        assert result.pid == 77
+        assert result.timed_out is True
         assert 77 not in _active_pids
 
 
@@ -662,6 +693,8 @@ class TestUsageFallbackWithoutResult:
         })]
         parsed = parse_stream("\n".join(lines))
         assert parsed["usage"]["input_tokens"] == 0
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Executable-format probe — the regression that took CI red on two OSes
 # ═══════════════════════════════════════════════════════════════════════════

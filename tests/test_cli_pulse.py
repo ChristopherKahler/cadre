@@ -159,8 +159,17 @@ class TestRunPulseCli:
     @mock.patch("firm.cli.pulse.connect")
     @mock.patch("firm.cli.pulse.get_db_path")
     def test_normal_run(self, mock_db_path, mock_connect, mock_pulse,
-                        mock_dblock, tmp_path, capsys):
+                        mock_dblock, tmp_path, capsys, monkeypatch):
         from firm.cli.pulse import run_pulse
+
+        # run_pulse preflights the Member runtime. Left unpinned, this test
+        # reads the HOST's executable format through the ambient
+        # CADRE_CLAUDE_BIN and returns 1 ("runtime-not-wired") off Linux --
+        # the sixth of the six cross-platform spawn failures. Its siblings
+        # below already pin it the same way.
+        import firm.pulse.spawn as spawn_mod
+        monkeypatch.setattr(spawn_mod, "resolve_claude_bin",
+                            lambda: ("/bin/true", "test"))
 
         mock_db_path.return_value = tmp_path / ".firm" / "firm.db"
         (tmp_path / ".firm").mkdir()
