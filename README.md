@@ -70,7 +70,7 @@ It surfaces unclaimed Units, overloaded Members, stale Goals, and coverage gaps 
 
 ### 4. MCP server
 
-33 entity tools exposed over MCP. Members can create Units, update Goals, and request Gates programmatically mid-session — not just through slash commands.
+37 entity tools exposed over MCP. Members can create Units, update Goals, and request Gates programmatically mid-session — not just through slash commands.
 
 ---
 
@@ -142,7 +142,7 @@ One command, ~30 seconds. It's a real integration test, not a unit-test suite. I
 7. Opens the DB, verifies demo Firm structure (2 Members named Pen + Edit, 1 op, 1 project, 1 unclaimed unit)
 8. Runs `detect_gaps` against the demo DB, confirms it surfaces the unclaimed Unit
 9. Re-runs `cadre init` to verify idempotence (no duplicate entities, "already installed" message)
-10. Imports the MCP module and asserts 33 tools are registered
+10. Imports the MCP module and asserts 37 tools are registered
 
 Green checkmarks on every step = installer path works end-to-end for any user starting from a clean machine. Red X = it bails loudly at the first failure with the failing command's output.
 
@@ -183,7 +183,7 @@ Run `cadre --help` for full flags.
 
 ---
 
-## MCP surface (33 tools)
+## MCP surface (37 tools)
 
 Python FastMCP server wrapping all 10 `firm.services` modules. Full entity CRUD: `firm_*`, `member_*`, `contract_*`, `operation_*`, `project_*`, `unit_*`, `gate_*`, `goal_*`, `comment_*`, `document_*`, plus `detect_gaps` and `propose_hire`.
 
@@ -212,7 +212,7 @@ Stub templates live in [`templates/contracts/`](templates/contracts/) (OpenClaw,
 **Shipped (v0.1, 1271 tests green):**
 - 14 entity types with full CRUD, SQLite store, atomic Unit checkout, dependency cycle detection
 - PULSE handler (stateless orchestrator with frequency/budget/validation gating)
-- 10 service modules, 33 MCP tools, gap detection + propose-hire flow
+- 10 service modules, 37 MCP tools, gap detection + propose-hire flow
 - Demo Firm seed, one-command installer, session-pulse hook with auto-registration
 - Public docs, Contract runtime authoring guide, OpenClaw + Codex stub templates
 
