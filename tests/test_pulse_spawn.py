@@ -800,3 +800,32 @@ class TestResolverSpeaksTheHostsLanguage:
         assert found is None
         assert "Mach-O" in detail
         assert "ELF" not in detail
+
+
+class TestSpawnReallyExecs:
+    """The one spawn test here that mocks nothing.
+
+    Every other test in this file patches ``subprocess.Popen``, which is how a
+    probe that rejected the host's own binaries sat in ``resolve_claude_bin``
+    for months behind a green Linux suite: nothing ever exec'd anything, so
+    "the resolver returns a path" and "a Member can actually run" were never
+    the same claim. This drives the whole function against a real process --
+    argv build, exec, pid tracking, capture, cleanup.
+    """
+
+    def test_spawn_execs_a_real_host_binary_and_captures_it(self, monkeypatch):
+        # sys.executable is a real native image on every platform: ELF on
+        # Linux, Mach-O on macOS, PE on Windows. So this also proves the
+        # format probe accepts the host's OWN binaries, which is the whole
+        # regression. The claude flags are not valid interpreter options, so
+        # it exits immediately without reading stdin -- the point is that it
+        # execs at all, not what it prints.
+        monkeypatch.setenv("CADRE_CLAUDE_BIN", sys.executable)
+
+        result = spawn_member_run("hello", timeout_sec=60)
+
+        assert "spawn aborted before exec" not in result.stderr
+        assert isinstance(result.pid, int) and result.pid > 0
+        assert result.returncode is not None
+        assert result.timed_out is False
+        assert result.pid not in _active_pids
