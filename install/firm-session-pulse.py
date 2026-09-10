@@ -20,6 +20,32 @@ import sys
 from pathlib import Path
 
 
+def _force_utf8_streams() -> None:
+    """Take stdin and stdout off the platform locale encoding.
+
+    On Windows a piped stdout defaults to cp1252, and the pulse output carries
+    an em dash today and could carry anything tomorrow. Measured on Windows 10
+    / Python 3.12.6 with a U+2192 in the output: as shipped the write raises
+    UnicodeEncodeError and the hook exits 1 having printed nothing; with the
+    streams reconfigured it writes the character and exits 0.
+
+    That failure is worse than it looks. The last-resort guard below turns any
+    exception into exit 0, and this hook is documented as silent when there is
+    no firm here, so an encoding crash is indistinguishable from an empty
+    workspace: the operator sees nothing and concludes nothing is wrong.
+
+    stdin matters for the same reason - Claude Code sends the payload as
+    UTF-8, and a cp1252 decode of a workspace path raises UnicodeDecodeError,
+    which is a ValueError, which the caller catches and answers with
+    Path.cwd(). Silently the wrong workspace.
+    """
+    for stream in (sys.stdin, sys.stdout):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass  # already replaced, or not a real stream: nothing to do
+
+
 def _resolve_workspace() -> Path | None:
     """Read stdin JSON and return the workspace path, or None if unavailable."""
     try:
@@ -59,6 +85,7 @@ def _add_firm_package_to_path(workspace: Path) -> bool:
 
 
 def main() -> int:
+    _force_utf8_streams()
     workspace = _resolve_workspace()
     if workspace is None:
         return 0

@@ -428,7 +428,8 @@ def install_policy_hook(workspace: Path) -> tuple[int, list[str]]:
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings = _load_settings(settings_path)
     if _register_policy_hook(settings):
-        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n",
+                                 encoding="utf-8")
         messages.append(f"Registered policy gate in {settings_path}")
     else:
         messages.append(f"Policy gate already registered in {settings_path}")
@@ -458,7 +459,8 @@ def install_hooks(workspace: Path) -> tuple[int, list[str]]:
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings = _load_settings(settings_path)
     if _register_hook(settings):
-        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n",
+                                 encoding="utf-8")
         messages.append(f"Registered hook in {settings_path}")
     else:
         messages.append(f"Hook already registered in {settings_path}")

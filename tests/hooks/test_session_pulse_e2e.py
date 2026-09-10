@@ -21,6 +21,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from firm.core.db import connect, get_db_path
 from firm.core.migrate import apply_migrations
 from firm.core.repo import ALL_TABLES, create
@@ -28,6 +30,17 @@ from firm.core.repo import ALL_TABLES, create
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENTRYPOINT = REPO_ROOT / "install" / "firm-session-pulse.py"
 GOLDEN = REPO_ROOT / "tests" / "golden" / "session-pulse-chrisai.txt"
+
+# These two tests run a file from the repo checkout, not from the installed
+# package, so a suite run detached from the checkout cannot execute them.
+# Without this the entrypoint is simply missing, python exits 2, and the
+# assertion reads "assert 2 == 0" - which was reported as a Windows
+# portability failure on 2026-09-10 and was nothing of the kind. Say what
+# is absent instead of failing blind.
+needs_checkout = pytest.mark.skipif(
+    not ENTRYPOINT.exists() or not GOLDEN.exists(),
+    reason=f"needs the repo checkout: {ENTRYPOINT} / {GOLDEN}",
+)
 
 FIXED_NOW_ISO = "2026-04-15 20:00:00"
 # updated_at values chosen so the time_ago renderer produces stable labels
@@ -147,12 +160,21 @@ def _run_hook(workspace: Path) -> subprocess.CompletedProcess[str]:
         "FIRM_SRC": str(REPO_ROOT / "src"),
         "PYTHONPATH": str(REPO_ROOT / "src"),
     }
+    # Deliberately cleared. A developer machine with PYTHONIOENCODING set
+    # gives the child a UTF-8 stdout for free and hides every locale
+    # defect in the hook; CI and a fresh Windows install have it unset.
+    # The test has to measure the default, not the ambient shell.
+    env.pop("PYTHONIOENCODING", None)
+    # encoding is explicit on both sides. text=True alone decodes with the
+    # platform locale, which is cp1252 on Windows, so the comparison below
+    # would be measuring the console code page rather than the hook.
     return subprocess.run(
         [sys.executable, str(ENTRYPOINT)],
         input=payload,
         env=env,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=10,
     )
 
@@ -161,6 +183,7 @@ def _run_hook(workspace: Path) -> subprocess.CompletedProcess[str]:
 # AC-6: end-to-end subprocess + golden file + read-only invariant
 # ---------------------------------------------------------------------------
 
+@needs_checkout
 def test_entrypoint_output_matches_golden(tmp_path: Path) -> None:
     _seed_chrisai_full(tmp_path)
     db_path = get_db_path(tmp_path)
@@ -171,7 +194,7 @@ def test_entrypoint_output_matches_golden(tmp_path: Path) -> None:
     assert result.returncode == 0, f"non-zero exit: {result.returncode}\nstderr: {result.stderr}"
     assert result.stderr == "", f"unexpected stderr: {result.stderr!r}"
 
-    expected = GOLDEN.read_text()
+    expected = GOLDEN.read_text(encoding="utf-8")
     assert result.stdout == expected, (
         "Golden mismatch. If this is an intentional format change, "
         "regenerate with: "
@@ -183,6 +206,38 @@ def test_entrypoint_output_matches_golden(tmp_path: Path) -> None:
     assert before == after, f"hook mutated DB. before={before} after={after}"
 
 
+@needs_checkout
+def test_entrypoint_survives_a_name_the_locale_cannot_encode(tmp_path: Path) -> None:
+    """A Member name outside the platform locale must not silence the hook.
+
+    Measured on Windows 10 / Python 3.12.6 with PYTHONIOENCODING unset: a
+    piped stdout defaults to cp1252, and writing U+014D raised
+    UnicodeEncodeError, exit 1, nothing on stdout. In the hook that exception
+    meets the last-resort guard and becomes exit 0 with no output - which the
+    documented contract says means "no firm here". The operator sees an empty
+    pulse and concludes everything is fine.
+
+    Runs on every platform. On Linux it locks the behaviour; on Windows it is
+    the actual red arm.
+    """
+    _seed_chrisai_full(tmp_path)
+    name = "Zo\u00eb \u014ctani"
+    conn = sqlite3.connect(get_db_path(tmp_path))
+    try:
+        conn.execute("UPDATE member SET name = ? WHERE id = 'MEM-002'", (name,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = _run_hook(tmp_path)
+
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+    assert name in result.stdout, (
+        f"the name did not survive the hook's stdout\n--- stdout ---\n"
+        f"{result.stdout}\n--- stderr ---\n{result.stderr}")
+
+
+@needs_checkout
 def test_entrypoint_silent_when_db_missing(tmp_path: Path) -> None:
     # No .firm/ directory seeded — hook must exit 0 silently.
     result = _run_hook(tmp_path)

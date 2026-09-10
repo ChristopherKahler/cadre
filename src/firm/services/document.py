@@ -11,6 +11,7 @@ Records events: document.created, document.status_transition, document.updated
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 import sqlite3
 from typing import Any
@@ -33,6 +34,23 @@ DOCUMENT_AUTHOR_TYPES = ["member", "board"]
 _VERSION_RE = re.compile(r"^(?P<head>.*?)-v(?P<n>\d+)$")
 
 
+def logical_path(content_path: str) -> str:
+    """Normalize a document path to its stored, portable form.
+
+    ``content_path`` is a repo-relative IDENTIFIER held in ``firm.db``, not
+    a local filesystem path. The same row is read by a dashboard on Linux
+    and by a firm on Windows, and is matched string-for-string against
+    paths other firms produced. ``os.path`` builds it with the platform
+    separator, so a Windows firm stored ``docs/story\\ch07-v2.md`` and that
+    row matched nothing anywhere else.
+
+    Forward slashes, always, on every platform. Backslashes that arrive
+    from a Windows caller are folded in, so a path written on Windows and
+    a path written on Linux reduce to the same identity.
+    """
+    return content_path.replace("\\", "/")
+
+
 def _next_version_path(content_path: str, current_version: int) -> str:
     """Compute the next never-overwrite version path for a deliverable.
 
@@ -41,8 +59,8 @@ def _next_version_path(content_path: str, current_version: int) -> str:
     as v1 and becomes ``foo-v2.md``. This keeps every version on disk so the
     Board can diff v1↔v2. Directory and extension are preserved.
     """
-    directory, base = os.path.split(content_path)
-    stem, ext = os.path.splitext(base)
+    directory, base = posixpath.split(logical_path(content_path))
+    stem, ext = posixpath.splitext(base)
     m = _VERSION_RE.search(stem)
     if m:
         nxt = int(m.group("n")) + 1
@@ -50,7 +68,8 @@ def _next_version_path(content_path: str, current_version: int) -> str:
     else:
         nxt = max(current_version, 1) + 1
         new_stem = f"{stem}-v{nxt}"
-    return os.path.join(directory, f"{new_stem}{ext}") if directory else f"{new_stem}{ext}"
+    return posixpath.join(directory, f"{new_stem}{ext}") if directory \
+        else f"{new_stem}{ext}"
 
 
 def _version_family(content_path: str) -> str:
@@ -62,17 +81,19 @@ def _version_family(content_path: str) -> str:
     as a version bump instead of forking a sibling row — the live
     chief-of-staff DOC-001 case, where v3 arrived with no v2 registered.
     """
-    directory, base = os.path.split(content_path)
-    stem, ext = os.path.splitext(base)
+    directory, base = posixpath.split(logical_path(content_path))
+    stem, ext = posixpath.splitext(base)
     m = _VERSION_RE.search(stem)
     if m:
         stem = m.group("head")
-    return os.path.join(directory, f"{stem}{ext}") if directory else f"{stem}{ext}"
+    return posixpath.join(directory, f"{stem}{ext}") if directory \
+        else f"{stem}{ext}"
 
 
 def _version_of(content_path: str) -> int:
     """The version a path declares. No ``-vN`` marker means v1."""
-    stem, _ext = os.path.splitext(os.path.basename(content_path))
+    stem, _ext = posixpath.splitext(posixpath.basename(
+        logical_path(content_path)))
     m = _VERSION_RE.search(stem)
     return int(m.group("n")) if m else 1
 
@@ -311,7 +332,10 @@ def register_deliverable(
             f"deliverable not found on disk: {path} — the artifact must exist "
             "before it can be registered"
         )
-    rel = os.path.relpath(abspath, os.path.abspath(cwd)) if cwd else abspath
+    # relpath builds with the platform separator; the DB wants the logical
+    # form, so a Windows firm and a Linux firm write the same identifier.
+    rel = logical_path(
+        os.path.relpath(abspath, os.path.abspath(cwd)) if cwd else abspath)
 
     siblings = repo.find(conn, "document", firm_id=firm_id)
 

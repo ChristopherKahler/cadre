@@ -21,6 +21,38 @@ from pathlib import Path
 from firm import __version__
 
 
+def _force_utf8_streams() -> None:
+    """Take the CLI's own output off the platform locale encoding.
+
+    Cadre prints check marks, crosses, arrows and box-drawing characters.
+    Python encodes stdout with the platform locale, which on Windows is
+    cp1252 for a pipe or a file and the console code page for a terminal.
+    None of those can represent U+2713 or U+2192, so the command does not
+    print a degraded line - it raises UnicodeEncodeError and exits 1.
+
+    Measured on Windows 10 / Python 3.12.6 against the installed wheel, with
+    stdout piped:
+
+        cadre doctor          rc 1, UnicodeEncodeError on U+2713
+        cadre templates list  rc 1, UnicodeEncodeError on U+2192
+
+    Both work interactively on a terminal that is already UTF-8 and die the
+    moment output is redirected to a file, piped into another command, or
+    captured by a script - which is exactly when an operator is trying to
+    keep a record of what the tool said.
+
+    UTF-8 with errors="replace": a redirect or a pipe now gets the real
+    characters, a UTF-8 terminal renders them, and a legacy code-page console
+    shows a substitute glyph instead of a traceback. Nothing exits 1 over a
+    character any more.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass  # already wrapped, or not a real stream
+
+
 def _build_parser() -> argparse.ArgumentParser:
     prog_name = Path(sys.argv[0]).name if sys.argv and sys.argv[0] else "cadre"
     if prog_name.endswith(".py"):
@@ -774,6 +806,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_streams()
     parser = _build_parser()
     args = parser.parse_args(argv)
 
