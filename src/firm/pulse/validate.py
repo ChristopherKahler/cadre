@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import re
+import shutil
+import sys
 from typing import Any, Callable
 
 
@@ -251,6 +254,84 @@ def _validate_file_exists(
     return {"name": "file_exists", "passed": True, "message": msg}
 
 
+# ---------------------------------------------------------------------------
+# Running a check script
+# ---------------------------------------------------------------------------
+
+#: Windows ships System32\\bash.exe as a launcher for WSL, and the
+#: WindowsApps entry as an app-execution alias stub. Neither is a Windows
+#: bash. Handing either one a native path sends it into a Linux shell,
+#: which eats every separator: a script at C:\\work\\verify.sh comes back
+#: as "C:workverify.sh: No such file or directory", exit 127. Measured on
+#: Windows 10, Python 3.12.6 - the same script run through the Git for
+#: Windows bash returns its real exit code instead.
+_NOT_A_WINDOWS_BASH = (
+    "\\windows\\system32\\",
+    "\\windows\\sysnative\\",
+    "\\windowsapps\\",
+)
+
+NO_BASH_HINT = (
+    "no usable bash found. The bash.exe on PATH is the WSL launcher, which "
+    "cannot take a Windows path. Install Git for Windows, or point "
+    "CADRE_BASH_BIN at a bash that accepts one."
+)
+
+
+def find_bash() -> str | None:
+    """A bash that can run a check script named by a native path.
+
+    CADRE_BASH_BIN wins, matching the CADRE_CLAUDE_BIN escape hatch the spawn
+    layer already offers. Off Windows this is whatever bash is on PATH. On
+    Windows it refuses the WSL launcher and falls back to the bash that ships
+    with Git for Windows, which is a Windows program and takes Windows paths.
+    """
+    override = (os.environ.get("CADRE_BASH_BIN") or "").strip()
+    if override:
+        return override if os.path.exists(override) else None
+
+    found = shutil.which("bash")
+    if sys.platform != "win32":
+        return found
+    if found and not any(m in found.lower() for m in _NOT_A_WINDOWS_BASH):
+        return found
+
+    candidates = []
+    git = shutil.which("git")
+    if git:
+        # <git>/cmd/git.exe or <git>/bin/git.exe -> <git>/bin/bash.exe
+        candidates.append(os.path.join(
+            os.path.dirname(os.path.dirname(git)), "bin", "bash.exe"))
+    for var in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+        base = os.environ.get(var)
+        if base:
+            candidates.append(os.path.join(base, "Git", "bin", "bash.exe"))
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        candidates.append(
+            os.path.join(local, "Programs", "Git", "bin", "bash.exe"))
+    for cand in candidates:
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+def _script_runner(script: str) -> tuple[list[str], str]:
+    """argv to run an AC check script, or an empty argv and the reason why not.
+
+    A .py check runs under the interpreter cadre is running under. "python3"
+    was wrong twice over on Windows: the name on PATH is a Microsoft Store
+    alias stub rather than an interpreter, and even where it does resolve it
+    is not the firm venv, so the check would run without the firm deps.
+    """
+    if script.endswith(".py"):
+        return [sys.executable, script], ""
+    bash = find_bash()
+    if not bash:
+        return [], NO_BASH_HINT
+    return [bash, script], ""
+
+
 def _validate_ac_script(
     result: dict[str, Any],
     cwd: str,
@@ -277,8 +358,6 @@ def _validate_ac_script(
     check. Scripts must resolve inside the firm workspace; paths escaping it
     are ignored.
     """
-    import os
-    import re
     import subprocess
 
     if not unit:
@@ -345,7 +424,10 @@ def _validate_ac_script(
         if not os.path.exists(script):
             failures.append(f"{rel}: referenced by an AC but does not exist")
             continue
-        runner = ["bash", script] if not script.endswith(".py") else ["python3", script]
+        runner, why = _script_runner(script)
+        if not runner:
+            failures.append(f"{rel}: {why}")
+            continue
         try:
             proc = subprocess.run(
                 runner, cwd=cwd, capture_output=True, text=True,

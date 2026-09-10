@@ -16,6 +16,8 @@ import json
 import os
 from pathlib import Path
 
+from firm.secrets.fsperm import restrict_to_owner
+
 
 class VaultError(RuntimeError):
     """Vault could not be read or written — message carries the remediation."""
@@ -57,10 +59,13 @@ def ensure_master_key() -> bytes:
         return path.read_bytes().strip()
     from cryptography.fernet import Fernet  # surface ImportError via _fernet path
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    restrict_to_owner(path.parent, is_dir=True)
     key = Fernet.generate_key()
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "wb") as fh:
         fh.write(key)
+    # The 0o600 above is a no-op on Windows, which has no mode bits.
+    restrict_to_owner(path)
     return key
 
 
@@ -104,3 +109,5 @@ def write_vault(path: Path, data: dict[str, str]) -> None:
     with os.fdopen(fd, "wb") as fh:
         fh.write(token)
     os.replace(tmp, path)
+    # After the replace, so the restriction lands on the file that survives.
+    restrict_to_owner(path)

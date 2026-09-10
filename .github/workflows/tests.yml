@@ -1,7 +1,19 @@
 # Cross-platform portability net — every push proves the suite on all three
-# OSes. Linux and macOS run everything; Windows runs the portable core
-# (scheduler backends, armory, equip, floor, preflight, dashboards) while the
-# POSIX-flavored shell/hook tests are ported incrementally.
+# OSes, and all three now run the whole suite.
+#
+# Until 2026-09-10 the Windows job ran a -k filter that deselected 1081 of
+# 1321 tests, with a comment saying the POSIX-flavored tests were "ported
+# incrementally". Nobody could say which 1081, or why, or whether the number
+# was moving. It was also hiding failures rather than only skipping tests:
+# measured on Windows 10 / Python 3.12.6, the unfiltered suite failed 15 while
+# the filtered one reported 3. The Windows leg had been red on every run for a
+# month and nobody reported it, because the previous round graded the
+# clean-install job and not the workflow as a whole.
+#
+# Windows support was never 18%. It was 98.9%, with a handful of real defects
+# the filter was keeping out of sight. The tests that genuinely cannot run on
+# a platform now carry an explicit skip naming the defect they wait on, listed
+# in tests/platform_marks.py, so the count is a number anyone can read.
 #
 # The clean-install job below is the one that has to stay. See issue #3: a
 # dependency with no upper bound resolved to a major version that removed a
@@ -35,27 +47,25 @@ jobs:
       # to it. Passing -q here as well gives pytest two of them, and the second
       # suppresses the summary line. The count was never truly lost, since it
       # can be recovered by counting the progress characters, but nobody should
-      # have to count dots to learn whether a suite passed. On the Windows job
-      # this matters more than readability: -k selects a subset there, so the
-      # number of tests actually chosen was invisible until the summary
-      # returned it.
+      # have to count dots to learn whether a suite passed.
       - name: Full suite (POSIX)
         if: runner.os != 'Windows'
-        run: python -m pytest tests -o addopts="-ra -q"
+        run: python -m pytest tests -o addopts="-ra"
         env:
           PYTHONPATH: src
           # The spawn layer refuses to run without a wired claude runtime —
           # a real guard in production, a stub in CI (every spawn is mocked).
           CADRE_CLAUDE_BIN: /bin/echo
-      - name: Portable core (Windows)
+      # Same suite, same flags. The only difference is the stub runtime, and
+      # PYTHONIOENCODING left unset on purpose: setting it hands every child
+      # process a UTF-8 stdout for free and hides exactly the locale defects
+      # this leg exists to catch.
+      - name: Full suite (Windows)
         if: runner.os == 'Windows'
-        run: >
-          python -m pytest tests -o addopts="-ra -q"
-          -k "sched or inventory or equip or floor or preflight or heartbeat
-          or dashboard or launch or secrets or sysconfig or snapshot or
-          seedkit or db or notify"
+        run: python -m pytest tests -o addopts="-ra"
         env:
           PYTHONPATH: src
+          CADRE_CLAUDE_BIN: C:\Windows\System32\cmd.exe
 
   clean-install:
     name: clean install from the built wheel
@@ -103,7 +113,7 @@ jobs:
       - name: Run the suite against the installed package
         run: |
           /tmp/clean/bin/python -m pip install pytest
-          /tmp/clean/bin/python -m pytest tests -o addopts="-ra -q"
+          /tmp/clean/bin/python -m pytest tests -o addopts="-ra"
         env:
           CADRE_CLAUDE_BIN: /bin/echo
 
