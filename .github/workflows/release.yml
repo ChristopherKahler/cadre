@@ -1,13 +1,22 @@
-# Release — fires only on a version tag, never on a push to a branch.
+# Release — runs on a version tag, and on a manual dispatch as a dry run.
 #
-# What it does today: builds the wheel and the source distribution, proves the
-# wheel installs into an empty environment and imports, and attaches both files
-# to a GitHub Release.
+# On a TAG: builds the wheel and the source distribution, proves the wheel
+# installs into an empty environment and imports, checks the tag matches the
+# packaged version, and attaches both files to a GitHub Release.
 #
-# What it deliberately does NOT do: publish to PyPI. That step is written below
-# and stays skipped until the repository actually has a PYPI_API_TOKEN secret,
-# so tagging can never publish by accident before the Board decides to. Nothing
-# here needs editing when that day comes; adding the secret is the whole switch.
+# On a MANUAL dispatch: builds and proves the install, then stops. The tag
+# check and the Release attachment are both skipped, because on a manual run
+# the ref is a branch and there is no tag to compare against or release to.
+# That is the dry run: it answers "would this build and install" without
+# creating anything. Every step below that only makes sense for a real tag
+# carries `if: github.ref_type == 'tag'` so it cannot fire on a branch.
+#
+# What it deliberately does NOT do: publish to PyPI. That job is written below
+# and stays skipped until the repository variable PUBLISH_TO_PYPI is set to
+# the string "true", so tagging can never publish by accident before the Board
+# decides to. There is no API token to add: the publish step uses PyPI trusted
+# publishing over OIDC, which is why the job asks for `id-token: write` and
+# stores no secret at all. Setting that one variable is the whole switch.
 name: release
 
 on:
@@ -46,12 +55,19 @@ jobs:
           /tmp/rel/bin/cadre --version
           /tmp/rel/bin/firm --version
 
+      # Tags only. On a manual dispatch the ref is a branch, so there is no
+      # tag to compare and this step would always fail — an advertised trigger
+      # that can never pass. Gating on ref_type also removes the need for an
+      # emptiness guard on TAG: a ref named exactly "v" used to strip to the
+      # empty string and skip the comparison in silence, which is a check
+      # passing by finding nothing. It now compares every time it runs.
       - name: Check that the tag matches the packaged version
+        if: github.ref_type == 'tag'
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           PKG=$(/tmp/rel/bin/python -c "import importlib.metadata as m; print(m.version('cadre'))")
           echo "tag=$TAG packaged=$PKG"
-          if [ -n "$TAG" ] && [ "$TAG" != "$PKG" ]; then
+          if [ "$TAG" != "$PKG" ]; then
             echo "The tag and the packaged version disagree. Fix pyproject.toml or the tag." >&2
             exit 1
           fi
@@ -61,7 +77,10 @@ jobs:
           name: dist
           path: dist/
 
+      # Tags only, for the same reason. A manual dry run must not create a
+      # GitHub Release named after a branch.
       - name: Attach the distribution to the GitHub Release
+        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
@@ -71,8 +90,10 @@ jobs:
     name: publish to PyPI
     needs: build
     runs-on: ubuntu-latest
-    # Stays skipped until the secret exists. This is the switch: no secret,
-    # no publish, and a tag remains a safe thing to push.
+    # Stays skipped until the repository VARIABLE PUBLISH_TO_PYPI is set to
+    # "true". That variable is the switch, not a secret: the step below
+    # publishes over OIDC trusted publishing and holds no token. Until the
+    # variable is set, a tag remains a safe thing to push.
     if: ${{ vars.PUBLISH_TO_PYPI == 'true' }}
     environment: pypi
     permissions:

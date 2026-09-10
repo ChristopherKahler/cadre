@@ -73,12 +73,19 @@ the working version months earlier, while `pip install cadre` was broken for
 anyone starting fresh. **An editable install in a warm environment cannot see
 that class of break. A wheel installed into an empty environment can.**
 
-**`release.yml`** fires only on a version tag. It builds the wheel and source
-distribution, proves the wheel installs and imports from an empty environment,
-checks the tag matches the packaged version, and attaches both files to a
-GitHub Release. Publishing to PyPI is written but stays skipped until the
-repository has the credentials for it, so pushing a tag can never publish by
-accident.
+**`release.yml`** runs on a version tag, and on a manual dispatch as a dry
+run. On a tag it builds the wheel and source distribution, proves the wheel
+installs and imports from an empty environment, checks the tag matches the
+packaged version, and attaches both files to a GitHub Release. On a manual
+dispatch it builds and proves the install, then stops: the tag check and the
+Release attachment are gated on `github.ref_type == 'tag'`, because on a
+manual run the ref is a branch and there is nothing to compare or release.
+
+Publishing to PyPI is written but stays skipped until the repository variable
+`PUBLISH_TO_PYPI` is set to `true`, so pushing a tag can never publish by
+accident. There are no credentials to add: the publish step uses PyPI trusted
+publishing over OIDC and stores no token. Setting that one variable is the
+whole switch.
 
 ### Two rules for anything added to the pipeline
 
