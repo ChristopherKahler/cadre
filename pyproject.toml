@@ -49,7 +49,8 @@ Homepage = "https://github.com/ChristopherKahler/cadre"
 where = ["src"]
 
 [tool.setuptools.package-data]
-firm = ["migrations/*.sql", "dashboard/*.html", "dashboard/next/*.html", "templates/**/*"]
+firm = ["migrations/*.sql", "dashboard/*.html", "dashboard/next/*.html",
+        "templates/**/*", "base_ext/*.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

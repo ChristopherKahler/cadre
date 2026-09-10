@@ -223,6 +223,40 @@ def test_render_refuses_a_manifest_with_no_placeholder(tmp_path, monkeypatch):
         base_extension.render("/opt/cadre")
 
 
+def test_the_wheel_is_told_to_carry_the_manifest():
+    """A manifest in the repo that the wheel leaves behind ships nothing.
+
+    `pip install cadre` copies only what package-data names. Without this entry
+    the file sits in git, every test here passes, and the installed package has
+    no manifest at all — the failure would only show on someone else's machine.
+    Proven for real by scripts/verify/verify_packaging.py, which builds a wheel
+    and opens it; this is the cheap guard that keeps the line from being lost.
+    """
+    import tomllib
+    root = base_extension.manifest_source().parent.parent.parent.parent
+    pyproject = root / "pyproject.toml"
+    if not pyproject.exists():          # installed, not a source checkout
+        pytest.skip(f"no pyproject at {pyproject} — not a source checkout")
+    parsed = tomllib.load(pyproject.open("rb"))
+    package_data = parsed["tool"]["setuptools"]["package-data"]["firm"]
+    assert "base_ext/*.toml" in package_data, (
+        f"package-data does not carry base_ext, so a wheel drops the manifest: "
+        f"{package_data}")
+
+
+def test_the_packaging_change_added_no_dependency():
+    """heron merges the packaging lane's branch first, so this branch touches
+    the package-data section and nothing else in that file."""
+    import tomllib
+    root = base_extension.manifest_source().parent.parent.parent.parent
+    pyproject = root / "pyproject.toml"
+    if not pyproject.exists():
+        pytest.skip("not a source checkout")
+    parsed = tomllib.load(pyproject.open("rb"))
+    assert parsed["project"]["dependencies"] == ["mcp>=1.0", "cryptography>=42"], (
+        "a dependency moved on this branch; that hunk belongs to the packaging lane")
+
+
 def test_the_shipped_manifest_is_inside_the_package():
     src = base_extension.manifest_source()
     assert src.exists(), f"{src} is missing, so pip install cadre ships no manifest"
