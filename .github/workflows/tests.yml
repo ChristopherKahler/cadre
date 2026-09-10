@@ -33,8 +33,12 @@ jobs:
         run: python -m pip install -e ".[dev]" || python -m pip install -e . pytest
       # -o addopts=... overrides pyproject's own "-ra -q" rather than adding
       # to it. Passing -q here as well gives pytest two of them, and the second
-      # suppresses the summary line, so the job would pass with no count in the
-      # log at all. A check that cannot report its number is decoration.
+      # suppresses the summary line. The count was never truly lost, since it
+      # can be recovered by counting the progress characters, but nobody should
+      # have to count dots to learn whether a suite passed. On the Windows job
+      # this matters more than readability: -k selects a subset there, so the
+      # number of tests actually chosen was invisible until the summary
+      # returned it.
       - name: Full suite (POSIX)
         if: runner.os != 'Windows'
         run: python -m pytest tests -o addopts="-ra -q"

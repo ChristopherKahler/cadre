@@ -118,5 +118,4 @@ two platforms join the required set when #25 and #26 are fixed. Tracked in #27.
 commit is the stricter practice, but a commit pin also stops receiving security
 patches, so it is only safe once someone has checked the advisories for the
 commit being pinned. That check has not been done, and pinning without it would
-trade one risk for a quieter one. Tracked as its own issue rather than done
-half way.
+trade one risk for a quieter one. Tracked in #30 rather than done half way.
