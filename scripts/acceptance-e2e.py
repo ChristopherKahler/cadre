@@ -393,19 +393,56 @@ def main() -> int:
                      "gets no roster and nothing reports it. Check that the "
                      "registered interpreter is the one that has `firm`."))
 
-            # RED ARM. Without it, a green row above could mean the harness
+            # RED ARM. Without one, a green row above could mean the harness
             # cannot tell a working hook from a broken one.
-            rc_b, out_b = run([sys.executable, "-s", str(hook)],
-                              cwd=ws, stdin_text=payload)
-            b.add(PASS if "active-roster" not in out_b else FAIL,
-                  "RED ARM: an interpreter without cadre emits no roster",
-                  f"rc={rc_b} stdout={len(out_b)} bytes\n"
-                  + ("correctly produced no roster" if "active-roster" not in out_b
-                     else "this interpreter DID produce a roster, so the row "
-                          "above cannot distinguish a working hook from a "
-                          "broken one — most likely an editable-install .pth "
-                          "in user site-packages is making `firm` importable "
-                          "everywhere. Re-measure with -s."))
+            #
+            # This arm used to run the hook under `-s` and require no roster,
+            # on the reasoning that an interpreter without cadre cannot serve
+            # one. That stopped being true when the interpreter fix landed: the
+            # hook now reads the path recorded in `.firm/python-path`, puts it
+            # on sys.path itself, and serves the roster whichever interpreter
+            # Claude Code invoked. The old arm went FAIL on main while the row
+            # above went PASS -- the harness calling a fix a defect.
+            #
+            # So the discriminator is the recorded path, and the two arms now
+            # differ by exactly one thing. Remove the marker and a firm that IS
+            # here must go silent on stdout and LOUD on stderr, which is the
+            # third state the fix introduced. User site stays suppressed in
+            # both arms: without that, bare python3 on a developer box reaches
+            # `firm` through an editable-install .pth no matter what the marker
+            # says, and this arm would pass for the wrong reason.
+            marker = ws / ".firm" / "python-path"
+            saved = marker.read_bytes() if marker.is_file() else None
+            if saved is None:
+                b.add(FAIL, "RED ARM: the recorded interpreter path exists to "
+                            "be removed",
+                      f"{marker} is not a file, so the arm below would prove "
+                      "nothing. cadre init --install-hooks is supposed to "
+                      "record it.")
+            else:
+                try:
+                    marker.unlink()
+                    rc_b, out_b = run(argv, cwd=ws, stdin_text=payload,
+                                      env={"PYTHONNOUSERSITE": "1",
+                                           "FIRM_SRC": ""})
+                finally:
+                    marker.write_bytes(saved)
+                quiet = "active-roster" not in out_b
+                loud = "could not be imported" in out_b and "paths tried" in out_b
+                b.add(PASS if quiet and loud else FAIL,
+                      "RED ARM: with the recorded path removed the hook goes "
+                      "quiet and says why",
+                      f"rc={rc_b} output={len(out_b)} bytes\n"
+                      + ("correctly emitted no roster and named the "
+                         "interpreter and the paths it tried"
+                         if quiet and loud else
+                         ("it STILL emitted a roster, so the row above cannot "
+                          "distinguish a working hook from a broken one"
+                          if not quiet else
+                          "it emitted no roster but said nothing about why. "
+                          "That is the silent-success failure the fix exists "
+                          "to remove: an operator sees the same nothing as an "
+                          "empty directory.")))
 
             # Green above is still not proof a USER gets a roster. On a
             # developer box bare `python3` reaches `firm` through an
