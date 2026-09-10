@@ -576,8 +576,10 @@ def _build_parser() -> argparse.ArgumentParser:
     # ---- heartbeat subparser ----
     heartbeat_parser = subparsers.add_parser(
         "heartbeat",
-        help="Autonomous pulse cadence — manage the per-firm systemd user "
-             "timer that fires `cadre pulse` on an interval.",
+        help="Autonomous pulse cadence — manage the per-firm timer that "
+             "fires `cadre pulse` on an interval, through the host "
+             "scheduler: systemd user timers on Linux/WSL2, launchd on "
+             "macOS, Task Scheduler on Windows.",
     )
     heartbeat_sub = heartbeat_parser.add_subparsers(dest="heartbeat_command")
 
