@@ -22,6 +22,7 @@ thing that can say the manifest actually landed.
 from __future__ import annotations
 
 import os
+import sys
 import shutil
 import subprocess
 import tempfile
@@ -29,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 PLACEHOLDER = "{{framework_dir}}"
+HANDLER_PLACEHOLDER = "{{handler}}"
 
 
 def manifest_source() -> Path:
@@ -49,25 +51,61 @@ def framework_root() -> Path:
     return firm_pkg.parent
 
 
+def console_script() -> Path:
+    """This machine's `cadre` console script — the thing base must actually run.
+
+    There is no single relative path that works everywhere, which is the whole
+    of F1. `bin/cadre` resolved against framework_dir is correct in a source
+    checkout, where framework_dir is the repo root, and wrong from an installed
+    wheel, where framework_dir is site-packages and `site-packages/bin/cadre`
+    exists on neither platform.
+
+    A venv puts its console scripts beside its interpreter — `bin/` on POSIX,
+    `Scripts/` on Windows, with `.exe` — so `sys.executable` is the honest
+    anchor for an installed package. A source checkout is preferred when it has
+    a real `bin/cadre`, because that is what a developer is actually running.
+    """
+    repo = framework_root() / "bin" / "cadre"
+    if repo.exists():
+        return repo
+    here = Path(sys.executable).parent
+    return here / ("cadre.exe" if os.name == "nt" else "cadre")
+
+
 def render(framework_dir: Path | str | None = None) -> str:
-    """The manifest with its one machine-specific value filled in."""
+    """The manifest with its machine-specific values filled in."""
     root = Path(framework_dir) if framework_dir else framework_root()
     text = manifest_source().read_text(encoding="utf-8")
     if PLACEHOLDER not in text:
         raise ValueError(
             f"{manifest_source()} carries no {PLACEHOLDER}; refusing to install a "
             "manifest whose framework_dir was hard-coded for another machine")
-    return text.replace(PLACEHOLDER, root.as_posix())
+    if HANDLER_PLACEHOLDER not in text:
+        raise ValueError(
+            f"{manifest_source()} carries no {HANDLER_PLACEHOLDER}; refusing to "
+            "install a manifest whose handler was hard-coded for another "
+            "machine — that is F1, where the handler pointed at a path that "
+            "exists on no platform and every check still read clean")
+    return (text.replace(PLACEHOLDER, root.as_posix())
+                .replace(HANDLER_PLACEHOLDER, console_script().as_posix()))
 
 
 def _base_env() -> dict[str, str]:
-    env = {"HOME": str(Path.home()),
-           "PATH": os.environ.get("PATH") or "/usr/bin:/bin"}
-    for passthrough in ("BASE_HOME", "XDG_CONFIG_HOME"):
-        value = os.environ.get(passthrough)
-        if value:
-            env[passthrough] = value
-    return env
+    """The env every `base` call gets. ONE definition, deliberately.
+
+    This was a second copy of base_domain's helper. They drifted the moment
+    one of them was fixed: base_domain's learned to carry USERPROFILE so a
+    spawned Cadre could find a home directory on Windows, and this one did
+    not, so `cadre extension install` kept dying with
+
+        RuntimeError: Could not determine home directory.
+
+    while every other base call had been repaired. Two copies of an
+    environment builder is two chances to configure a subprocess wrong.
+    """
+    from firm.services.base_domain import _base_env as _shared
+
+    return _shared()
 
 
 def _installed_path() -> Path:
@@ -86,7 +124,8 @@ def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
     from firm.sysconfig.service import which_base
 
     result: dict[str, Any] = {"ok": False, "validated": False, "installed": False,
-                              "read_back": False, "path": "", "reason": ""}
+                              "read_back": False, "handler_runs": False,
+                              "handler": "", "path": "", "reason": ""}
     base = which_base()
     if not base:
         result["reason"] = "base is not installed — the extension is skipped, not failed"
@@ -137,7 +176,51 @@ def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
             result["reason"] = (f"{landed} still carries {PLACEHOLDER} — the "
                                 "framework directory never got filled in")
             return result
+        if HANDLER_PLACEHOLDER in on_disk:
+            result["reason"] = (f"{landed} still carries {HANDLER_PLACEHOLDER} — "
+                                "the handler never got filled in")
+            return result
         result["read_back"] = True
+
+        # THE CHECK THAT F1 GOT PAST, and the reason it got past it.
+        #
+        # Everything above reads back the TOML: it landed, it is ours, its
+        # placeholders are filled. All of that was TRUE while `base cadre`
+        # was dead on every installed copy, because the handler pointed at
+        # `site-packages/bin/cadre`, which exists on no platform. This
+        # function's own docstring promised it never claims an install it did
+        # not read back, and it was reading back the wrong noun.
+        #
+        # So: run the command. `base cadre --help` is cheap, has no side
+        # effects, and fails exactly when a Member would fail. A manifest that
+        # installs and cannot run is worse than one that refuses to install,
+        # because the refusal is visible and this was not.
+        handler = console_script()
+        result["handler"] = str(handler)
+        if not handler.exists():
+            result["reason"] = (
+                f"the manifest installed but its handler {handler} does not "
+                "exist, so every `base cadre <verb>` would fail")
+            return result
+        try:
+            ran = subprocess.run(
+                [base, "cadre", "--help"],
+                capture_output=True, text=True, timeout=60,
+                cwd=str(Path.cwd()), env=env, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            result["reason"] = f"the handler could not be run: {exc}"
+            return result
+        if ran.returncode != 0:
+            # The LAST line, never the first. The first line of a Python
+            # traceback is always "Traceback (most recent call last):", which
+            # names nothing — reporting it hid a real RuntimeError behind a
+            # constant string on this check's very first live run.
+            detail = (ran.stderr or ran.stdout or "").strip().splitlines()
+            result["reason"] = (
+                "the manifest installed and read back, but `base cadre` does "
+                "not run: " + (detail[-1][:200] if detail else f"rc={ran.returncode}"))
+            return result
+        result["handler_runs"] = True
         result["ok"] = True
         result["reason"] = f"installed and read back from {landed}"
         return result
@@ -146,3 +229,45 @@ def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
         return result
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def run_install(framework_dir: Path | str | None = None) -> int:
+    """`cadre extension install`. Installs the manifest into base, returns 0.
+
+    Until this existed, the only way to wire a firm's base extension was
+
+        python -c "from firm.services import base_extension; base_extension.install()"
+
+    which is the shape of step that gets skipped. A journey step an operator
+    cannot perform with a command is a journey step most operators will not
+    perform, and this one is the whole point of the extension: without the
+    manifest in base, `base cadre brief`, `base cadre learn` and `base cadre
+    complete` do not resolve at all.
+
+    Exit codes carry the same three-way answer `install` already returns, and
+    the middle one is the one worth keeping:
+
+        0  installed and read back, or base is not on this machine
+        1  base is here and refused
+
+    base being absent is NOT a failure. A licensee may not carry base, and a
+    firm without it is degraded, never broken — the same contract
+    `base_domain.sync` keeps. Exiting 1 there would make a host setup fact
+    read as a Cadre defect, which is exactly the shape of every instrument
+    failure this repo has been fixing all week.
+    """
+    import sys
+
+    result = install(framework_dir)
+    if result.get("ok"):
+        print(result.get("reason") or "installed")
+        if result.get("handler_runs"):
+            print(f"handler runs: {result['handler']}")
+        return 0
+    reason = result.get("reason", "unknown")
+    if "not installed" in reason:
+        # Absent, not broken. Say so on stdout and leave rc 0.
+        print(f"skipped: {reason}")
+        return 0
+    print(f"Error: {reason}", file=sys.stderr)
+    return 1

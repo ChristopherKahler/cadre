@@ -16,8 +16,10 @@ first test below is what stops that coming back.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -191,11 +193,30 @@ def test_exactly_one_prompt_domain_and_it_is_firm_neutral():
 
 
 def test_the_command_block_is_intact():
+    """The handler is a PLACEHOLDER in the shipped manifest, never a path.
+
+    It read `bin/cadre`, resolved against framework_dir. In a source checkout
+    framework_dir is the repo root and that path exists, which is exactly why
+    this assertion passed for the life of the file. From an installed wheel
+    framework_dir is site-packages, and `site-packages/bin/cadre` exists on
+    NEITHER platform — so `base cadre` validated, installed, read back clean,
+    and was dead on every real install (F1, found by sandpiper on Windows and
+    reproduced on a Linux venv from the same wheel).
+
+    A literal path in the shipped file is the defect. Asserting the
+    placeholder is what stops it coming back.
+    """
     parsed = _parsed()
     commands = parsed["commands"]
     assert len(commands) == 1
     assert commands[0]["name"] == "cadre"
-    assert commands[0]["handler"] == "bin/cadre"
+    raw = base_extension.manifest_source().read_text(encoding="utf-8")
+    assert base_extension.HANDLER_PLACEHOLDER in raw, (
+        "the shipped manifest hard-codes a handler path again; there is no one "
+        "relative path that resolves in both a checkout and a wheel")
+    assert 'handler = "bin/cadre"' not in raw, (
+        "handler is back to bin/cadre, which resolves to site-packages/bin/cadre "
+        "from an installed wheel and exists on no platform")
 
 
 def test_the_version_moved_past_the_manifest_it_replaces():
@@ -466,7 +487,13 @@ def test_install_validates_before_installing(monkeypatch, fake_base):
     monkeypatch.setattr(subprocess, "run", run)
     _land(fake_base)
     res = base_extension.install("/opt/cadre")
-    assert run.verbs == ["validate", "install"], "validate must come first, every time"
+    # Three verbs now, and the third is the point. `validate` then `install`
+    # proved the file was acceptable and landed; neither of them proves the
+    # command RUNS, which is how F1 shipped. `base cadre --help` is the arm
+    # that fails exactly when a Member would fail.
+    assert run.verbs == ["validate", "install", "--help"], (
+        "validate must come first, install second, and the handler must be "
+        f"exercised third — got {run.verbs}")
     assert res["ok"] is True
     assert res["read_back"] is True
 
@@ -534,3 +561,157 @@ def test_install_passes_base_home_through(monkeypatch, fake_base):
     _land(fake_base)
     base_extension.install("/opt/cadre")
     assert seen.get("BASE_HOME") == str(fake_base)
+
+
+# ---------------------------------------------------------------------------
+# `cadre extension install` — the step that had no command behind it
+# ---------------------------------------------------------------------------
+
+def test_the_install_command_reports_the_path_it_read_back(fake_base, capsys,
+                                                           monkeypatch):
+    """Success prints what `install` proved, not what it attempted."""
+    monkeypatch.setattr(subprocess, "run", _Run(0, 0))
+    _land(fake_base)
+    code = base_extension.run_install("/opt/cadre")
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "read back" in out, f"the command claims success it did not read back: {out!r}"
+
+
+def test_base_absent_is_not_a_failure_of_this_firm(capsys, monkeypatch):
+    """rc 0, on purpose, and this is the arm worth arguing about.
+
+    A licensee may not carry base at all. Exiting non-zero there turns a host
+    setup fact into a Cadre defect — the same shape as every instrument
+    failure this repo has spent the week removing, where a check that could
+    not run reported that the thing it checks is broken.
+    """
+    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: None)
+    code = base_extension.run_install()
+    captured = capsys.readouterr()
+    assert code == 0, "a machine without base was reported as a firm defect"
+    assert "skipped" in captured.out
+    assert captured.err == "", "an expected, benign outcome wrote to stderr"
+
+
+def test_base_refusing_the_install_is_a_failure(fake_base, capsys, monkeypatch):
+    """The other direction, and the reason the arm above is not just leniency.
+
+    Without this, `run_install` could return 0 unconditionally and both the
+    success test and the base-absent test would still pass. base being present
+    and saying no is a real failure and has to be loud.
+    """
+    monkeypatch.setattr(subprocess, "run", _Run(1))
+    code = base_extension.run_install("/opt/cadre")
+    captured = capsys.readouterr()
+    assert code == 1, "base refused the install and the command reported success"
+    assert "Error" in captured.err
+
+
+def test_the_install_command_is_reachable_from_the_cli():
+    """A function nobody can call from a shell is not a command.
+
+    The runbook step this replaces was a `python -c`, so the whole point is
+    that `cadre extension install` resolves through argparse. Checked by
+    running the parser rather than by reading __main__.py.
+    """
+    done = subprocess.run(
+        [sys.executable, "-m", "firm", "extension", "install", "--help"],
+        capture_output=True, text=True, timeout=60,
+        cwd=str(Path(__file__).resolve().parents[2]))
+    assert done.returncode == 0, done.stderr
+    assert "--framework-dir" in done.stdout
+
+
+def test_that_cli_reachability_check_can_fail():
+    """Must-fail canary for the check above — a subprocess check that cannot
+    fail proves nothing about the one that can."""
+    done = subprocess.run(
+        [sys.executable, "-m", "firm", "extension", "notaverb", "--help"],
+        capture_output=True, text=True, timeout=60,
+        cwd=str(Path(__file__).resolve().parents[2]))
+    assert done.returncode != 0, (
+        "the parser accepted an extension subcommand that does not exist")
+
+# ---------------------------------------------------------------------------
+# F1: installed, validated, read back — and dead
+# ---------------------------------------------------------------------------
+
+def test_the_handler_points_at_a_console_script_that_exists(tmp_path, monkeypatch):
+    """`console_script()` must name a real file, in both shapes of install.
+
+    Source checkout: `<root>/bin/cadre`, which is what a developer runs.
+    Installed wheel: the console script beside the interpreter — `bin/cadre`
+    on POSIX, `Scripts\\cadre.exe` on Windows. `sys.executable` is the honest
+    anchor there, because a venv puts its scripts beside its python and
+    site-packages has no `bin/` at all.
+    """
+    # Real checkout: the repo's own bin/cadre.
+    resolved = base_extension.console_script()
+    assert resolved.exists(), f"{resolved} does not exist in this checkout"
+
+    # Installed shape: no bin/cadre beside the package, so fall to the venv.
+    fake_site = tmp_path / "site-packages"
+    (fake_site / "firm").mkdir(parents=True)
+    monkeypatch.setattr(base_extension, "framework_root", lambda: fake_site)
+    fake_venv = tmp_path / "venv"
+    scripts = fake_venv / ("Scripts" if os.name == "nt" else "bin")
+    scripts.mkdir(parents=True)
+    monkeypatch.setattr(sys, "executable", str(scripts / "python"))
+    installed = base_extension.console_script()
+    assert installed.parent == scripts, (
+        f"an installed package resolved its handler to {installed}, which is "
+        "not beside the interpreter — this is F1's shape")
+    assert "site-packages" not in str(installed), (
+        "the handler resolved under site-packages again; site-packages/bin/cadre "
+        "exists on neither platform")
+
+
+def test_render_leaves_no_handler_placeholder():
+    out = base_extension.render("/opt/cadre")
+    assert base_extension.HANDLER_PLACEHOLDER not in out
+    line = [l for l in out.splitlines() if l.startswith("handler")][0]
+    assert "bin/cadre" not in line or Path(line.split('"')[1]).is_absolute(), (
+        "the rendered handler is relative; base resolves it against "
+        "framework_dir and that is what killed it from a wheel")
+
+
+def test_install_refuses_when_the_handler_is_missing(fake_base, monkeypatch, tmp_path):
+    """The check F1 got past, stated as a test.
+
+    Everything about the TOML can be perfect — landed, ours, placeholders
+    filled — while the command it points at does not exist. `install` used to
+    return ok on exactly that state, and its docstring promised it never
+    claims an install it did not read back. It was reading back the wrong noun.
+    """
+    monkeypatch.setattr(subprocess, "run", _Run(0, 0, 0))
+    _land(fake_base)
+    monkeypatch.setattr(base_extension, "console_script",
+                        lambda: tmp_path / "nowhere" / "cadre")
+    res = base_extension.install("/opt/cadre")
+    assert res["ok"] is False
+    assert res["read_back"] is True, "the TOML really did land; that was never the issue"
+    assert res["handler_runs"] is False
+    assert "does not exist" in res["reason"]
+
+
+def test_install_refuses_when_the_handler_cannot_run(fake_base, monkeypatch):
+    """The other half: the handler exists and `base cadre` still fails."""
+    monkeypatch.setattr(subprocess, "run", _Run(0, 0, 1))
+    _land(fake_base)
+    res = base_extension.install("/opt/cadre")
+    assert res["ok"] is False
+    assert res["read_back"] is True
+    assert res["handler_runs"] is False
+    assert "does not run" in res["reason"]
+
+
+def test_a_healthy_install_reports_the_handler_it_proved(fake_base, monkeypatch):
+    """The positive control on the two above — without it they would both pass
+    over an `install` that refuses everything."""
+    monkeypatch.setattr(subprocess, "run", _Run(0, 0, 0))
+    _land(fake_base)
+    res = base_extension.install("/opt/cadre")
+    assert res["ok"] is True
+    assert res["handler_runs"] is True
+    assert res["handler"], "a healthy install did not say which handler it ran"

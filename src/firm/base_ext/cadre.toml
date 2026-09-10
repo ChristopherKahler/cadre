@@ -147,6 +147,18 @@ action = "reingest"
 # command field may be added after this point — see the state_dir note above.
 [[commands]]
 name = "cadre"
-handler = "bin/cadre"
+# Filled in by firm.services.base_extension.render, like framework_dir above.
+# It is an ABSOLUTE path to this machine's `cadre` console script, and it has to
+# be, because there is no one relative path that works everywhere:
+#
+#   source checkout   <root>/bin/cadre
+#   installed wheel   <venv>/bin/cadre  or  <venv>\Scripts\cadre.exe
+#
+# It used to read `bin/cadre`, resolved against framework_dir. In a source
+# checkout framework_dir IS the repo root and that path exists, which is why
+# every test passed. From an installed wheel framework_dir is site-packages,
+# and site-packages/bin/cadre exists on NEITHER platform - so `base cadre`
+# validated, installed, read back clean, and died on every real install.
+handler = "{{handler}}"
 description = "Cadre firm CLI — brief a member, record what it learned, close its work, and run the firm"
 usage = "base cadre <brief|learn|complete|pulse|unit|doctor> [flags]"

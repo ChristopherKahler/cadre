@@ -662,3 +662,83 @@ def test_the_gate_message_survives_a_legacy_code_page(tmp_path):
         f"pipe on the Windows leg cannot round-trip")
     # And the positive half: it really does decode on the narrow code page.
     assert "U-1" in done.stderr.decode("cp1252")
+
+
+# ---------------------------------------------------------------------------
+# Authority: a Board decision, not a crash
+# ---------------------------------------------------------------------------
+
+def _firm_with_one_unit(root: Path) -> None:
+    from firm.core import repo
+    from firm.core.db import get_db_path
+    from firm.core.migrate import apply_migrations
+
+    db = get_db_path(root)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    apply_migrations(conn)
+    repo.create(conn, "firm", {"id": FIRM, "name": "Test Firm"})
+    repo.create(conn, "member", {"id": ME, "firm_id": FIRM, "name": "Pen",
+                                 "role": "Writer", "status": "active"})
+    repo.create(conn, "operation", {"id": "OPS-1", "firm_id": FIRM, "name": "Ops"})
+    repo.create(conn, "project", {"id": "PRJ-1", "firm_id": FIRM,
+                                  "operation_id": "OPS-1", "name": "Alpha",
+                                  "status": "in_progress", "due_date": "2026-12-31"})
+    repo.create(conn, "unit", {"id": "UNT-1", "firm_id": FIRM, "name": "Work",
+                               "project_id": "PRJ-1", "assignee_member_id": ME,
+                               "status": "pending"})
+    conn.commit()
+    conn.close()
+
+
+def test_closing_without_the_board_s_grant_explains_itself(tmp_path, capsys,
+                                                           monkeypatch):
+    """A Member without authority gets the escalation route, not a traceback.
+
+    `complete_unit` raises AuthorityError, and nothing caught it — so the
+    Member saw a Python stack ending in `AuthorityError: authority_required`.
+    That reads as Cadre crashing rather than as a Board decision, and a Member
+    that believes the framework is broken stops using the verb instead of
+    raising the escalation the error is telling it to raise.
+
+    Fixed at `run_unit_complete`, which is where it escaped, so `firm unit
+    complete` gets it too and not only `base cadre complete`.
+    """
+    from firm.cli.unit import run_unit_complete
+
+    _firm_with_one_unit(tmp_path)
+    monkeypatch.setenv("CADRE_MEMBER_ID", ME)
+
+    code = run_unit_complete(tmp_path, "UNT-1", ME, firm_id=FIRM)
+    captured = capsys.readouterr()
+
+    assert code == 1, "an ungranted close must fail, not succeed quietly"
+    assert "authority_required" in captured.err
+    assert "escalation raise" in captured.err, (
+        "the denial does not carry the route out, so the Member is stuck: "
+        + captured.err)
+    assert "Traceback" not in captured.err
+
+
+def test_closing_with_the_grant_still_works(tmp_path, capsys, monkeypatch):
+    """The other direction. Without it the test above passes just as happily
+    over a `complete` that refuses everybody."""
+    from firm.cli.unit import run_unit_complete
+    from firm.core.db import get_db_path
+    from firm.services.authority import grant_authority
+
+    _firm_with_one_unit(tmp_path)
+    conn = sqlite3.connect(get_db_path(tmp_path))
+    conn.row_factory = sqlite3.Row
+    grant_authority(conn, ME)
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setenv("CADRE_MEMBER_ID", ME)
+    code = run_unit_complete(tmp_path, "UNT-1", ME, firm_id=FIRM)
+    captured = capsys.readouterr()
+
+    assert code == 0, "a granted Member could not close its own Unit: " + captured.err
+    assert "completed UNT-1" in captured.out

@@ -460,6 +460,28 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Workspace containing .firm/firm.db (defaults to current directory).",
     )
 
+    # ---- extension subparser ----
+    # The one step of "make base the engine for this firm" that had no command
+    # behind it. It was a `python -c` in the runbook, which is the shape of
+    # step that gets skipped.
+    ext_parser = subparsers.add_parser(
+        "extension",
+        help="The firm's base extension — install the Cadre manifest into "
+             "base so `base cadre <verb>` resolves.",
+    )
+    ext_sub = ext_parser.add_subparsers(dest="extension_command", required=True,
+                                        metavar="<extension-command>")
+    ext_install = ext_sub.add_parser(
+        "install",
+        help="Render, validate, install and read the manifest back. Exits 0 "
+             "when base is not installed at all — a firm without base is "
+             "degraded, never broken.",
+    )
+    ext_install.add_argument(
+        "--framework-dir", dest="framework_dir", default=None,
+        help="Where Cadre is installed. Defaults to the package's own root, "
+             "which is what a normal install wants.")
+
     # ---- doctor subparser ----
     doctor_parser = subparsers.add_parser(
         "doctor",
@@ -907,6 +929,12 @@ def main(argv: list[str] | None = None) -> int:
 
         return run_brief(args.workspace, firm_id=args.firm_id,
                          member_id=args.member_id)
+
+    if args.command == "extension":
+        if args.extension_command == "install":
+            from firm.services.base_extension import run_install
+
+            return run_install(args.framework_dir)
 
     if args.command == "learn":
         from firm.services.writeback import run_learn

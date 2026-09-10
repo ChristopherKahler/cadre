@@ -21,7 +21,7 @@ from typing import Any
 
 from firm.core import repo
 from firm.core.db import connect, get_db_path, resolve_firm_id
-from firm.services.authority import MEMBER_ID_ENV
+from firm.services.authority import MEMBER_ID_ENV, AuthorityError
 from firm.services.document import register_deliverable
 from firm.services.unit import complete_unit, create_unit
 
@@ -248,13 +248,26 @@ def run_unit_complete(
         # Route through the service so the status flip, audit record, and AC
         # rollup stay one transaction — calling on_unit_done directly left
         # unit.status untouched and pulses re-dispatched finished work.
-        result = complete_unit(
-            conn,
-            firm_id,
-            unit_id,
-            member_id,
-            run_id=run_id,
-        )
+        try:
+            result = complete_unit(
+                conn,
+                firm_id,
+                unit_id,
+                member_id,
+                run_id=run_id,
+            )
+        except AuthorityError as exc:
+            # A Member without the Board's grant is a normal, expected answer,
+            # and the error already carries the route out of it. Letting it
+            # escape printed a raw traceback instead, which reads as Cadre
+            # crashing rather than as a decision the Member can act on — and a
+            # Member that believes the framework is broken stops using the
+            # verb rather than raising the escalation.
+            payload = getattr(exc, "payload", {}) or {}
+            print(f"Error: {payload.get('error', 'authority_required')} — "
+                  f"{member_id} may not {payload.get('action', 'unit.complete')}. "
+                  f"{payload.get('hint', '')}".rstrip(), file=sys.stderr)
+            return 1
         if not result.get("ok"):
             reason = result.get("reason", "unknown")
             print(f"Error: {reason} — {json.dumps(result)}", file=sys.stderr)
