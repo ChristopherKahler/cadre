@@ -21,14 +21,14 @@ A firm = a workspace folder + a SQLite entity DB + AI Members spawned as headles
 ```
 ~/firms/<folder>/                  # folder name is operator-facing ONLY — the firm id lives in the DB firm row
 ├── CLAUDE.md                      # charter — binds every session opened in the workspace (§ below)
-├── .venv/                         # WSL-only venv, editable install of the cadre framework
+├── .venv/                         # host-local venv, editable install of the cadre framework
 ├── .mcp.json                      # the ONLY MCP servers members get (spawn passes --strict-mcp-config)
 ├── .claude/
 │   ├── settings.json              # SessionStart hook → session-pulse.sh
 │   ├── hooks/                     # session-pulse trio (roster/gates/goals injection) — copy from chrisai, sed paths
 │   └── commands/pulse.md          # /pulse — the Board Proxy governance protocol
 ├── .firm/
-│   ├── firm.db                    # ALL entities (SQLite, WAL). WSL-only access. Never raw-UPDATE state.
+│   ├── firm.db                    # ALL entities (SQLite, WAL). Host-local access only. Never raw-UPDATE state.
 │   ├── last-pulse.json            # outcome of the last pulse (ran/skipped/errors/skip_reasons)
 │   ├── protocols/                 # *.md here injects into EVERY member's prompt
 │   │   ├── 10-squad.md            # (optional) squad protocol, if the squad tool is installed
@@ -168,7 +168,7 @@ reap stale runs → business-hours gate → filter members (active, load>0, freq
 
 - `load>0` means: has claimed units OR assigned-unclaimed pending units. **`skip_reasons: {"load=0": N}` is the "create/assign work" signal, not a bug.**
 - Spawn = `claude --print --dangerously-skip-permissions --strict-mcp-config --mcp-config <ws>/.mcp.json [--model X]`, binary from `CADRE_CLAUDE_BIN` → login-shell PATH.
-- A live pulse holds `pulse.lock` (flock) and blocks until the slowest member finishes (20–40 min): from a session, detach with `systemd-run --user --collect` — nohup/setsid/disown die with `wsl.exe` teardown. Dry-run is read-only and lock-free.
+- A live pulse takes the **DB-row pulse lock** (`firm/pulse/dblock.py`, migration `006_pulse_lock_queue.sql` — it replaced the machine-local `.firm/pulse.lock` flock so multiplayer firms can pulse from several machines) and blocks until the slowest member finishes (20–40 min). Never run one inside a request thread or a foreground session: detach it through the platform scheduler, `firm.sched.resolve_scheduler().spawn_detached()`, which is `systemd-run --user --collect` on Linux, `launchd` on macOS and a `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` process on Windows. On Linux, nohup/setsid/disown still die with `wsl.exe` teardown, which is why the scheduler exists. Dry-run is read-only and lock-free.
 - Chained units CAN complete in one pulse: the topo-sorted sequential loop runs upstream members first; downstream run in the same pulse once their dependency is done.
 
 ---
@@ -305,7 +305,7 @@ git init && git add -A && git commit -m "acme: firm scaffold + seed"
 ## 7. Gotchas — the complete bite list (each one cost something once)
 
 **Environment / runtime**
-1. WSL is the firm's world: venv, DB access, pulses — all WSL-only. Never touch `firm.db` over `\\wsl.localhost`, never pulse from a Windows shell. Charter §0 preface is law; copy it verbatim.
+1. **One host owns the firm**: its venv, DB access and pulses all run on the host its workspace lives on. For a WSL-hosted firm that means WSL — never touch `firm.db` over `\\wsl.localhost` and never pulse it from a Windows shell. For a Windows-hosted firm it means Windows, and reaching in from WSL is the same mistake in the other direction. Cadre is host-neutral (`firm.sched` covers systemd, launchd and Windows Task Scheduler); the law is locality, not a platform. Charter §0 preface says this; copy it verbatim.
 2. Detached work from sessions: `systemd-run --user --collect` only. nohup/setsid die with the terminal.
 3. 3-second member deaths, returncode 1, empty stderr = spawn environment (PATH, `CADRE_CLAUDE_BIN`, wrong host world) — never member quality.
 4. `sqlite3` CLI may not be installed — diagnose with `.venv/bin/python` + the `sqlite3` module (read-only). Writes: services only, always.
@@ -319,7 +319,7 @@ git init && git add -A && git commit -m "acme: firm scaffold + seed"
 10. No `notify_config` = silent firm: gates and escalations never reach the Board.
 
 **MCP**
-11. `.mcp.json` launches natively (`command: "bash", args: ["-lc", "... exec .venv/bin/python -m firm.mcp.server"]`) — a `wsl.exe` hop silently fails for WSL-native pulse spawns and the member improvises without firm tools.
+11. `.mcp.json` launches **natively on the firm's own host** (`command: "bash", args: ["-lc", "... exec .venv/bin/python -m firm.mcp.server"]` on Linux/WSL) — never a cross-boundary hop. A `wsl.exe` hop silently fails for WSL-native pulse spawns, because `wsl.exe` is not on PATH there, and the member then improvises without firm tools. The same applies in reverse on a Windows-hosted firm: launch it with the Windows interpreter, not through WSL.
 12. Spawn passes `--mcp-config` + `--strict-mcp-config` unconditionally: members get the firm's servers only. No `.mcp.json` = no MCP tools, by design.
 13. `mcp_degraded` in run notes = an expected server showed no evidence of connecting. The authoritative record is claude's per-project MCP debug log (`~/.cache/claude-cli-nodejs/<cwd>/mcp-logs-<server>/*.jsonl`) — the init snapshot races ahead of connects; `pending` alone is NOT a failure.
 
