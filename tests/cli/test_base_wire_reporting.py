@@ -27,7 +27,7 @@ from firm.cli import doctor as doctor_mod
 from firm.core.db import get_db_path
 from firm.core.migrate import apply_migrations
 from firm.core.repo import create
-from firm.dashboard import founding
+from firm.services import base_domain
 
 
 class _Proc:
@@ -55,13 +55,13 @@ def _wire(monkeypatch, *, base_present=True, scaffold_rc=0, sync_result=None):
 
 
 # ---------------------------------------------------------------------------
-# founding._scaffold_base_graph — the three states, separately
+# base_domain.wire_workspace — the three states, separately
 # ---------------------------------------------------------------------------
 
 def test_a_live_wire_reports_live(monkeypatch, ws):
     _wire(monkeypatch, sync_result={"ok": True, "changed": True,
                                     "keywords": ["zqfirm"], "rule_seeded": True})
-    res = founding._scaffold_base_graph(ws, "zqfirm", {})
+    res = base_domain.wire_workspace(ws, "zqfirm", {})
     assert (res["scaffolded"], res["domain_ok"], res["rule_seeded"], res["live"]) \
         == (True, True, True, True)
 
@@ -71,7 +71,7 @@ def test_a_failed_rule_seed_is_not_live_and_says_why(monkeypatch, ws):
     rules, and the old code called it wired."""
     _wire(monkeypatch, sync_result={"ok": True, "changed": True,
                                     "keywords": ["zqfirm"], "rule_seeded": False})
-    res = founding._scaffold_base_graph(ws, "zqfirm", {})
+    res = base_domain.wire_workspace(ws, "zqfirm", {})
     assert res["scaffolded"] is True, "the tier really was created"
     assert res["domain_ok"] is True, "and the block really was written"
     assert res["rule_seeded"] is False
@@ -83,7 +83,7 @@ def test_a_failed_rule_seed_is_not_live_and_says_why(monkeypatch, ws):
 def test_a_missing_domain_block_is_not_live(monkeypatch, ws):
     _wire(monkeypatch, sync_result={"ok": False, "changed": False,
                                     "reason": "no .base/domains.toml"})
-    res = founding._scaffold_base_graph(ws, "zqfirm", {})
+    res = base_domain.wire_workspace(ws, "zqfirm", {})
     assert res["scaffolded"] is True
     assert res["domain_ok"] is False
     assert res["live"] is False
@@ -92,7 +92,7 @@ def test_a_missing_domain_block_is_not_live(monkeypatch, ws):
 
 def test_base_absent_is_degraded_not_broken(monkeypatch, ws):
     _wire(monkeypatch, base_present=False)
-    res = founding._scaffold_base_graph(ws, "zqfirm", {})
+    res = base_domain.wire_workspace(ws, "zqfirm", {})
     assert res["scaffolded"] is False
     assert res["live"] is False
     assert "degraded, not broken" in res["detail"]
@@ -100,7 +100,7 @@ def test_base_absent_is_degraded_not_broken(monkeypatch, ws):
 
 def test_a_failed_scaffold_carries_the_exit_code(monkeypatch, ws):
     _wire(monkeypatch, scaffold_rc=3)
-    res = founding._scaffold_base_graph(ws, "zqfirm", {})
+    res = base_domain.wire_workspace(ws, "zqfirm", {})
     assert res["scaffolded"] is False
     assert "exited 3" in res["detail"]
 
@@ -112,7 +112,7 @@ def test_a_scaffold_that_cannot_run_is_not_a_silent_false(monkeypatch, ws):
         raise OSError("no such binary")
 
     monkeypatch.setattr(subprocess, "run", _boom)
-    res = founding._scaffold_base_graph(ws, "zqfirm", {})
+    res = base_domain.wire_workspace(ws, "zqfirm", {})
     assert res["scaffolded"] is False
     assert "did not run" in res["detail"]
 
@@ -128,7 +128,7 @@ def test_three_inputs_give_three_distinguishable_answers(monkeypatch, ws):
     ]
     for sync_result, expect in cases:
         _wire(monkeypatch, sync_result=sync_result)
-        r = founding._scaffold_base_graph(ws, "zqfirm", {})
+        r = base_domain.wire_workspace(ws, "zqfirm", {})
         got = (r["scaffolded"], r["domain_ok"], r["rule_seeded"])
         seen.append(got)
         assert got == expect
