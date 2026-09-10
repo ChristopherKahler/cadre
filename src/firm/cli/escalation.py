@@ -18,13 +18,14 @@ from pathlib import Path
 from typing import Any
 
 from firm.core.db import db_connection, resolve_firm_id
+from firm.services.authority import caller_member_id
 from firm.services.escalation import raise_escalation
 
 
 def run_escalation_raise(
     workspace: Path,
     *,
-    raised_by_member_id: str,
+    raised_by_member_id: str | None = None,
     title: str,
     body: str = "",
     severity: str = "normal",
@@ -33,9 +34,27 @@ def run_escalation_raise(
     firm_id: str | None = None,
 ) -> int:
     """Raise an escalation in *workspace*'s firm DB. JSON to stdout, errors to
-    stderr. Returns 0 on success, 1 on a structured failure."""
+    stderr. Returns 0 on success, 1 on a structured failure.
+
+    *raised_by_member_id* falls back to ``$CADRE_MEMBER_ID`` via
+    :func:`caller_member_id`, the same resolution ``firm gate request`` uses.
+    A Member run always has that variable exported, so it does not have to be
+    told its own id to escalate. Absent both, this is a hard error rather than
+    an empty actor: an Escalation records WHO is asking, and a blank there
+    would fail deeper down with a message about an id that was never given.
+    """
+    requester = raised_by_member_id or caller_member_id()
+    if not requester:
+        print(json.dumps({
+            "ok": False,
+            "error": "no member identity — pass --member MEM-xxx, or run "
+                     "inside a Member session where $CADRE_MEMBER_ID is set. "
+                     "An Escalation records WHO is asking.",
+        }), file=sys.stderr)
+        return 1
+
     data: dict[str, Any] = {
-        "raised_by_member_id": raised_by_member_id,
+        "raised_by_member_id": requester,
         "title": title,
     }
     if body:
