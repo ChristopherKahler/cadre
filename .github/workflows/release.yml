@@ -90,11 +90,20 @@ jobs:
     name: publish to PyPI
     needs: build
     runs-on: ubuntu-latest
-    # Stays skipped until the repository VARIABLE PUBLISH_TO_PYPI is set to
-    # "true". That variable is the switch, not a secret: the step below
-    # publishes over OIDC trusted publishing and holds no token. Until the
-    # variable is set, a tag remains a safe thing to push.
-    if: ${{ vars.PUBLISH_TO_PYPI == 'true' }}
+    # Two conditions, and both are load-bearing.
+    #
+    # The repository VARIABLE PUBLISH_TO_PYPI must be the string "true". That
+    # variable is the switch, not a secret: the step below publishes over OIDC
+    # trusted publishing and holds no token.
+    #
+    # The ref must also be a tag. Before the manual dry run was made to pass,
+    # this job was locked shut by accident: a manual dispatch always failed the
+    # tag check, so `build` failed, so `publish` could never reach its own
+    # condition. Fixing the dry run removed that accidental lock, which would
+    # have left a manual dispatch from ANY branch able to build that branch and
+    # publish it the day the variable was set. Publishing to PyPI cannot be
+    # undone, so the gate is explicit rather than inherited from a failure.
+    if: ${{ vars.PUBLISH_TO_PYPI == 'true' && github.ref_type == 'tag' }}
     environment: pypi
     permissions:
       id-token: write
