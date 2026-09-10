@@ -297,6 +297,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Workspace containing .firm/firm.db (defaults to current directory).",
     )
 
+    # ---- brief subparser ----
+    # `base cadre brief` reaches this through the extension's command handler.
+    brief_parser = subparsers.add_parser(
+        "brief",
+        help="Print this Member's briefing: who it is and which Units are open "
+             "for it. Rules and decisions arrive separately, through base's "
+             "domain layer, and are deliberately not repeated here.",
+    )
+    brief_parser.add_argument(
+        "--member", dest="member_id", default=None,
+        help="Member to brief. Defaults to $CADRE_MEMBER_ID, which "
+             "spawn_member_run exports into every Member run.")
+    brief_parser.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. Defaults to the firm this workspace's db holds.")
+    brief_parser.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
+
     # ---- doctor subparser ----
     doctor_parser = subparsers.add_parser(
         "doctor",
@@ -737,6 +757,12 @@ def main(argv: list[str] | None = None) -> int:
             demo=args.demo,
             install_hooks_flag=args.install_hooks_flag,
         )
+
+    if args.command == "brief":
+        from firm.services.brief import run_brief
+
+        return run_brief(args.workspace, firm_id=args.firm_id,
+                         member_id=args.member_id)
 
     if args.command == "unit":
         if args.unit_command == "create":
