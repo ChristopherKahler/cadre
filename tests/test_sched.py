@@ -164,3 +164,33 @@ def test_winsched_service_launcher_supervises(tmp_path, ok_cmd):
     assert ":loop" in launcher and "goto loop" in launcher
     create = next(c for c in ok_cmd if "/Create" in c)
     assert "ONLOGON" in create
+
+
+def test_unit_files_are_utf8_whatever_the_locale_is(tmp_path, monkeypatch):
+    """Unit files are UTF-8 by specification; the locale codec is not.
+
+    description and workdir come from the firm, so an accented firm name or a
+    home directory with one is ordinary input. write_text with no encoding
+    encodes through the platform locale, which is cp1252 on Windows.
+
+    Measured with the encoding argument removed: Windows raises
+    UnicodeEncodeError on U+014C and the test fails; Linux passes either way,
+    because CPython coerces the C locale to UTF-8 (PEP 540) so there is no
+    red arm to be had there. The Windows leg is what makes this test mean
+    something, which is one more reason the -k filter had to go.
+
+    Asserting on the bytes rather than on read_text matters: read_text would
+    decode with the same wrong codec that wrote them and agree with itself.
+    """
+    monkeypatch.setattr(systemd_mod.SystemdScheduler, "_ctl",
+                        lambda self, *a: (0, ""))
+    s = SystemdScheduler(unit_dir=tmp_path)
+    name = "Cadre \u2014 Zo\u00eb \u014ctani nightly \u2192 pulse"
+    s.install_timer("enc-probe", description=name, workdir=tmp_path,
+                    env={"FIRM_ID": "chrisai"}, argv=["/bin/true"],
+                    interval="1h")
+
+    for suffix in (".service", ".timer"):
+        raw = (tmp_path / ("enc-probe" + suffix)).read_bytes()
+        assert name in raw.decode("utf-8"), (
+            suffix + " was not written as UTF-8: " + repr(raw[:200]))

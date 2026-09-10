@@ -34,6 +34,9 @@ class SystemdScheduler:
         self.unit_dir.mkdir(parents=True, exist_ok=True)
         env_lines = "\n".join(f'Environment="{k}={v}"' for k, v in sorted(env.items()))
         exec_line = " ".join(argv)
+        # Unit files are UTF-8 by specification. The locale codec is not:
+        # under LC_ALL=C it is ASCII, and description and workdir come
+        # from the firm.
         (self.unit_dir / f"{stem}.service").write_text(f"""[Unit]
 Description={description}
 
@@ -41,7 +44,7 @@ Description={description}
 {extra}WorkingDirectory={workdir}
 {env_lines}
 ExecStart={exec_line}
-""")
+""", encoding="utf-8")
 
     # -- interface ----------------------------------------------------------
 
@@ -69,7 +72,7 @@ Persistent=false
 
 [Install]
 WantedBy=timers.target
-""")
+""", encoding="utf-8")
         for step in (["daemon-reload"], ["enable", "--now", f"{stem}.timer"]):
             rc, out = self._ctl(*step)
             if rc != 0:

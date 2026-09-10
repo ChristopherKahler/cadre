@@ -46,7 +46,7 @@ def toggle(kind: str, name: str, excluded: bool) -> dict[str, list[str]]:
     data[kind] = sorted(names)
     p = _path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=2) + "\n")
+    p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     return data
 
 
