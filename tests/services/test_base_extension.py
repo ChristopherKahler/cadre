@@ -16,6 +16,7 @@ first test below is what stops that coming back.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import tomllib
 from pathlib import Path
@@ -244,17 +245,175 @@ def test_the_wheel_is_told_to_carry_the_manifest():
         f"{package_data}")
 
 
+# ---------------------------------------------------------------------------
+# pyproject.toml — derived guards, never frozen literals
+# ---------------------------------------------------------------------------
+
+def _dependencies_of(pyproject_text: str) -> list[str]:
+    """The declared runtime dependencies in a pyproject.toml's text."""
+    return tomllib.loads(pyproject_text)["project"]["dependencies"]
+
+
+def _dependency_drift(branch_text: str, baseline_text: str) -> list[str]:
+    """Every dependency that differs between two pyproject.toml texts.
+
+    The symmetric difference, sorted, one line per side, so a moved bound
+    (`mcp>=1.0` becoming `mcp>=1.0,<2`) shows up as both a `-` and a `+`.
+    An empty list means this branch declares exactly what the baseline does.
+    """
+    branch = _dependencies_of(branch_text)
+    baseline = _dependencies_of(baseline_text)
+    added = [f"+{d}" for d in branch if d not in baseline]
+    removed = [f"-{d}" for d in baseline if d not in branch]
+    return sorted(added + removed)
+
+
+_BASELINE_REFS = ("origin/main", "main")
+
+
+def _baseline_pyproject(root: Path) -> tuple[str, str]:
+    """This branch's fork point's pyproject.toml, and the ref it came from."""
+    if shutil.which("git") is None:
+        pytest.skip("git is not on PATH, so there is no baseline to derive from")
+    for ref in _BASELINE_REFS:
+        done = subprocess.run(
+            ["git", "show", f"{ref}:pyproject.toml"],
+            cwd=root, capture_output=True, text=True,
+        )
+        if done.returncode == 0:
+            return done.stdout, ref
+    pytest.skip(
+        "no baseline ref resolves here (tried " + ", ".join(_BASELINE_REFS) +
+        "); a shallow checkout carries no main to compare against. "
+        "test_the_baseline_resolver_reads_the_ref_it_names is the control that "
+        "keeps this honest wherever a ref does exist.")
+
+
 def test_the_packaging_change_added_no_dependency():
-    """heron merges the packaging lane's branch first, so this branch touches
-    the package-data section and nothing else in that file."""
-    import tomllib
+    """This branch touches the package-data section of pyproject.toml and
+    nothing else in that file.
+
+    Derived, not frozen. The first version of this guard asserted the
+    dependency list equalled a literal, so when the packaging lane legitimately
+    moved `mcp>=1.0` to `mcp>=1.0,<2` in #20 this went red on the correct
+    state. Comparing against the baseline ref still catches "this branch moved
+    a dependency" and stops firing every time somebody else's lane lands.
+    """
     root = base_extension.manifest_source().parent.parent.parent.parent
     pyproject = root / "pyproject.toml"
     if not pyproject.exists():
         pytest.skip("not a source checkout")
-    parsed = tomllib.load(pyproject.open("rb"))
-    assert parsed["project"]["dependencies"] == ["mcp>=1.0", "cryptography>=42"], (
-        "a dependency moved on this branch; that hunk belongs to the packaging lane")
+    baseline_text, ref = _baseline_pyproject(root)
+    drift = _dependency_drift(pyproject.read_text(encoding="utf-8"), baseline_text)
+    assert drift == [], (
+        f"a dependency moved on this branch relative to {ref}: {drift}. "
+        "That hunk belongs to the packaging lane, not to this one.")
+
+
+def test_the_dependency_guard_catches_a_moved_dependency():
+    """Control for the comparator, needing no git at all.
+
+    The guard above skips wherever no baseline ref resolves, and a skip reads
+    exactly like a pass. This fails the moment the comparator stops being able
+    to tell a moved dependency from an unmoved one.
+    """
+    def doc(*deps: str) -> str:
+        return "[project]\ndependencies = [" + ", ".join(repr(d) for d in deps) + "]\n"
+
+    baseline = doc("mcp>=1.0", "cryptography>=42")
+
+    assert _dependency_drift(doc("mcp>=1.0", "cryptography>=42"), baseline) == []
+    assert _dependency_drift(doc("mcp>=1.0,<2", "cryptography>=42"), baseline) == [
+        "+mcp>=1.0,<2", "-mcp>=1.0"]
+    assert _dependency_drift(doc("mcp>=1.0", "cryptography>=42", "requests"), baseline) == [
+        "+requests"]
+    assert _dependency_drift(doc("mcp>=1.0"), baseline) == ["-cryptography>=42"]
+
+
+def _scratch_repo(root: Path, main_deps: list[str], branch_deps: list[str],
+                  with_ref: bool = True) -> Path:
+    """A throwaway repo shaped like this one: a baseline ref, and a lane on top."""
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=root, capture_output=True, check=True)
+
+    def write(deps: list[str]) -> None:
+        (root / "pyproject.toml").write_text(
+            '[project]\nname = "scratch"\nversion = "0"\ndependencies = ['
+            + ", ".join(repr(d) for d in deps) + "]\n", encoding="utf-8")
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "control@cadre.test")
+    git("config", "user.name", "control")
+    write(main_deps)
+    git("add", "-A")
+    git("commit", "-q", "-m", "baseline")
+    if with_ref:
+        git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("checkout", "-q", "-b", "lane")
+    write(branch_deps)
+    # A real lane always touches other files, so the arm where the dependency
+    # lists match deliberately still has something to commit.
+    (root / "lane_touched.txt").write_text("not a dependency\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "lane")
+    if not with_ref:
+        git("branch", "-q", "-D", "main")
+    return root
+
+
+def test_the_baseline_resolver_reads_the_ref_it_names(tmp_path):
+    """Control for the resolver, against real git.
+
+    Without this, a resolver that stopped finding any ref would turn the guard
+    above into a permanent skip, and the suite would stay green while the
+    branch was no longer checked at all. Arm 1 is the exact state that broke
+    the frozen-literal version: the packaging lane moved a bound and both sides
+    carry the new value, so the guard must be silent.
+    """
+    if shutil.which("git") is None:
+        pytest.skip("git is not on PATH")
+    moved, old, cryp = "mcp>=1.0,<2", "mcp>=1.0", "cryptography>=42"
+
+    def resolve_or_fail(repo: Path) -> tuple[str, str]:
+        """`_baseline_pyproject`, but a skip in here is a failure.
+
+        Every repo below is built WITH the ref, confirmed by a direct `git
+        show` first. So a resolver that skips one of these is broken, and
+        letting that come out as a skip is the whole trap: two mutations of
+        this resolver (accept the refs git could not show; search for a ref
+        nobody has) leave the suite green at 37 passed / 0 failed, because
+        both simply stop checking. Turning the skip into a failure is what
+        makes those two visible.
+        """
+        proof = subprocess.run(["git", "show", "origin/main:pyproject.toml"],
+                               cwd=repo, capture_output=True, text=True)
+        assert proof.returncode == 0, f"scratch repo has no origin/main: {proof.stderr}"
+        try:
+            return _baseline_pyproject(repo)
+        except pytest.skip.Exception as exc:
+            pytest.fail(f"the resolver skipped a ref that git can show: {exc}")
+
+    def drift_of(name: str, main_deps, branch_deps):
+        repo = _scratch_repo(tmp_path / name, [*main_deps], [*branch_deps])
+        text, ref = resolve_or_fail(repo)
+        assert ref == "origin/main", f"resolver named {ref!r}, not the ref that exists"
+        return _dependency_drift((repo / "pyproject.toml").read_text(encoding="utf-8"), text)
+
+    for name in ("same", "added", "dropped", "moved", "noref"):
+        (tmp_path / name).mkdir()
+
+    assert drift_of("same", [moved, cryp], [moved, cryp]) == [], (
+        "the guard fires when the packaging lane moves a bound on both sides — "
+        "that is the fault this replaced, and it is back")
+    assert drift_of("added", [moved, cryp], [moved, cryp, "requests>=2"]) == ["+requests>=2"]
+    assert drift_of("dropped", [moved, cryp], [moved]) == [f"-{cryp}"]
+    assert drift_of("moved", [old, cryp], [moved, cryp]) == [f"+{moved}", f"-{old}"]
+
+    # No ref anywhere: a skip, never a silent pass and never an error.
+    bare = _scratch_repo(tmp_path / "noref", [moved, cryp], [moved, cryp], with_ref=False)
+    with pytest.raises(pytest.skip.Exception) as raised:
+        _baseline_pyproject(bare)
+    assert "origin/main" in str(raised.value), "the skip does not say what it tried"
 
 
 def test_the_shipped_manifest_is_inside_the_package():
