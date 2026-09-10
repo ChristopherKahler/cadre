@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -534,3 +535,74 @@ def test_install_passes_base_home_through(monkeypatch, fake_base):
     _land(fake_base)
     base_extension.install("/opt/cadre")
     assert seen.get("BASE_HOME") == str(fake_base)
+
+
+# ---------------------------------------------------------------------------
+# `cadre extension install` — the step that had no command behind it
+# ---------------------------------------------------------------------------
+
+def test_the_install_command_reports_the_path_it_read_back(fake_base, capsys,
+                                                           monkeypatch):
+    """Success prints what `install` proved, not what it attempted."""
+    monkeypatch.setattr(subprocess, "run", _Run(0, 0))
+    _land(fake_base)
+    code = base_extension.run_install("/opt/cadre")
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "read back" in out, f"the command claims success it did not read back: {out!r}"
+
+
+def test_base_absent_is_not_a_failure_of_this_firm(capsys, monkeypatch):
+    """rc 0, on purpose, and this is the arm worth arguing about.
+
+    A licensee may not carry base at all. Exiting non-zero there turns a host
+    setup fact into a Cadre defect — the same shape as every instrument
+    failure this repo has spent the week removing, where a check that could
+    not run reported that the thing it checks is broken.
+    """
+    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: None)
+    code = base_extension.run_install()
+    captured = capsys.readouterr()
+    assert code == 0, "a machine without base was reported as a firm defect"
+    assert "skipped" in captured.out
+    assert captured.err == "", "an expected, benign outcome wrote to stderr"
+
+
+def test_base_refusing_the_install_is_a_failure(fake_base, capsys, monkeypatch):
+    """The other direction, and the reason the arm above is not just leniency.
+
+    Without this, `run_install` could return 0 unconditionally and both the
+    success test and the base-absent test would still pass. base being present
+    and saying no is a real failure and has to be loud.
+    """
+    monkeypatch.setattr(subprocess, "run", _Run(1))
+    code = base_extension.run_install("/opt/cadre")
+    captured = capsys.readouterr()
+    assert code == 1, "base refused the install and the command reported success"
+    assert "Error" in captured.err
+
+
+def test_the_install_command_is_reachable_from_the_cli():
+    """A function nobody can call from a shell is not a command.
+
+    The runbook step this replaces was a `python -c`, so the whole point is
+    that `cadre extension install` resolves through argparse. Checked by
+    running the parser rather than by reading __main__.py.
+    """
+    done = subprocess.run(
+        [sys.executable, "-m", "firm", "extension", "install", "--help"],
+        capture_output=True, text=True, timeout=60,
+        cwd=str(Path(__file__).resolve().parents[2]))
+    assert done.returncode == 0, done.stderr
+    assert "--framework-dir" in done.stdout
+
+
+def test_that_cli_reachability_check_can_fail():
+    """Must-fail canary for the check above — a subprocess check that cannot
+    fail proves nothing about the one that can."""
+    done = subprocess.run(
+        [sys.executable, "-m", "firm", "extension", "notaverb", "--help"],
+        capture_output=True, text=True, timeout=60,
+        cwd=str(Path(__file__).resolve().parents[2]))
+    assert done.returncode != 0, (
+        "the parser accepted an extension subcommand that does not exist")

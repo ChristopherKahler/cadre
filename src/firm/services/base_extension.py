@@ -146,3 +146,43 @@ def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
         return result
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def run_install(framework_dir: Path | str | None = None) -> int:
+    """`cadre extension install`. Installs the manifest into base, returns 0.
+
+    Until this existed, the only way to wire a firm's base extension was
+
+        python -c "from firm.services import base_extension; base_extension.install()"
+
+    which is the shape of step that gets skipped. A journey step an operator
+    cannot perform with a command is a journey step most operators will not
+    perform, and this one is the whole point of the extension: without the
+    manifest in base, `base cadre brief`, `base cadre learn` and `base cadre
+    complete` do not resolve at all.
+
+    Exit codes carry the same three-way answer `install` already returns, and
+    the middle one is the one worth keeping:
+
+        0  installed and read back, or base is not on this machine
+        1  base is here and refused
+
+    base being absent is NOT a failure. A licensee may not carry base, and a
+    firm without it is degraded, never broken — the same contract
+    `base_domain.sync` keeps. Exiting 1 there would make a host setup fact
+    read as a Cadre defect, which is exactly the shape of every instrument
+    failure this repo has been fixing all week.
+    """
+    import sys
+
+    result = install(framework_dir)
+    if result.get("ok"):
+        print(result.get("reason") or "installed")
+        return 0
+    reason = result.get("reason", "unknown")
+    if "not installed" in reason:
+        # Absent, not broken. Say so on stdout and leave rc 0.
+        print(f"skipped: {reason}")
+        return 0
+    print(f"Error: {reason}", file=sys.stderr)
+    return 1
