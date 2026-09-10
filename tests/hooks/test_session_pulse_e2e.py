@@ -1,9 +1,12 @@
 """End-to-end test: spawn the entrypoint script as a subprocess, diff stdout
 against the golden file, and verify the hook does not mutate the DB.
 
-The entrypoint script under test is ``install/firm-session-pulse.py`` — the
-same artifact the installer copies into Claude Code workspaces. Golden output
-lives at ``tests/golden/session-pulse-chrisai.txt``.
+The entrypoint under test is ``src/firm/hooks/session_pulse_entry.py`` — the
+exact bytes `cadre init --install-hooks` writes into a workspace. It used to
+point at ``install/firm-session-pulse.py``, which no user ever ran: the
+installer wrote a separate `_HOOK_TEMPLATE` string, and the two drifted 123
+diff lines apart while this test stayed green. Golden output lives at
+``tests/golden/session-pulse-chrisai.txt``.
 
 To regenerate the golden file after an intentional format change, run:
 
@@ -28,7 +31,7 @@ from firm.core.migrate import apply_migrations
 from firm.core.repo import ALL_TABLES, create
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ENTRYPOINT = REPO_ROOT / "install" / "firm-session-pulse.py"
+ENTRYPOINT = REPO_ROOT / "src" / "firm" / "hooks" / "session_pulse_entry.py"
 GOLDEN = REPO_ROOT / "tests" / "golden" / "session-pulse-chrisai.txt"
 
 # These two tests run a file from the repo checkout, not from the installed
