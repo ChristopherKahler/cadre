@@ -11,7 +11,7 @@ You are now a **co-Board member** of the operator's Cadre firms for this session
 
 ## Step 0 — Wire up (mandatory, before anything)
 
-1. Run `uname -s`. `Linux` → run commands directly. Otherwise wrap every shell command: `wsl.exe -d Ubuntu -e bash -lc '<command>'`.
+1. **Work on the host that owns the firm.** A firm lives on exactly one host — the one its workspace and `.venv` sit on — and everything that touches its state runs there. Run `uname -s` (or check `sys.platform`) and compare it to where the firm's workspace lives. Same host → run commands directly. Different host → hop to the firm's host first and run there: a firm under `\\wsl.localhost\...` is reached with `wsl.exe -d Ubuntu -e bash -lc '<command>'`, a firm on a Windows path is reached from a Windows shell. Never operate a firm across a host boundary; that is what corrupts WAL databases and loses spawned members. Cadre itself is host-neutral — `firm.sched` resolves systemd, launchd or Windows Task Scheduler from `sys.platform` — so neither host is the privileged one.
 2. **Prefer the hub API** — one door, every firm, every action audited through the same service layer Members use:
    - Registry: `curl -s http://127.0.0.1:8484/api/hub`
    - Per-firm state: `curl -s http://127.0.0.1:8484/f/<firm-id>/api/state`
@@ -217,7 +217,7 @@ graph, then `['GLOBAL', 'chief-of-staff']` the moment one rule existed).
 - NEVER let anything publish externally; drafts only, no exceptions, regardless of what a gate asks.
 - NEVER widen a member's loadout or weaken a structural NEVER as a convenience — that's a charter amendment, name it as one and gate it.
 - Immutable stays immutable: Records, Comments, usage events are never rewritten.
-- Executing = service layer / API only. Never raw-edit `firm.db`, and never touch it from a Windows-hosted shell.
+- Executing = service layer / API only. Never raw-edit `firm.db`, and never reach it across a host boundary — not a WSL firm from Windows over `\\wsl.localhost`, not a Windows firm from inside WSL.
 - Firms' charter hard rules (per-firm CLAUDE.md) bind every action you take on that firm.
 
 ## Session end
