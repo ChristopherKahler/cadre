@@ -57,6 +57,13 @@ _BULLET = re.compile(r"^[-*]\s+")
 _SUBCOMMAND = re.compile(r"^[a-z][a-z0-9-]*$")
 _LONG_FLAG = re.compile(r"^--[a-z][a-z0-9-]+$")
 
+#: A backtick span is the author explicitly marking text as code, so it is a
+#: second unambiguous anchor. It is needed because Member-facing MARKDOWN (the
+#: charter, the boardroom template) writes commands inline inside a numbered
+#: list item and wraps them across lines, where the line-start anchor cannot
+#: see them. ``re.S`` so a span that spans a newline is still one command.
+_BACKTICK_SPAN = re.compile(r"`([^`]+)`", re.S)
+
 #: The MCP tool that never existed. ``firm_create_unit`` is the real one; this
 #: literal must not survive anywhere in an assembled prompt.
 DEAD_MCP_LITERAL = "unit_create"
@@ -83,11 +90,22 @@ def extract_invocations(prompt: str) -> list[Invocation]:
     a Contract's ``sanctioned_commands`` entry renders as ``- firm unit create
     ...``, which SHOULD be checked and therefore should match.
     """
-    found: list[Invocation] = []
+    candidates: list[str] = []
     for raw in prompt.splitlines():
         line = _BULLET.sub("", raw.strip())
-        if not line.startswith(_COMMAND_ANCHOR):
+        if line.startswith(_COMMAND_ANCHOR):
+            candidates.append(line)
+    for span in _BACKTICK_SPAN.findall(prompt):
+        text = " ".join(span.split())
+        if text.startswith(_COMMAND_ANCHOR):
+            candidates.append(text)
+
+    found: list[Invocation] = []
+    seen: set[str] = set()
+    for line in candidates:
+        if line in seen:
             continue
+        seen.add(line)
         tokens = line[len(_COMMAND_ANCHOR):].split()
         words: list[str] = []
         for token in tokens:
@@ -268,8 +286,29 @@ def test_extractor_ignores_prose_that_merely_mentions_the_word_firm() -> None:
         "raise it with the firm MCP tool firm_escalate\n"
         "the firm's Board decides\n"
         "This firm runs on Claude Code.\n"
+        "the `firm` MCP server is not a command\n"
     )
     assert extract_invocations(prose) == []
+
+
+def test_extractor_reads_a_command_wrapped_across_lines_in_backticks() -> None:
+    """Markdown surfaces write commands inline and wrap them; the line-start
+    anchor cannot see those, and without this the resolve guard over the
+    charter would pass having checked nothing."""
+    markdown = (
+        '3. **Queue your own continuation**: `firm unit create --name "<x>"\n'
+        "   --project <PRJ-id> --assignee $CADRE_MEMBER_ID`\n"
+    )
+    invocations = extract_invocations(markdown)
+    assert [i.words for i in invocations] == [("unit", "create")]
+    assert "--assignee" in invocations[0].flags
+
+
+def test_the_same_command_written_twice_is_reported_once() -> None:
+    """A line-anchored command inside backticks matches both anchors; the
+    resolver should not report it twice and inflate the floor."""
+    both = "`firm gate request --action a`\nfirm gate request --action a\n"
+    assert len(extract_invocations(both)) == 1
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -24,11 +24,13 @@ from firm.services.authority import require_board_only
 
 #: Gate decisions are the Board's alone. The authority key deliberately does
 #: NOT unlock these: a Member deciding its own approval request would make the
-#: Gate ceremony rather than control. Members request (request_gate) and raise
-#: blockers (firm_escalate); the Board decides.
+#: Gate ceremony rather than control. Members request (`firm gate request`) and
+#: raise blockers (`firm escalation raise`); the Board decides.
 _GATE_DECISION_HINT = (
     "gate decisions are the Board's alone — the authority key does not unlock "
-    "them; use firm_request_gate to ask, or firm_escalate to raise a blocker"
+    "them; use: `firm gate request --action \"<what you want to do>\" "
+    "--target-type <type> --target-id <id>`, or `firm escalation raise "
+    "--title \"<one line>\"` to raise a blocker"
 )
 
 GATE_STATUSES = ["pending", "approved", "rejected", "expired", "revoked"]

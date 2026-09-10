@@ -140,7 +140,7 @@ def test_identified_member_without_key_denied_on_every_gated_tool(
         with pytest.raises(AuthorityError) as exc:
             call()
         assert exc.value.payload["error"] == "authority_required", name
-        assert exc.value.payload["hint"] == "escalate via firm_escalate", name
+        assert exc.value.payload["hint"] == "escalate via: `firm escalation raise --title \"<one line>\"`", name
 
 
 def test_identified_member_with_key_allowed_on_every_gated_tool(
@@ -400,7 +400,7 @@ def test_denied_tool_returns_structured_payload_not_prose(
     result = json.loads(tools_mod.firm_update_member(sib, role="Editor"))
     assert result == {
         "error": "authority_required",
-        "hint": "escalate via firm_escalate",
+        "hint": "escalate via: `firm escalation raise --title \"<one line>\"`",
         "action": "member.update",
     }
 

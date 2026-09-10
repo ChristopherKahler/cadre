@@ -194,7 +194,8 @@ def _build_parser() -> argparse.ArgumentParser:
     # ---- escalation subparser (MCP->CLI write-surface migration) ----
     esc_parser = subparsers.add_parser(
         "escalation",
-        help="Escalation operations (raise, ...). Replaces the firm MCP firm_escalate tool.",
+        help="Escalation operations (raise, ...). The Board-escalation path that "
+             "works in every firm, with or without the firm MCP server.",
     )
     esc_sub = esc_parser.add_subparsers(dest="escalation_command", metavar="<escalation-command>")
 
