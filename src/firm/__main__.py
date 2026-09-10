@@ -236,8 +236,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Raise an escalation to the Board (dedup-aware, notifies immediately).",
     )
     esc_raise_parser.add_argument(
-        "--member", dest="raised_by_member_id", required=True,
-        help="Member ID raising the escalation (actor on the records row).",
+        "--member", dest="raised_by_member_id", default=None,
+        help="Member ID raising the escalation (actor on the records row). "
+             "Defaults to $CADRE_MEMBER_ID, which every Member run has "
+             "exported, so a Member need not know its own id. Matches "
+             "`firm gate request`.",
     )
     esc_raise_parser.add_argument("--title", required=True, help="Short escalation title.")
     esc_raise_parser.add_argument("--body", default="", help="Escalation detail body.")
