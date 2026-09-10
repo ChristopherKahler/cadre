@@ -22,7 +22,9 @@ only ever sees the broken input cannot show that it discriminates.
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -32,6 +34,11 @@ from firm.services import base_domain
 from firm.sysconfig import service as sysconfig_service
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+#: The real resolver, captured at import time. conftest's autouse fixture
+#: replaces the module attribute with a stub for every test, so a test that
+#: needs to exercise the actual body has to hold its own reference.
+REAL_WHICH_BASE = sysconfig_service.which_base
 
 #: The one line that shells out to `base scaffold`. Any file carrying it is
 #: running the scaffold itself rather than asking the one owner to.
@@ -233,6 +240,81 @@ def test_only_one_tracked_file_runs_base_scaffold():
         "second copy is the one that will not get the next fix.")
 
 
+def test_the_switch_crosses_a_process_boundary(tmp_path):
+    """The half an in-process monkeypatch cannot reach, proved by exec.
+
+    Nine test files run the CLI for real with ``sys.executable -m firm``. A
+    monkeypatch does not exist in that child, so the child resolved the
+    developer's own base and wrote the operator's global workspace registry --
+    measured 2026-09-10, `test_doctor_survives_a_pipe` put its pytest temp path
+    there, and those entries are then synced into the CLAUDE.md loaded by every
+    session the operator starts.
+
+    BASE_HOME alone does not close it. On WSL the binary that gets resolved is
+    the WINDOWS one across /mnt/c, and a POSIX BASE_HOME neither redirected its
+    write nor tripped base's own isolation panic: the entry landed anyway.
+    Only refusing to resolve a binary at all reliably stops a child.
+
+    The second arm is the control. It puts a FAKE base on the child's PATH and
+    leaves the switch off, so the child must find it -- which proves the None
+    above comes from the switch rather than from a host that simply has no
+    base. No real base is ever executed by either arm.
+    """
+    probe = ("from firm.sysconfig.service import which_base; "
+             "print('RESOLVED=' + str(which_base()))")
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(sys.path)
+    env["CADRE_NO_BASE"] = "1"
+    off = subprocess.run([sys.executable, "-c", probe],
+                         capture_output=True, text=True, env=env, timeout=120)
+    assert off.returncode == 0, off.stderr
+    assert "RESOLVED=None" in off.stdout, (
+        f"a child process still resolved a base binary: {off.stdout.strip()}")
+
+    fake_dir = tmp_path / "fakebin"
+    fake_dir.mkdir()
+    fake = fake_dir / ("base.exe" if os.name == "nt" else "base")
+    fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake.chmod(0o755)
+
+    env["CADRE_NO_BASE"] = ""
+    env["PATH"] = str(fake_dir) + os.pathsep + env.get("PATH", "")
+    on = subprocess.run([sys.executable, "-c", probe],
+                        capture_output=True, text=True, env=env, timeout=120)
+    assert on.returncode == 0, on.stderr
+    assert "RESOLVED=None" not in on.stdout, (
+        "the control arm found nothing either, so the first arm proves nothing "
+        "about the switch")
+    assert str(fake_dir) in on.stdout, on.stdout
+
+
+def test_an_empty_switch_is_not_a_set_switch(monkeypatch, tmp_path):
+    """Whitespace or "" must read as absent, not as "yes, disable it".
+
+    A .env carried into CI commonly sets a variable to the empty string. If
+    that read as "disable", base would be silently off on a machine that has
+    it, and every degraded-firm message would be a lie about the host.
+    """
+    fake_dir = tmp_path / "bin"
+    fake_dir.mkdir()
+    fake = fake_dir / ("base.exe" if os.name == "nt" else "base")
+    fake.write_text("", encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_dir) + os.pathsep + os.environ["PATH"])
+
+    # The autouse fixture sets the switch; unset it to exercise the real body.
+    monkeypatch.delenv("CADRE_NO_BASE", raising=False)
+    assert REAL_WHICH_BASE() is not None, "no fake base on PATH"
+
+    monkeypatch.setenv("CADRE_NO_BASE", "   ")
+    assert REAL_WHICH_BASE() is not None, (
+        "blank read as set, so a stray empty value silently disables base")
+
+    monkeypatch.setenv("CADRE_NO_BASE", "1")
+    assert REAL_WHICH_BASE() is None
+
+
 def test_the_suite_does_not_reach_the_machines_real_base():
     """The control on conftest's autouse fixture, which this file depends on.
 
@@ -245,3 +327,11 @@ def test_the_suite_does_not_reach_the_machines_real_base():
     assert sysconfig_service.which_base() is None, (
         "a test can see the host's real base binary, so the suite writes the "
         "operator's machine")
+
+    # And the same for anything this test spawns. The check above only covers
+    # this interpreter; without the environment variable actually being set in
+    # conftest, every subprocess in the suite goes back to resolving the real
+    # binary and the in-process half above stays green while it happens.
+    assert os.environ.get("CADRE_NO_BASE", "").strip(), (
+        "conftest no longer sets CADRE_NO_BASE, so child processes can reach "
+        "the host's base again — the in-process stub does not cross exec")
