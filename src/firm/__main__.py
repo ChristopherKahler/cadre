@@ -194,7 +194,8 @@ def _build_parser() -> argparse.ArgumentParser:
     # ---- escalation subparser (MCP->CLI write-surface migration) ----
     esc_parser = subparsers.add_parser(
         "escalation",
-        help="Escalation operations (raise, ...). Replaces the firm MCP firm_escalate tool.",
+        help="Escalation operations (raise, ...). The Board-escalation path that "
+             "works in every firm, with or without the firm MCP server.",
     )
     esc_sub = esc_parser.add_subparsers(dest="escalation_command", metavar="<escalation-command>")
 
@@ -225,6 +226,51 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Workspace containing .firm/firm.db (defaults to current directory).",
     )
     esc_raise_parser.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. Defaults to the firm this workspace's db holds.",
+    )
+
+    # ---- gate subparser (MCP->CLI write-surface migration) ----
+    gate_parser = subparsers.add_parser(
+        "gate",
+        help="Gate operations (request, ...). The Board-approval path that used "
+             "to exist only as the firm MCP tool firm_request_gate.",
+    )
+    gate_sub = gate_parser.add_subparsers(dest="gate_command", metavar="<gate-command>")
+
+    gate_request_parser = gate_sub.add_parser(
+        "request",
+        help="Ask the Board to approve an action (creates a pending Gate, notifies them).",
+    )
+    gate_request_parser.add_argument(
+        "--action", required=True,
+        help="What you are asking permission to do, in plain words.",
+    )
+    gate_request_parser.add_argument(
+        "--target-type", dest="target_entity_type", required=True,
+        help="Type of the thing the action is about (e.g., unit).",
+    )
+    gate_request_parser.add_argument(
+        "--target-id", dest="target_entity_id", required=True,
+        help="Id of the thing the action is about (e.g., UNIT-018).",
+    )
+    gate_request_parser.add_argument(
+        "--member", dest="requesting_member_id", default=None,
+        help="Member ID making the request. Defaults to $CADRE_MEMBER_ID.",
+    )
+    gate_request_parser.add_argument(
+        "--context", default="",
+        help="Why you are asking — the Board reads this before deciding.",
+    )
+    gate_request_parser.add_argument(
+        "--expires-at", dest="expires_at", default="",
+        help="Optional ISO timestamp after which the request lapses.",
+    )
+    gate_request_parser.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
+    gate_request_parser.add_argument(
         "--firm-id", dest="firm_id", default=None,
         help="Firm scope. Defaults to the firm this workspace's db holds.",
     )
@@ -808,6 +854,25 @@ def main(argv: list[str] | None = None) -> int:
                 firm_id=firm_id,
             )
         parser.parse_args(["escalation", "--help"])
+        return 0
+
+    if args.command == "gate":
+        if args.gate_command == "request":
+            from firm.cli.gate import run_gate_request
+
+            workspace = args.workspace if args.workspace is not None else Path.cwd()
+            firm_id = args.firm_id or None
+            return run_gate_request(
+                workspace=workspace,
+                action=args.action,
+                target_entity_type=args.target_entity_type,
+                target_entity_id=args.target_entity_id,
+                member_id=args.requesting_member_id,
+                context=args.context,
+                expires_at=args.expires_at,
+                firm_id=firm_id,
+            )
+        parser.parse_args(["gate", "--help"])
         return 0
 
     if args.command == "goal":

@@ -62,6 +62,13 @@ AUTHORITY_CAPABILITY = "authority"
 #: authority key without naming it.
 BLANKET = "*"
 
+#: What a denied Member is told to do about it. A module constant rather than
+#: an inline literal so the Member-facing-text guard can reach it: as an inline
+#: string it was invisible to that guard, and renaming the command inside it
+#: reddened nothing (mutation M6). The command is backticked because that is
+#: the anchor the guard's extractor keys on.
+ESCALATE_HINT = 'escalate via: `firm escalation raise --title "<one line>"`'
+
 #: True while the harness is acting on its own behalf inside a Member run's
 #: process tree. See :func:`system_context`.
 _system_actor: contextvars.ContextVar[bool] = contextvars.ContextVar(
@@ -149,7 +156,7 @@ def require_authority(conn: sqlite3.Connection, action: str) -> str | None:
     if not has_authority(conn, member_id):
         raise AuthorityError({
             "error": "authority_required",
-            "hint": "escalate via firm_escalate",
+            "hint": ESCALATE_HINT,
             "action": action,
         })
     return member_id
@@ -177,8 +184,8 @@ def require_board_only(action: str, *, hint: str) -> None:
 # ---------------------------------------------------------------------------
 
 _GRANT_HINT = (
-    "authority is granted by the Board — ask via firm_escalate; "
-    "members cannot grant it to themselves or each other"
+    "authority is granted by the Board — ask with: `firm escalation raise "
+    "--title \"<one line>\"`; members cannot grant it to themselves or each other"
 )
 
 
