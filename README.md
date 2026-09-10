@@ -185,7 +185,7 @@ Run `cadre --help` for full flags.
 
 ## MCP surface (37 tools)
 
-Python FastMCP server wrapping all 10 `firm.services` modules. Full entity CRUD: `firm_*`, `member_*`, `contract_*`, `operation_*`, `project_*`, `unit_*`, `gate_*`, `goal_*`, `comment_*`, `document_*`, plus `detect_gaps` and `propose_hire`.
+Python FastMCP server over 11 of the `firm.services` modules. Every tool is `firm_`-prefixed and named `firm_<verb>_<entity>` — `firm_create_unit`, `firm_list_members`, `firm_view_gate`, `firm_update_goal_metric` — covering Units, Members, Contracts, Operations, Projects, Goals, Gates, Escalations, Comments and Documents, plus `firm_detect_gaps` and `firm_propose_hire`.
 
 Members can manipulate their own Firm's state during Runs — create sub-Units, close Gates, update Goal metrics — without the operator being in the loop for every write.
 
