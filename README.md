@@ -7,7 +7,11 @@
 Cadre is a framework for orchestrating a persistent roster of AI Members with roles, ownership, atomic work assignment, and board-level approval gates. Built for Claude Code, designed runtime-agnostic from v1 via a formal Contract interface (swap to OpenClaw, Codex, or any agent runtime that can execute a prompt).
 
 ```bash
-pip install cadre        # (once published to PyPI; dev install below)
+# Not on PyPI. The name `cadre` is already registered by an unrelated
+# placeholder (one 973-byte release, 0.4.0, uploaded 2022-07-01), so
+# `pip install cadre` today installs that, not this. Install from source:
+git clone <this repository> && cd cadre
+pip install .
 cadre init . --demo --install-hooks
 ```
 
@@ -59,11 +63,10 @@ Sterling (CMO) reads pending work and queues Units for Quill (Writer). Quill run
 
 ### 3. Gap detection
 
-```bash
-firm detect-gaps
-```
+Gap detection is an MCP tool, `firm_detect_gaps`, not a CLI verb. A Member
+calls it mid-session; there is no `firm detect-gaps` command.
 
-Surfaces unclaimed Units, overloaded Members, stale Goals, and coverage gaps ("no one on the team covers video editing"). Sterling can then `propose_hire`, which opens a hire-member Gate for your approval. The Firm grows itself under your direction.
+It surfaces unclaimed Units, overloaded Members, stale Goals, and coverage gaps ("no one on the team covers video editing"). Sterling can then `propose_hire`, which opens a hire-member Gate for your approval. The Firm grows itself under your direction.
 
 ### 4. MCP server
 
@@ -74,10 +77,10 @@ Surfaces unclaimed Units, overloaded Members, stale Goals, and coverage gaps ("n
 ## Install (development)
 
 ```bash
-cd apps/agent-company-architecture
+cd <the repository root>   # the directory holding pyproject.toml
 pip install -e ".[dev]"
 cadre --help
-pytest        # 548 tests across 8 phases
+pytest        # 1271 tests
 ```
 
 Both `cadre` and `firm` console scripts route to the same CLI. The import package is `firm`; the distribution name is `cadre`. (Divergent dist/import names are standard Python — see `bs4`/`beautifulsoup4`.)
@@ -206,7 +209,7 @@ Stub templates live in [`templates/contracts/`](templates/contracts/) (OpenClaw,
 
 ## What's shipped vs. not yet
 
-**Shipped (v0.1, 548 tests green):**
+**Shipped (v0.1, 1271 tests green):**
 - 14 entity types with full CRUD, SQLite store, atomic Unit checkout, dependency cycle detection
 - PULSE handler (stateless orchestrator with frequency/budget/validation gating)
 - 10 service modules, 33 MCP tools, gap detection + propose-hire flow
@@ -214,8 +217,7 @@ Stub templates live in [`templates/contracts/`](templates/contracts/) (OpenClaw,
 - Public docs, Contract runtime authoring guide, OpenClaw + Codex stub templates
 
 **Not yet:**
-- PyPI publish (install from source for now)
-- UI / dashboard — CLI + hook injection is the interface
+- PyPI publish (install from source for now; the name `cadre` is taken)
 - Real OpenClaw / Codex Contract runtimes (stubs only; implement when those runtimes are live for you)
 - Scheduled `cadre pulse` cron — Members activate on trigger, not on a timer
 - Multi-operator governance — v0.1 is single-Board
@@ -258,7 +260,7 @@ Cadre and [Paperclip](https://github.com/) both encode the "AI-operated company"
 |---|---|---|
 | **Mental model** | Salesforce for AI companies | Git for AI companies |
 | **Activation** | Scheduler-bound (cron inside a persistent server) | Stateless PULSE — trigger-agnostic (cron, session hook, CLI, CI, systemd, any caller) |
-| **Operator surface** | React dashboard at localhost:3100 | Claude Code session context (no separate UI) |
+| **Operator surface** | React dashboard at localhost:3100 | Claude Code session context, plus a local web boardroom (`firm dashboard`, or `firm hub` for every firm at once) |
 | **Persistence** | Postgres (embedded PGlite or hosted) | SQLite (stdlib, single file) |
 | **Process model** | Persistent Node server + workers | Python package, no daemon |
 | **Identity vs runtime** | `agent.adapter_config` JSONB | Member and Contract as separate entities |
