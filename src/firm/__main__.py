@@ -378,6 +378,88 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Workspace containing .firm/firm.db (defaults to current directory).",
     )
 
+    # ---- brief subparser ----
+    # `base cadre brief` reaches this through the extension's command handler.
+    brief_parser = subparsers.add_parser(
+        "brief",
+        help="Print this Member's briefing: who it is and which Units are open "
+             "for it. Rules and decisions arrive separately, through base's "
+             "domain layer, and are deliberately not repeated here.",
+    )
+    brief_parser.add_argument(
+        "--member", dest="member_id", default=None,
+        help="Member to brief. Defaults to $CADRE_MEMBER_ID, which "
+             "spawn_member_run exports into every Member run.")
+    brief_parser.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. Defaults to the firm this workspace's db holds.")
+    brief_parser.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
+
+    # ---- learn subparser ----
+    # `base cadre learn` reaches this through the extension's command handler.
+    # It is the other half of the Stop gate: the gate blocks on a Unit closed
+    # with nothing recorded, and this is the only thing that clears it.
+    learn_parser = subparsers.add_parser(
+        "learn",
+        help="Record what this Member learned into the firm's own graph. With "
+             "--unit it also clears that Unit's write-back debt, which is what "
+             "lets the session end.",
+    )
+    learn_parser.add_argument(
+        "--text", required=True,
+        help="The lesson, in the Member's own words.")
+    learn_parser.add_argument(
+        "--unit", dest="unit_id", default=None,
+        help="The Unit this lesson came from. Clears its write-back debt. "
+             "Omit for a lesson that belongs to no single Unit — the debt on "
+             "any closed Unit then stays open, because it is per Unit.")
+    learn_parser.add_argument(
+        "--type", dest="note_type", default="insight",
+        help="base note type: insight, correction, decision, commitment, "
+             "shift. Use correction for a mistake worth not repeating.")
+    learn_parser.add_argument(
+        "--member", dest="member_id", default=None,
+        help="Member recording it. Defaults to $CADRE_MEMBER_ID.")
+    learn_parser.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. Defaults to the firm this workspace's db holds.")
+    learn_parser.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
+
+    # ---- complete subparser ----
+    # `firm unit complete` unchanged, plus the write-back debt. Kept separate
+    # from `firm unit complete` on purpose: that surface is the Board's and the
+    # tooling's as well as a Member's, and opening a Member's write-back debt
+    # from a Board close would block the wrong session.
+    complete_parser = subparsers.add_parser(
+        "complete",
+        help="Close one of this Member's Units and open its write-back debt. "
+             "The close itself is `firm unit complete`, unchanged.",
+    )
+    complete_parser.add_argument(
+        "unit_id", help="The Unit to close.")
+    complete_parser.add_argument(
+        "--outputs", nargs="*", default=None,
+        help="Deliverable file(s) to register against the Unit before it closes.")
+    complete_parser.add_argument(
+        "--dry-run", action="store_true", dest="dry_run",
+        help="Show what would happen. Opens no debt, because nothing closes.")
+    complete_parser.add_argument(
+        "--member", dest="member_id", default=None,
+        help="Member closing it. Defaults to $CADRE_MEMBER_ID.")
+    complete_parser.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. Defaults to the firm this workspace's db holds.")
+    complete_parser.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
+
     # ---- doctor subparser ----
     doctor_parser = subparsers.add_parser(
         "doctor",
@@ -819,6 +901,26 @@ def main(argv: list[str] | None = None) -> int:
             demo=args.demo,
             install_hooks_flag=args.install_hooks_flag,
         )
+
+    if args.command == "brief":
+        from firm.services.brief import run_brief
+
+        return run_brief(args.workspace, firm_id=args.firm_id,
+                         member_id=args.member_id)
+
+    if args.command == "learn":
+        from firm.services.writeback import run_learn
+
+        return run_learn(args.workspace, text=args.text, unit_id=args.unit_id,
+                         note_type=args.note_type, firm_id=args.firm_id,
+                         member_id=args.member_id)
+
+    if args.command == "complete":
+        from firm.services.writeback import run_complete
+
+        return run_complete(args.workspace, unit_id=args.unit_id,
+                            outputs=args.outputs, dry_run=args.dry_run,
+                            firm_id=args.firm_id, member_id=args.member_id)
 
     if args.command == "unit":
         if args.unit_command == "create":

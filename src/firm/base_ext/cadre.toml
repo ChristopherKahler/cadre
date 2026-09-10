@@ -1,0 +1,152 @@
+# Cadre — base extension manifest. SOURCE OF TRUTH, shipped in the repo.
+#
+# Installed to ~/.base-gbl/extensions/cadre.toml by firm.services.base_extension,
+# which renders {{framework_dir}} for the machine, validates, and only then
+# installs. Replaces the 2026-07-03 manifest, which declared a prompt domain
+# keyed on ".firm/" and "member run" carrying three rules written about one
+# specific firm — its root path, its virtual environment, a Windows board-pack
+# path — and therefore injected that firm's context into every Member of every
+# firm on the machine. That is issue #4 and it is why nothing below names a
+# firm, a member, a person, or an absolute path outside this framework.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# WHY THIS FILE CARRIES NOTHING FIRM-SPECIFIC, AND WHERE THE FIRM-SPECIFIC
+# THINGS LIVE INSTEAD. Measured against base 0.15.0, md5
+# 052b9a95d6afbd938ddf21aba26b0601, on 2026-09-10, two firms side by side under
+# an isolated BASE_HOME:
+#
+#   A [[hooks.user_prompt.domains]] block in THIS file cannot be limited to one
+#   folder. `paths` and `file_keywords` are both accepted, `base extension
+#   validate` returns 0, and the block then fires in every firm regardless
+#   (1/1 in firmA and firmB for all three shapes tried, negative control 0).
+#   The same block written into a firm's own .base/domains.toml fires in firmA
+#   and not firmB (1/1 versus 0/0), on the folder alone.
+#
+# So: anything true of EVERY Cadre firm belongs here. Anything true of ONE firm
+# or ONE member is generated into that firm's .base/domains.toml by
+# firm.services.base_domain. Logged as L22 in BASE-DEFERRED-FROM-CADRE.md.
+# A test asserts this file names no firm and no member, so it cannot regress.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[extension]
+name = "cadre"
+version = "0.2.0"
+description = "Cadre — run AI agents like a company: Firm, Members, Units, Gates, PULSE"
+framework_dir = "{{framework_dir}}"
+
+# state_dir MUST stay above the first [[commands]] header. A bare key binds to
+# the most recent table header, so written below it this silently becomes a
+# field of the command, serde drops it as unknown, and the ingest paths below
+# fall back to the working directory and find nothing — with validate passing
+# and the hook exiting 0 the whole way. The trap is documented in lore.toml's
+# own header, where it cost that build an architectural redesign.
+state_dir = ".firm/"
+
+# ── Session start ────────────────────────────────────────────────────────────
+# The briefing is NOT here, and cannot be. `inject` does not put query results
+# into its text: {total}, ${total} and {{total}} all arrive at the Member
+# unchanged, while a missing query file errors on stderr, which proves base does
+# open the query path and simply never feeds it back. That is issue #6. The
+# briefing is therefore command code — `base cadre brief` — called from the
+# firm's own SessionStart hook, where it can read the firm's database and the
+# graph and compose real text.
+#
+# What is left here is a one-line signpost and the state ingest, which is the
+# part that genuinely works: proven by removing the ingest block with the same
+# files still on disk, which took the graph from 33 lines and 5 entities to 1
+# line and 0 entities.
+[hooks.session_start]
+inject = "Cadre firm workspace. Run `base cadre brief` for this member's briefing."
+
+# Exports are written from .firm/firm.db by the firm CLI, never hand-edited.
+# `replace` rather than `upsert`: the export is the whole truth about the roster
+# at that moment, so a member who left must disappear rather than linger.
+[[hooks.session_start.ingest]]
+file = "base-export/members.json"
+entity = "CadreMember"
+strategy = "replace"
+
+[[hooks.session_start.ingest]]
+file = "base-export/units.json"
+entity = "CadreUnit"
+strategy = "replace"
+
+[[hooks.session_start.ingest]]
+file = "base-export/gates.json"
+entity = "CadreGate"
+strategy = "replace"
+
+# ── Prompt domain ────────────────────────────────────────────────────────────
+# One domain, and every word of it is true of every Cadre firm. The firm's own
+# name, its members, its paths and its rules are NOT here; they are in the
+# firm's .base/domains.toml, written from the live roster by base_domain.
+#
+# The rules below name CLI verbs only. `unit_create` and `firm_escalate` are
+# deliberately absent: six of twelve firms load no firm MCP server at all, so
+# those names resolve to nothing for half the fleet, and teaching them is issue
+# #2. The CLI verbs exist in every firm.
+[hooks.user_prompt]
+
+[[hooks.user_prompt.domains]]
+name = "cadre-firm"
+prompt_keywords = [
+    "cadre",
+    "firm pulse",
+    "pulse the firm",
+    "member run",
+    "unit complete",
+    "hire gate",
+    "board pack",
+]
+file_keywords = [".firm/"]
+rules = [
+    "This is a Cadre firm. The firm's own database is .firm/firm.db and it is reached through the `firm` CLI, never opened directly.",
+    "Queue follow-up work with `firm unit create`, register a deliverable with `firm doc register`, close your own work with `firm unit complete`, and raise anything above your authority with `firm escalation raise`. These verbs exist in every firm.",
+    "Write what you learned back before you finish: `base learn --domain <project> --entity <member> --text \"...\"` for something the whole project needs, or `--domain <firm>` for something the firm needs.",
+]
+
+# ── Pre-tool ─────────────────────────────────────────────────────────────────
+# Firm state is generated. A hand edit is lost the next time the CLI writes.
+[hooks.pre_tool]
+
+[[hooks.pre_tool.triggers]]
+paths = [".firm/"]
+inject = "Cadre firm state. Written by the `firm` CLI — a hand edit here is overwritten on the next write, and the database is never opened directly."
+
+# ── Post-tool ────────────────────────────────────────────────────────────────
+# `pattern` is a plain substring of the file's path. It is NOT a glob: measured
+# on base 0.15.0, "*" and "*.md" and "projects/*" never fire, "*.registry.json"
+# does not match content.registry.json, while "notes.md" matches any path ending
+# in it and "projects/" matches anything beneath a projects directory at any
+# depth. Anything written with a "*" in it is dead on arrival.
+#
+# The MEMBER-facing write-back nudge is deliberately not here. A handler in this
+# file fires in every workspace on the machine, exactly like a domain does, so a
+# nudge aimed at members would follow the operator into their own sessions. It
+# lives in the firm's own .claude/hooks instead, installed by the wire step,
+# where it is scoped to the firm by construction.
+#
+# What belongs here is the one thing that is true everywhere: when a firm's
+# exports change, the graph should follow them.
+[hooks.post_tool]
+
+[[hooks.post_tool.handlers]]
+pattern = "base-export/members.json"
+action = "reingest"
+
+[[hooks.post_tool.handlers]]
+pattern = "base-export/units.json"
+action = "reingest"
+
+[[hooks.post_tool.handlers]]
+pattern = "base-export/gates.json"
+action = "reingest"
+
+# ── Commands ─────────────────────────────────────────────────────────────────
+# Everything below this header binds to the command. Nothing that is not a
+# command field may be added after this point — see the state_dir note above.
+[[commands]]
+name = "cadre"
+handler = "bin/cadre"
+description = "Cadre firm CLI — brief a member, record what it learned, close its work, and run the firm"
+usage = "base cadre <brief|learn|complete|pulse|unit|doctor> [flags]"

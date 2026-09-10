@@ -13,6 +13,7 @@ from __future__ import annotations
 import inspect
 import json
 import stat
+import sys
 from pathlib import Path
 
 HOOK_SCRIPT_NAME = "cadre-session-pulse.py"
@@ -465,4 +466,207 @@ def install_hooks(workspace: Path) -> tuple[int, list[str]]:
     else:
         messages.append(f"Hook already registered in {settings_path}")
 
+    return 0, messages
+
+
+WRITEBACK_HOOK_SCRIPT_NAME = "cadre-writeback-gate.py"
+
+
+def writeback_hook_command() -> str:
+    """The command line the Stop gate is registered under.
+
+    The two hooks above hardcode ``python3``. That resolves on Linux and macOS
+    and does not exist on a default Windows install, and Windows is a real host
+    for this framework now — WindowsScheduler resolves and reports available().
+    The interpreter running this install is present by definition and can run a
+    stdlib-only script, so that is the one written in. It is quoted because a
+    Windows interpreter path routinely contains a space; the script path keeps
+    the unquoted ``$CLAUDE_PROJECT_DIR`` form the other two hooks use, so the
+    expansion behaves identically to the hooks already proven in the field.
+    """
+    return (f'"{sys.executable}" '
+            f"$CLAUDE_PROJECT_DIR/.claude/hooks/{WRITEBACK_HOOK_SCRIPT_NAME}")
+
+
+_WRITEBACK_HOOK_TEMPLATE = '''#!/usr/bin/env python3
+"""Stop gate — a Member does not walk away from a closed Unit in silence.
+
+The firm's seeded rule tells every Member to "write what they learn back to it,
+so the next run starts where this one finished". Nothing checked it, so it was
+advice. This is the check.
+
+WHAT IT CANNOT DO, and why the shape is what it is. The obvious gate asks base
+whether this Member wrote anything. It cannot: `base learn` writes into the
+graph and leaves nothing a hook can cheaply see, and the firm keeps no
+write-back journal. So `base cadre complete` leaves a debt file behind and
+`base cadre learn --unit <id>` deletes it, and this reads the directory. The
+gate and those commands are one piece; a gate installed without them would
+block nothing, and they without it would be optional again.
+
+Deliberately stdlib only, and deliberately no `import firm`. It runs under
+whatever interpreter the workspace has rather than the firm's own environment,
+and a gate that fails to import is a gate that is off.
+
+Contract (Stop event):
+    exit 2  block the stop; stderr reaches the Member
+    exit 0  let the session end
+Fails OPEN on everything else. A Member that cannot finish its session because
+this script has a bug is a worse outcome than a lesson going unrecorded.
+"""
+
+from __future__ import annotations
+
+import glob
+import json
+import os
+import sys
+
+OPEN_SUFFIX = ".open.json"
+# The quote character by number. Spelling it as an escape here would need
+# escaping again in the template that carries this file, and one missed
+# layer renders a gate that does not parse -- which fails OPEN and silently
+# switches the guard off. chr(34) survives any number of layers.
+Q = chr(34)
+
+
+def main() -> int:
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+    except (ValueError, OSError):
+        return 0
+    if not isinstance(payload, dict):
+        return 0
+
+    # Already re-running because this gate blocked once. Blocking again would
+    # trap the session in a loop it cannot leave, which is how a guardrail
+    # earns being switched off.
+    if payload.get("stop_hook_active"):
+        return 0
+
+    workspace = payload.get("cwd") or os.getcwd()
+    member = (os.environ.get("CADRE_MEMBER_ID") or "").strip()
+    if not member:
+        # A Board session is not a Member and owes no Unit write-back.
+        return 0
+
+    directory = os.path.join(workspace, ".firm", "writeback")
+    if not os.path.isdir(directory):
+        return 0
+
+    owed = []
+    for path in sorted(glob.glob(os.path.join(directory, "*" + OPEN_SUFFIX))):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                marker = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(marker, dict):
+            continue
+        if str(marker.get("member_id") or "") != member:
+            continue     # never block a Member for somebody else's debt
+        owed.append(str(marker.get("unit_id") or ""))
+
+    if not owed:
+        return 0
+
+    listed = ", ".join(u for u in owed if u)
+    first = next((u for u in owed if u), "<unit-id>")
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    print(
+        "You closed " + str(len(owed)) + " Unit(s) and recorded nothing about "
+        "them: " + listed + ". The next run starts from the firm's graph, so a "
+        "lesson you do not write is a lesson the firm pays for twice. Record it "
+        "now: __WRITE_BACK_VERB__ " + first + " --text " + Q +
+        "what this taught" + Q + " "
+        "-- one call per Unit listed. Use --type correction if it was a mistake "
+        "worth not repeating. Then finish.",
+        file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception:
+        sys.exit(0)     # fail open, always
+'''
+
+
+def render_writeback_hook() -> str:
+    """The gate script, as it lands on disk.
+
+    The verb is substituted in from ``writeback.WRITE_BACK_VERB`` rather than
+    written into the template, so the command the gate demands on stderr and
+    the command the briefing tells a Member to run cannot drift apart. They
+    drifted once already, and once the gate shipped that drift stopped being a
+    typo and became a deadlock: the Member does exactly what its briefing says,
+    the gate blocks, and the briefing never names the command that clears it.
+    """
+    from firm.services.writeback import WRITE_BACK_VERB
+
+    rendered = _WRITEBACK_HOOK_TEMPLATE.replace("__WRITE_BACK_VERB__",
+                                                WRITE_BACK_VERB)
+    if "__WRITE_BACK_VERB__" in rendered:
+        raise AssertionError(
+            "the gate template's verb placeholder was renamed but this "
+            "substitution was not, so the gate would ship telling a Member to "
+            "run a literal placeholder")
+    return rendered
+
+
+def _register_writeback_hook(settings: dict) -> bool:
+    """Add the Stop gate entry if not present. Returns True if modified."""
+    command = writeback_hook_command()
+    hooks = settings.setdefault("hooks", {})
+    stop = hooks.setdefault("Stop", [])
+    for entry in stop:
+        if not isinstance(entry, dict):
+            continue
+        for hook in entry.get("hooks", []) or []:
+            if not isinstance(hook, dict):
+                continue
+            existing = str(hook.get("command") or "")
+            # Match on the SCRIPT, not the whole command line. The interpreter
+            # path moves when the operator rebuilds a virtual environment, and
+            # matching the full string would then register a second copy of the
+            # same gate and block the Member twice for one debt.
+            if WRITEBACK_HOOK_SCRIPT_NAME in existing:
+                if existing == command:
+                    return False
+                hook["command"] = command      # re-point at the live interpreter
+                return True
+    stop.append({"hooks": [{"type": "command", "command": command, "timeout": 10}]})
+    return True
+
+
+def install_writeback_hook(workspace: Path) -> tuple[int, list[str]]:
+    """Install the write-back Stop gate and register it. Idempotent.
+
+    This is the ONE blocking hook Cadre installs. ibis' ruling caps the
+    blocking hook at one, not the number of hooks Cadre installs; the session
+    pulse and the policy gate are the other two and neither of them is
+    installed by this function.
+    """
+    messages: list[str] = []
+    hooks_dir = workspace / ".claude" / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    script = hooks_dir / WRITEBACK_HOOK_SCRIPT_NAME
+    script.write_text(render_writeback_hook(), encoding="utf-8")
+    try:
+        script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    except OSError:
+        pass                       # Windows has no executable bit to set
+    messages.append(f"Wrote {script}")
+
+    settings_path = workspace / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings = _load_settings(settings_path)
+    if _register_writeback_hook(settings):
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+        messages.append(f"Registered write-back gate in {settings_path}")
+    else:
+        messages.append(f"Write-back gate already registered in {settings_path}")
     return 0, messages
