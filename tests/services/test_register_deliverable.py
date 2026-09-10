@@ -55,6 +55,16 @@ def test_version_family_strips_the_marker() -> None:
     assert _version_family("triage-rules-v12.md") == "triage-rules.md"
 
 
+def test_version_arithmetic_normalizes_windows_separators() -> None:
+    """A path that arrived with backslashes still reduces to the stored form.
+
+    Runs on every platform, so the Linux CI leg proves the normalization too
+    rather than leaving it to the Windows leg alone.
+    """
+    assert _version_family("d\\triage-rules-v3.md") == "d/triage-rules.md"
+    assert _version_of("d\\triage-rules-v3.md") == 3
+
+
 def test_version_of_reads_the_marker() -> None:
     assert _version_of("d/triage-rules-v3.md") == 3
     assert _version_of("d/triage-rules.md") == 1
@@ -83,6 +93,31 @@ def test_register_creates_document_parented_to_unit(tmp_path) -> None:
     assert doc["content_path"] == "report.md"
     assert doc["author_type"] == "member"
     assert doc["author_id"] == "MEM-001"
+
+
+def test_register_stores_a_forward_slash_path_on_every_platform(tmp_path) -> None:
+    """content_path is a logical identifier in firm.db, not a local path.
+
+    A firm on Windows must write "docs/story/ch07.md", not
+    "docs\\story\\ch07.md" - the same row is read by a dashboard on Linux
+    and matched against paths produced by other firms. Every other
+    registration test here uses a flat filename, so the separator never
+    appeared in the stored value and the defect stayed invisible.
+    """
+    conn = _fresh_conn()
+    nested = tmp_path / "docs" / "story"
+    nested.mkdir(parents=True)
+    f = nested / "ch07.md"
+    f.write_text("body")
+
+    result = register_deliverable(
+        conn, "chrisai", "UNIT-001", str(f),
+        member_id="MEM-001", cwd=str(tmp_path),
+    )
+
+    assert result["content_path"] == "docs/story/ch07.md"
+    assert result["document"]["content_path"] == "docs/story/ch07.md"
+    assert get(conn, "unit", "UNIT-001")["outputs"] == ["docs/story/ch07.md"]
 
 
 def test_register_sets_unit_outputs_non_null(tmp_path) -> None:
