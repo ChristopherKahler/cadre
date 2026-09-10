@@ -93,11 +93,19 @@ accident.
 
 ## Two deliberate omissions, and why
 
-**Branch protection requires status checks, not an approving review.** GitHub
-refuses an approval on a pull request opened by the same account. Since the
-orchestrator opens and merges every pull request, requiring a review would
+**Branch protection will require status checks, not an approving review.**
+GitHub refuses an approval on a pull request opened by the same account. Since
+the orchestrator opens and merges every pull request, requiring a review would
 deadlock all of them. The verifier's report, recorded on the pull request, is
 the review.
+
+It is not configured yet, and switching it on today would deadlock every pull
+request for a different reason: the macOS and Windows suite jobs are red on
+`main` because of defects unrelated to any open branch (#25, #26). A required
+check that cannot pass is a lock, which is the mirror of the rule above about a
+check that cannot fail. The first check to require is **clean install from the
+built wheel**, once it is green on `main`, alongside the Linux suite. The other
+two platforms join the required set when #25 and #26 are fixed. Tracked in #27.
 
 **Actions are pinned to major version tags, not to commits.** Pinning to a
 commit is the stricter practice, but a commit pin also stops receiving security
