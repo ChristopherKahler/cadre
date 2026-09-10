@@ -32,6 +32,7 @@ import argparse
 import json
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sqlite3
@@ -90,7 +91,7 @@ class Board:
 
 
 def run(argv: list[str], *, cwd: Path | None = None, env: dict | None = None,
-        timeout: int = TIMEOUT) -> tuple[int, str]:
+        timeout: int = TIMEOUT, stdin_text: str | None = None) -> tuple[int, str]:
     """Run a command with an EXPLICIT environment and a timeout.
 
     Explicit env, never ambient inheritance: a child spawned from a
@@ -103,8 +104,13 @@ def run(argv: list[str], *, cwd: Path | None = None, env: dict | None = None,
     if env:
         e.update(env)
     try:
-        p = subprocess.run(argv, cwd=str(cwd) if cwd else None, env=e,
-                           capture_output=True, timeout=timeout)
+        p = subprocess.run(
+            argv, cwd=str(cwd) if cwd else None, env=e,
+            capture_output=True, timeout=timeout,
+            # Bytes, never text=True: on Windows text mode translates newlines
+            # on the WRITE side, so a JSON payload arrives altered.
+            input=stdin_text.encode("utf-8") if stdin_text is not None else None,
+        )
     except FileNotFoundError as exc:
         return 127, f"not found: {exc}"
     except subprocess.TimeoutExpired:
@@ -112,6 +118,38 @@ def run(argv: list[str], *, cwd: Path | None = None, env: dict | None = None,
     out = (p.stdout or b"").decode("utf-8", errors="replace")
     err = (p.stderr or b"").decode("utf-8", errors="replace")
     return p.returncode, out + err
+
+
+def _registered_session_hook_command(settings: Path) -> str | None:
+    """The SessionStart command string as `cadre init` actually wrote it.
+
+    Read back from disk rather than reconstructed, because the point is to test
+    what was wired, not what we believe was wired.
+    """
+    try:
+        data = json.loads(settings.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    for entry in (data.get("hooks") or {}).get("SessionStart") or []:
+        for h in entry.get("hooks") or [entry]:
+            cmd = h.get("command") or ""
+            if "cadre-session-pulse" in cmd:
+                return cmd
+    return None
+
+
+def _expand_hook_command(command: str, ws: Path) -> list[str]:
+    """Turn the registered command string into an argv, expanding the one
+    variable Claude Code substitutes.
+
+    `$CLAUDE_PROJECT_DIR` is expanded by the harness because Claude Code
+    expands it at invocation; leaving it literal would test a path that does
+    not exist and blame the hook for it. Nothing else is expanded — an
+    interpreter name stays exactly as registered, which is the thing under test.
+    """
+    expanded = command.replace("$CLAUDE_PROJECT_DIR", str(ws))
+    expanded = expanded.replace("${CLAUDE_PROJECT_DIR}", str(ws))
+    return shlex.split(expanded, posix=not IS_WIN)
 
 
 def venv_bin(venv: Path, name: str) -> Path:
@@ -323,6 +361,77 @@ def main() -> int:
         b.add(PASS if rc == 0 and hook.is_file() and wired else FAIL,
               "cadre init --install-hooks wires the session hook",
               f"rc={rc}  hook={hook.is_file()}  registered={wired}")
+
+        # Registered is NOT running. The two checks above both pass on a hook
+        # that can never execute, and on 2026-09-10 the shipped hook could not:
+        # install_hooks.py registers it under bare `python3`, which is not the
+        # interpreter that has `firm`. It exits 0, prints nothing, and its
+        # contract says silence means "no firm here" — so the roster never
+        # reaches a session and nothing reports it.
+        #
+        # This runs the command AS REGISTERED, taken out of settings.json
+        # rather than chosen here. An interpreter of the harness's own picking
+        # would prove the hook script works while saying nothing about what
+        # `cadre init` actually wired, which is the whole defect.
+        registered = _registered_session_hook_command(settings)
+        if not registered:
+            b.add(FAIL, "the session hook command can be read back out of "
+                        "settings.json",
+                  "no SessionStart command found; cannot test what was wired")
+        else:
+            payload = json.dumps({"cwd": str(ws)})
+            argv = _expand_hook_command(registered, ws)
+            rc_h, out_h = run(argv, cwd=ws, stdin_text=payload)
+            got_roster = "active-roster" in out_h or "member" in out_h.lower()
+            b.add(PASS if got_roster else FAIL,
+                  "the session hook AS REGISTERED actually emits the roster",
+                  f"command: {registered}\nargv: {argv}\nrc={rc_h} "
+                  f"stdout={len(out_h)} bytes\n"
+                  + (out_h[:300] if got_roster else
+                     "EMPTY OR NO ROSTER. The hook exits 0 and says nothing, "
+                     "which its contract reads as 'no firm here'. A session "
+                     "gets no roster and nothing reports it. Check that the "
+                     "registered interpreter is the one that has `firm`."))
+
+            # RED ARM. Without it, a green row above could mean the harness
+            # cannot tell a working hook from a broken one.
+            rc_b, out_b = run([sys.executable, "-s", str(hook)],
+                              cwd=ws, stdin_text=payload)
+            b.add(PASS if "active-roster" not in out_b else FAIL,
+                  "RED ARM: an interpreter without cadre emits no roster",
+                  f"rc={rc_b} stdout={len(out_b)} bytes\n"
+                  + ("correctly produced no roster" if "active-roster" not in out_b
+                     else "this interpreter DID produce a roster, so the row "
+                          "above cannot distinguish a working hook from a "
+                          "broken one — most likely an editable-install .pth "
+                          "in user site-packages is making `firm` importable "
+                          "everywhere. Re-measure with -s."))
+
+            # Green above is still not proof a USER gets a roster. On a
+            # developer box bare `python3` reaches `firm` through an
+            # editable-install .pth in USER site-packages, and it resolves to
+            # the SOURCE TREE, not the installed wheel. Measured 2026-09-10:
+            # bare python3 imported firm from src/, while both `-s` and
+            # PYTHONNOUSERSITE=1 raised ModuleNotFoundError. Suppressing user
+            # site-packages removes the accident and leaves what a fresh user
+            # actually has, so this arm separates "works here" from "works".
+            rc_u, out_u = run(argv, cwd=ws, stdin_text=payload,
+                              env={"PYTHONNOUSERSITE": "1"})
+            got_u = "active-roster" in out_u or "member" in out_u.lower()
+            b.add(PASS if got_u else FAIL,
+                  "the registered hook emits the roster without a developer "
+                  "editable install helping it",
+                  f"command: {registered}\nrc={rc_u} "
+                  f"stdout={len(out_u)} bytes\n"
+                  + (out_u[:300] if got_u else
+                     "NO ROSTER once user site-packages is suppressed. The row "
+                     "above is green only because THIS machine carries an "
+                     "editable-install .pth that a user does not have. The "
+                     "registered interpreter cannot import cadre for anyone "
+                     "else, so the hook exits 0 and prints nothing, and its "
+                     "contract reads that silence as 'no firm here'. Record "
+                     "the interpreter path at install time and have the hook "
+                     "read it."))
         rc, out = run([str(venv_bin(venv, "cadre")), "init", str(ws), "--demo"])
         again_ok = rc == 0 and ("skip" in out.lower() or "already" in out.lower())
         b.add(PASS if again_ok else FAIL,
