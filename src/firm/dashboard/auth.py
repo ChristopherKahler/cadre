@@ -26,6 +26,7 @@ import hmac
 import secrets
 from pathlib import Path
 
+from firm.secrets.fsperm import restrict_to_owner
 from firm.secrets.vault import cadre_home
 
 HEADER = "X-Cadre-Board-Token"
@@ -49,13 +50,13 @@ def board_token() -> str:
     """Read the operator's board token, minting it on first use."""
     path = board_token_path()
     if path.exists():
-        existing = path.read_text().strip()
+        existing = path.read_text(encoding="utf-8").strip()
         if existing:
             return existing
     token = secrets.token_urlsafe(32)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(token + "\n")
-    path.chmod(0o600)
+    path.write_text(token + "\n", encoding="utf-8")
+    restrict_to_owner(path)
     return token
 
 
@@ -80,9 +81,10 @@ def set_board_password(password: str) -> None:
     path = board_password_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        f"{PASSWORD_SCHEME}${_PBKDF2_ITERATIONS}${salt.hex()}${digest.hex()}\n"
+        f"{PASSWORD_SCHEME}${_PBKDF2_ITERATIONS}${salt.hex()}${digest.hex()}\n",
+        encoding="utf-8",
     )
-    path.chmod(0o600)
+    restrict_to_owner(path)
 
 
 def _password_matches(supplied: str) -> bool:
@@ -96,7 +98,8 @@ def _password_matches(supplied: str) -> bool:
         if _verified is not None and _verified[0] == mtime \
                 and hmac.compare_digest(_verified[1], fingerprint):
             return True
-        scheme, iters, salt_hex, hash_hex = path.read_text().strip().split("$")
+        scheme, iters, salt_hex, hash_hex = (
+            path.read_text(encoding="utf-8").strip().split("$"))
         if scheme != PASSWORD_SCHEME:
             return False
         digest = hashlib.pbkdf2_hmac(
