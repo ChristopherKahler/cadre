@@ -20,6 +20,7 @@ firm.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -174,15 +175,85 @@ def is_current(workspace: Path, firm_id: str, conn: Any) -> tuple[bool, str]:
     want = render(Path(workspace), firm_id, _roster_words(conn, firm_id))
     head, _, rest = body.partition(BEGIN)
     have = BEGIN + rest.partition(END)[0] + END
-    if have.strip() == want.strip():
-        return True, "domain block matches the roster"
-    return False, ("the domain block is stale against the roster — "
-                   "Members are missing from its triggers")
+    if have.strip() != want.strip():
+        return False, ("the domain block is stale against the roster — "
+                       "Members are missing from its triggers")
+    # A perfect block is not a live wire. base drops a MATCHED domain that
+    # carries zero rules, silently and totally, so a firm can pass every
+    # structural check above and still reach no Member. Measured on
+    # chief-of-staff 2026-09-09 and again by godwit 2026-09-10 against base
+    # 0.15.0. This check is the reason the finding stops being invisible.
+    count = rule_count(Path(workspace), firm_id)
+    if count is None:
+        return True, ("domain block matches the roster; rule count unread "
+                      "(base absent or its output unrecognised)")
+    if count == 0:
+        return False, ("the firm's domain carries no rules, so base drops the "
+                       "whole block — the block is perfect and injects nothing")
+    return True, f"domain block matches the roster, {count} rule(s) live"
 
 
 _SEED_RULE = ("Members of this firm read the firm's own graph before acting and "
               "write what they learn back to it, so the next run starts where "
               "this one finished.")
+
+
+def _base_env() -> dict[str, str]:
+    """Explicit env for every `base` call — a systemd-spawned hub has a bare PATH.
+
+    BASE_HOME is deliberately carried through when the caller set it: a test
+    harness pointing base at a scratch tier must not have Cadre silently
+    re-resolve the operator's real one.
+    """
+    env = {"HOME": str(Path.home()),
+           "PATH": os.environ.get("PATH") or "/usr/bin:/bin"}
+    for passthrough in ("BASE_HOME", "XDG_CONFIG_HOME"):
+        value = os.environ.get(passthrough)
+        if value:
+            env[passthrough] = value
+    return env
+
+
+# `base rule list` exits 0 for a populated domain, an empty one, AND a domain
+# that never existed (measured, base 0.15.0), so the exit code discriminates
+# nothing and the output is the only signal. Anchor on the POSITIVE shape --
+# "[<domain>] N rules across both tiers:" -- rather than on the absence of the
+# empty-case sentence: an absence test silently reads "has rules" the day base
+# rewords that sentence, and it fails toward the clean answer.
+_COUNT_RE = re.compile(r"^\[(?P<domain>[^\]]+)\]\s+(?P<n>\d+)\s+rules\b",
+                       re.MULTILINE)
+_EMPTY_RE = re.compile(r"^No rules for domain\b", re.MULTILINE)
+
+
+def rule_count(workspace: Path, firm_id: str) -> int | None:
+    """How many rules the firm's base domain carries.
+
+    ``None`` is NOT zero and must never be rendered as one: it means base is
+    absent, timed out, or printed something this function does not recognise.
+    A machine without base has no ruleless domain to report, and reporting one
+    would fail a firm for the operator's install. Absent, empty and zero are
+    three different answers (honesty envelope).
+    """
+    import subprocess
+    from firm.sysconfig.service import which_base
+    base = which_base()
+    if not base:
+        return None
+    try:
+        listed = subprocess.run(
+            [base, "rule", "list", "--domain", firm_id],
+            capture_output=True, text=True, timeout=60,
+            cwd=str(workspace), env=_base_env(), stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if listed.returncode != 0:
+        return None
+    match = _COUNT_RE.search(listed.stdout or "")
+    if match and match.group("domain") == firm_id:
+        return int(match.group("n"))
+    if _EMPTY_RE.search(listed.stdout or ""):
+        return 0
+    return None
 
 
 def _seed_rule(workspace: Path, firm_id: str) -> bool:
@@ -199,19 +270,20 @@ def _seed_rule(workspace: Path, firm_id: str) -> bool:
     base = which_base()
     if not base:
         return False
-    env = {"HOME": str(Path.home()),
-           "PATH": os.environ.get("PATH") or "/usr/bin:/bin"}
+    count = rule_count(workspace, firm_id)
+    if count is None:
+        return False              # cannot read the domain; do not claim a seed
+    if count > 0:
+        return True               # already has rules; leave them alone
     try:
-        listed = subprocess.run(
-            [base, "rule", "list", "--domain", firm_id],
-            capture_output=True, text=True, timeout=60,
-            cwd=str(workspace), env=env, stdin=subprocess.DEVNULL)
-        if listed.returncode == 0 and "No rules for domain" not in listed.stdout:
-            return True                       # already has rules; leave them alone
         added = subprocess.run(
             [base, "rule", "add", "--domain", firm_id, "--text", _SEED_RULE],
             capture_output=True, text=True, timeout=60,
-            cwd=str(workspace), env=env, stdin=subprocess.DEVNULL)
-        return added.returncode == 0
+            cwd=str(workspace), env=_base_env(), stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):
         return False
+    if added.returncode != 0:
+        return False
+    # Read back. `base rule add` returning 0 is the writer's own opinion; the
+    # only thing that proves the rule landed is asking for it again.
+    return (rule_count(workspace, firm_id) or 0) > 0

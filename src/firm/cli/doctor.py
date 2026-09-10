@@ -330,10 +330,21 @@ def fix(workspace: Path, firm_id: str, checks: list[dict[str, Any]], *,
         if "base-domain" in failed:
             from firm.services import base_domain as _base_domain
             res = _base_domain.sync(workspace, firm_id, conn=conn)
-            did.append("base-domain: rebuilt from the roster "
-                       f"({len(res.get('keywords') or [])} triggers)"
-                       if res.get("ok") else
-                       f"base-domain: {res.get('reason')}")
+            if not res.get("ok"):
+                did.append(f"base-domain: {res.get('reason')}")
+            elif not res.get("rule_seeded"):
+                # The block is only half the wire. Saying "rebuilt" here while
+                # the domain carries no rules reports a repair that did not
+                # happen: base drops a ruleless domain whole.
+                did.append(
+                    "base-domain: block rebuilt from the roster "
+                    f"({len(res.get('keywords') or [])} triggers) BUT THE RULE "
+                    "SEED FAILED — the domain still injects nothing. Check that "
+                    f"`base rule add --domain {firm_id}` works from {workspace}")
+            else:
+                did.append("base-domain: rebuilt from the roster "
+                           f"({len(res.get('keywords') or [])} triggers), "
+                           "rule seeded")
         if "denials" in failed:
             n = policy_svc.ingest_denials(conn, workspace, firm_id)
             did.append(f"denials: {n} ingested")

@@ -387,6 +387,39 @@ def spawn_member_run(
         # their work to THIS run without threading the id through every call.
         env["CADRE_RUN_ID"] = run_id
 
+    # --- the Member's relay title -----------------------------------------
+    # base assigns every headless session a relay codename from a name pool
+    # ("tapir", "puffin") and prints a ~7 KB wake contract for it. A firm whose
+    # Members are all called after small mammals cannot be steered by name from
+    # the Boardroom, so the title is pinned to <firm>-<member> here.
+    #
+    # Two things had to be true for that to work, both measured against base
+    # 0.15.0 (md5 052b9a95d6afbd938ddf21aba26b0601) on 2026-09-10:
+    #
+    # 1. WT_SESSION must not reach the child. base binds a title partly by that
+    #    GUID, so a second session presenting the same one RECLAIMS the title
+    #    already bound to it instead of taking the pinned name. Measured: with
+    #    WT_SESSION unset or distinct per run, three runs took three distinct
+    #    pinned titles; with one shared WT_SESSION, run 2 silently reclaimed run
+    #    1's title and the registry held a single row. The hub hit this from the
+    #    other side and dropped the same variable for the same reason
+    #    (ping-chat-hub, src/ping_hub/spawn/wt.py:118-123: a rebooted `heron`
+    #    came back as `chris`). A hub started inside Windows Terminal carries one
+    #    in its own environment, and `env = dict(os.environ)` above would hand it
+    #    to every Member in the pulse.
+    #
+    # 2. An INHERITED BASE_RELAY_AS must never survive. If the spawner was itself
+    #    pinned — the hub pins every gated child — every Member of every firm
+    #    would register under the spawner's title, and whichever answered first
+    #    would clear relay alerts meant for the others. So this is an assignment,
+    #    never a setdefault, and the variable is removed outright when there is
+    #    no member to name.
+    env.pop("WT_SESSION", None)
+    if firm_id and member_id:
+        env["BASE_RELAY_AS"] = f"{firm_id}-{member_id}"
+    else:
+        env.pop("BASE_RELAY_AS", None)
+
     try:
         proc = subprocess.Popen(
             cmd,
