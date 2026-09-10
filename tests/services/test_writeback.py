@@ -629,3 +629,36 @@ def test_that_resolve_guard_can_actually_fail():
     assert done.returncode != 0, (
         "the firm parser accepted a verb that does not exist, so the resolve "
         "guard above cannot discriminate")
+
+
+def test_the_gate_message_survives_a_legacy_code_page(tmp_path):
+    """The Windows CI leg reads this stream through a cp1252 pipe.
+
+    The gate is not run through the Cadre CLI, so `_force_utf8_streams` does
+    not cover it - it is launched directly by Claude Code and pins its own
+    stderr to UTF-8. That protects the WRITE. The READ is the other half: the
+    Windows job runs the whole suite with PYTHONIOENCODING deliberately unset,
+    so anything capturing this message decodes it with the platform locale.
+
+    A curly quote or an em dash in the message would therefore pass here on
+    Linux and fail on Windows only - the exact shape of defect that green
+    board was just fixed to catch. Keeping the message ASCII costs nothing;
+    the message is a shell command and a sentence about it.
+    """
+    workspace = tmp_path / "firm"
+    workspace.mkdir()
+    writeback.record_closure(workspace, FIRM, ME, "U-1")
+    done = subprocess.run(
+        [sys.executable, str(_gate_at(tmp_path))],
+        cwd=str(workspace),
+        env={**os.environ, "CADRE_MEMBER_ID": ME},
+        input=json.dumps({"cwd": str(workspace), "stop_hook_active": False}).encode(),
+        capture_output=True, timeout=60)
+    assert done.returncode == 2, "the gate did not block, so it printed nothing to check"
+
+    offending = sorted({chr(b) for b in done.stderr if b > 127})
+    assert not offending, (
+        f"the gate's message carries non-ASCII {offending}, which a cp1252 "
+        f"pipe on the Windows leg cannot round-trip")
+    # And the positive half: it really does decode on the narrow code page.
+    assert "U-1" in done.stderr.decode("cp1252")
