@@ -9,7 +9,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
-import shutil
 import subprocess
 import sys
 
@@ -214,6 +213,33 @@ def _is_execable(path: str) -> bool:
     return head.startswith((_SHEBANG, _ELF))
 
 
+def _candidate_names() -> list[str]:
+    """File names a ``claude`` on PATH can actually have on this host.
+
+    POSIX executables carry no extension, so one name is enough there.
+    Windows resolves a bare command name through PATHEXT and will not run an
+    extension-less file from a PATH lookup at all. Looking only for "claude"
+    therefore found nothing on Windows while ``claude.EXE`` sat in the very
+    same directory, and the resolver told the operator there was no runnable
+    claude on PATH while they were looking straight at one. That is the same
+    false-reason failure as the ELF-only header sniff, at a second site, and
+    it hits the DEFAULT path rather than the configured one: a new operator
+    has claude.EXE on PATH and has never heard of CADRE_CLAUDE_BIN.
+
+    PATHEXT is semicolon-separated on every Windows, so it is split on ";"
+    rather than os.pathsep -- os.pathsep follows the host running the code,
+    which is not the same thing once the platform branch is under test.
+    """
+    if sys.platform != "win32":
+        return ["claude"]
+    raw = os.environ.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD"
+    names = ["claude" + ext.strip() for ext in raw.split(";") if ext.strip()]
+    # A full path to an extension-less PE image still execs, so keep the bare
+    # name as a last resort rather than dropping a case that used to work.
+    names.append("claude")
+    return names
+
+
 def resolve_claude_bin() -> tuple[str | None, str]:
     """Resolve the claude binary Members run on.
 
@@ -245,21 +271,23 @@ def resolve_claude_bin() -> tuple[str | None, str]:
     seen: set[str] = set()
     entries = (os.environ.get("PATH") or "").split(os.pathsep)
     entries.append(os.path.join(os.path.expanduser("~"), ".local", "bin"))
+    names = _candidate_names()
     for directory in entries:
         if not directory:
             continue
-        cand = os.path.join(directory, "claude")
-        if cand in seen:
-            continue
-        seen.add(cand)
-        if not (os.path.isfile(cand) and os.access(cand, os.X_OK)):
-            continue
-        if _is_execable(cand):
-            note = f"PATH resolution: {cand}"
-            if rejected:
-                note += f" (skipped un-execable: {', '.join(rejected)})"
-            return cand, note
-        rejected.append(cand)
+        for name in names:
+            cand = os.path.join(directory, name)
+            if cand in seen:
+                continue
+            seen.add(cand)
+            if not (os.path.isfile(cand) and os.access(cand, os.X_OK)):
+                continue
+            if _is_execable(cand):
+                note = f"PATH resolution: {cand}"
+                if rejected:
+                    note += f" (skipped un-execable: {', '.join(rejected)})"
+                return cand, note
+            rejected.append(cand)
 
     if rejected:
         return None, (

@@ -829,3 +829,75 @@ class TestSpawnReallyExecs:
         assert result.returncode is not None
         assert result.timed_out is False
         assert result.pid not in _active_pids
+
+
+class TestPathDiscoveryUsesHostFileNames:
+    """The default route, with no CADRE_CLAUDE_BIN set.
+
+    The PATH walk looked for a file named exactly "claude". Windows never
+    creates that name and never runs an extension-less file from a bare
+    command lookup, so a new operator with claude.EXE on PATH was told there
+    was no runnable claude on PATH. The env var was the only working route,
+    which is not an install-and-use story.
+    """
+
+    @staticmethod
+    def _isolate(monkeypatch, tmp_path, platform):
+        # resolve_claude_bin also probes ~/.local/bin. Without redirecting
+        # HOME the real one leaks in and both tests below become meaningless
+        # on any machine that has claude installed -- which is every machine
+        # this is developed on.
+        monkeypatch.setattr(sys, "platform", platform)
+        monkeypatch.delenv("CADRE_CLAUDE_BIN", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path / "nohome"))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path / "nohome"))
+        monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+        monkeypatch.setenv("PATH", str(tmp_path))
+
+    @staticmethod
+    def _write(path, head):
+        path.write_bytes(head + b"\x00" * 60)
+        path.chmod(0o755)
+
+    def test_win32_finds_claude_exe_with_no_bare_claude_present(
+            self, tmp_path, monkeypatch):
+        exe = tmp_path / "claude.EXE"
+        self._write(exe, b"MZx\x00")
+        assert not (tmp_path / "claude").exists()   # the premise under test
+
+        self._isolate(monkeypatch, tmp_path, "win32")
+        found, detail = resolve_claude_bin()
+        assert found == str(exe), detail
+
+    def test_win32_finds_a_cmd_wrapper_too(self, tmp_path, monkeypatch):
+        # PATHEXT order puts .EXE before .CMD, so a lone wrapper has to be
+        # reachable on its own rather than only as a runner-up.
+        wrapper = tmp_path / "claude.CMD"
+        wrapper.write_bytes(b"@echo off\r\n")
+        wrapper.chmod(0o755)
+
+        self._isolate(monkeypatch, tmp_path, "win32")
+        found, detail = resolve_claude_bin()
+        assert found == str(wrapper), detail
+
+    def test_win32_finds_nothing_when_the_directory_holds_neither(
+            self, tmp_path, monkeypatch):
+        # The control. Without it the two tests above pass on any machine
+        # that happens to have a real claude somewhere on PATH, and the
+        # check could not tell a working lookup from a blind one.
+        self._isolate(monkeypatch, tmp_path, "win32")
+        found, detail = resolve_claude_bin()
+        assert found is None, found
+        assert "no runnable" in detail
+
+    def test_posix_is_unchanged_and_ignores_windows_names(
+            self, tmp_path, monkeypatch):
+        # A .EXE is not runnable on Linux, and PATH discovery there must not
+        # start claiming it is just because the Windows branch exists.
+        self._write(tmp_path / "claude.EXE", b"MZx\x00")
+        self._isolate(monkeypatch, tmp_path, "linux")
+        assert resolve_claude_bin()[0] is None
+
+        bare = tmp_path / "claude"
+        self._write(bare, b"\x7fELF")
+        assert resolve_claude_bin()[0] == str(bare)
