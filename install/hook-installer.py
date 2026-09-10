@@ -5,7 +5,8 @@ Usage::
 
     python3 install/hook-installer.py <workspace-path>
 
-Copies ``install/firm-session-pulse.py`` to ``<workspace>/.claude/hooks/``
+Copies the packaged hook (``firm/hooks/session_pulse_entry.py``) to
+``<workspace>/.claude/hooks/``
 and registers it under ``hooks.SessionStart`` in ``<workspace>/.claude/
 settings.json``. Running twice is a no-op.
 """
@@ -24,9 +25,10 @@ HOOK_SCRIPT_NAME = "firm-session-pulse.py"
 
 
 def _install_script(repo_root: Path, workspace: Path) -> Path:
-    source = repo_root / "install" / HOOK_SCRIPT_NAME
+    # The one copy, the same file `cadre init --install-hooks` installs.
+    source = repo_root / "src" / "firm" / "hooks" / "session_pulse_entry.py"
     if not source.exists():
-        raise FileNotFoundError(f"Hook template missing: {source}")
+        raise FileNotFoundError(f"Hook source missing: {source}")
     hooks_dir = workspace / ".claude" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
     dest = hooks_dir / HOOK_SCRIPT_NAME
