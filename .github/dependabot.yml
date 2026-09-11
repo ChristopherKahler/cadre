@@ -1,0 +1,23 @@
+# A commit pin does not update itself, and that is the whole risk of pinning.
+#
+# Every action in .github/workflows/ names a commit SHA, which is why nothing
+# can move under this repository without a diff. The cost is that a pinned SHA
+# stops receiving security patches: pin and walk away, and the repository sits
+# on a vulnerable version silently until somebody happens to look.
+#
+# Dependabot understands SHA pins. It opens a pull request that moves the SHA
+# and updates the trailing tag comment, with the upstream release notes
+# attached, so the refresh is reviewed rather than remembered.
+#
+# The advisory record for each current pin lives in docs/ACTION-PINS.md. Update
+# its tables in the same pull request that moves a pin.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
