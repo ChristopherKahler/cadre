@@ -213,7 +213,8 @@ def test_seed_rule_passes_base_home_through(monkeypatch, wired):
 
 
 # ---------------------------------------------------------------------------
-# is_current — the check that used to pass a dead wire
+# assess — the check that used to pass a dead wire, and used to pass
+# an unreadable one as healthy (#62)
 # ---------------------------------------------------------------------------
 
 def _write_perfect_block(ws: Path, firm_id: str) -> None:
@@ -221,59 +222,123 @@ def _write_perfect_block(ws: Path, firm_id: str) -> None:
     (ws / ".base" / "domains.toml").write_text(block + "\n", encoding="utf-8")
 
 
-def test_is_current_fails_a_perfect_block_with_zero_rules(monkeypatch, wired):
+def test_assess_fails_a_perfect_block_with_zero_rules(monkeypatch, wired):
     """The whole point. base drops a matched domain carrying no rules, so a
     structurally perfect block that injects nothing must be a FINDING."""
     _write_perfect_block(wired, "zqdom")
     monkeypatch.setattr(subprocess, "run", _Recorder(_Result(OUT_EMPTY)))
-    ok, detail = base_domain.is_current(wired, "zqdom", _BlindConn())
-    assert ok is False
+    verdict, detail = base_domain.assess(wired, "zqdom", _BlindConn())
+    assert verdict is base_domain.Verdict.STALE
     assert "no rules" in detail
 
 
-def test_is_current_passes_the_same_block_with_one_rule(monkeypatch, wired):
+def test_assess_passes_the_same_block_with_one_rule(monkeypatch, wired):
     """The control. Same block, same everything, one rule — must go green, or
     the test above is passing for some other reason."""
     _write_perfect_block(wired, "zqdom")
     monkeypatch.setattr(subprocess, "run", _Recorder(_Result(OUT_ONE_RULE)))
-    ok, detail = base_domain.is_current(wired, "zqdom", _BlindConn())
-    assert ok is True
+    verdict, detail = base_domain.assess(wired, "zqdom", _BlindConn())
+    assert verdict is base_domain.Verdict.CURRENT
     assert "1 rule" in detail
 
 
-def test_is_current_does_not_fail_a_firm_for_a_missing_base(monkeypatch, wired):
+def test_assess_reports_a_missing_base_as_undeterminable_not_current(
+        monkeypatch, wired):
+    """THE #62 assertion, inverted, and it is the only one that inverts.
+
+    This test used to require ``ok is True`` -- it was the defect written
+    down and passing. Its intent was right and is kept: do not blame the
+    firm for the operator's install. UNDETERMINABLE is what lets that
+    intent survive without the lie. It does not say the firm is broken; it
+    says nothing was established, which routes to the operator rather than
+    to the mechanical fixer and prints "?" rather than a tick.
+
+    The old name said the old answer, so the name moved with it.
+    """
     _write_perfect_block(wired, "zqdom")
     monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: None)
-    ok, detail = base_domain.is_current(wired, "zqdom", _BlindConn())
-    assert ok is True
+    verdict, detail = base_domain.assess(wired, "zqdom", _BlindConn())
+    assert verdict is base_domain.Verdict.UNDETERMINABLE
     assert "unread" in detail
 
 
-def test_is_current_still_fails_a_missing_block(monkeypatch, wired):
+def test_assess_still_fails_a_missing_block(monkeypatch, wired):
     monkeypatch.setattr(subprocess, "run", _Recorder(_Result(OUT_ONE_RULE)))
-    ok, detail = base_domain.is_current(wired, "zqdom", _BlindConn())
-    assert ok is False
+    verdict, detail = base_domain.assess(wired, "zqdom", _BlindConn())
+    assert verdict is base_domain.Verdict.STALE
     assert "no domain block" in detail
 
 
-def test_is_current_still_fails_a_duplicated_name(monkeypatch, wired):
+def test_assess_still_fails_a_duplicated_name(monkeypatch, wired):
     block = base_domain.render(wired, "zqdom", ["zqdom"])
     hand = '[[domain]]\nname = "zqdom"\nrules = ["hand written"]\n'
     (wired / ".base" / "domains.toml").write_text(hand + "\n" + block + "\n",
                                                   encoding="utf-8")
-    ok, detail = base_domain.is_current(wired, "zqdom", _BlindConn())
-    assert ok is False
+    verdict, detail = base_domain.assess(wired, "zqdom", _BlindConn())
+    assert verdict is base_domain.Verdict.STALE
     assert "matches none of them" in detail
 
 
-def test_is_current_still_fails_a_stale_block(monkeypatch, wired):
+def test_assess_still_fails_a_stale_block(monkeypatch, wired):
     stale = base_domain.render(wired, "zqdom", ["zqdom", "Someone Who Left"])
     (wired / ".base" / "domains.toml").write_text(stale + "\n", encoding="utf-8")
     monkeypatch.setattr(subprocess, "run", _Recorder(_Result(OUT_ONE_RULE)))
-    ok, detail = base_domain.is_current(wired, "zqdom", _BlindConn())
-    assert ok is False
+    verdict, detail = base_domain.assess(wired, "zqdom", _BlindConn())
+    assert verdict is base_domain.Verdict.STALE
     assert "stale against the roster" in detail
 
+
+def test_assess_keeps_its_three_outcomes_distinct(monkeypatch, wired):
+    """Two of the three must not be able to collapse into one.
+
+    Asserting ``len({Verdict.CURRENT, Verdict.STALE, Verdict.UNDETERMINABLE})``
+    is 3 would be VACUOUS -- enum members are distinct by construction, so it
+    says nothing about this code. The assertion has to be on three verdicts
+    actually RETURNED from three real situations, which is the shape
+    tests/cli/test_init_wires_base.py already uses on the three absence
+    reasons. Copying the shape is the point; copying the enum is not.
+    """
+    _write_perfect_block(wired, "zqdom")
+
+    monkeypatch.setattr(subprocess, "run", _Recorder(_Result(OUT_ONE_RULE)))
+    current = base_domain.assess(wired, "zqdom", _BlindConn())[0]
+
+    stale_block = base_domain.render(wired, "zqdom", ["zqdom", "Someone Who Left"])
+    (wired / ".base" / "domains.toml").write_text(stale_block + "\n",
+                                                  encoding="utf-8")
+    monkeypatch.setattr(subprocess, "run", _Recorder(_Result(OUT_ONE_RULE)))
+    stale = base_domain.assess(wired, "zqdom", _BlindConn())[0]
+
+    _write_perfect_block(wired, "zqdom")
+    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: None)
+    undeterminable = base_domain.assess(wired, "zqdom", _BlindConn())[0]
+
+    assert len({current, stale, undeterminable}) == 3, (
+        "three different situations produced fewer than three verdicts: "
+        f"{current} / {stale} / {undeterminable}")
+
+
+def test_assess_will_not_call_an_unreadable_domains_file_stale(wired):
+    """A file you could not read is not a file you found to be out of date.
+
+    This branch answered False before, which ``doctor`` renders as a stale
+    block routed to the mechanical fixer -- so ``--fix`` would rebuild a file
+    it had just failed to read. That is #62's mistake pointing the other way:
+    a verdict asserted from no evidence. It errs loud rather than quiet, which
+    is why it was survivable, not why it was right.
+
+    The OSError is real rather than injected: the path is a DIRECTORY, so the
+    read raises IsADirectoryError on POSIX and PermissionError on Windows, both
+    of which are OSError.
+    """
+    domains = wired / ".base" / "domains.toml"
+    if domains.exists():
+        domains.unlink()
+    domains.mkdir()
+
+    verdict, detail = base_domain.assess(wired, "zqdom", _BlindConn())
+    assert verdict is base_domain.Verdict.UNDETERMINABLE, (
+        f"an unreadable domains.toml came back as {verdict}: {detail!r}")
 
 # ---------------------------------------------------------------------------
 # sync — the result the callers must stop discarding
