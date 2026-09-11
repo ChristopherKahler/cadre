@@ -95,7 +95,7 @@ BASE_SECTION_ROWS = [
     "the other platform's tier is being watched",
     "the append scan can actually detect a planted write",
     "the append scan ignores another session's writes",
-    "the operator's own graph and registry were never written to",
+    "the operator's registry, config and extensions were never written to",
     "no appended write carries this run's fingerprint",
 ]
 
@@ -357,7 +357,7 @@ def operator_files() -> list[Path]:
     "another session was working while the harness ran". They are still watched,
     by `fingerprint_hits()`, on a question a foreign session cannot answer for
     them. Everything remaining here is written by nothing but a leak, so an
-    exact hash is still the right instrument for it and its row is unchanged.
+    exact hash is still the right instrument for it.
     """
     home = Path.home()
     files = [home / ".base-gbl" / "base.toml",
@@ -1415,12 +1415,16 @@ def main() -> int:
                   "which is the exact defect this row exists to close: "
                   + "; ".join(foreign))
 
-            # ROW A -- the exact-hash paths. Wording UNCHANGED, because it
-            # still means precisely what it always meant, about precisely the
-            # files it can still say it about.
+            # ROW A -- the exact-hash paths. Wording NARROWED, to name the set
+            # this tier still watches. It used to say "graph and registry"; the
+            # graphs left for churning_files() below and the row went on
+            # claiming them, which is issue #62's defect one directory away --
+            # a row reporting more than it measured. It now names the registry,
+            # the config and the extensions, which is what operator_files()
+            # actually returns.
             after_hash = operator_digest()
             b.add(PASS if before_hash == after_hash else FAIL,
-                  "the operator's own graph and registry were never written to",
+                  "the operator's registry, config and extensions were never written to",
                   f"content hash {before_hash[:12]} unchanged across "
                   f"{len(operator_files())} exact-hash path(s)"
                   if before_hash == after_hash else

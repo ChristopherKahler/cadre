@@ -180,8 +180,8 @@ try:
         "" if not overlap else str(sorted(str(p) for p in overlap)))
     row("no appended write carries this run's fingerprint"
         in mod.BASE_SECTION_ROWS, "the scanned row is declared")
-    row("the operator's own graph and registry were never written to"
-        in mod.BASE_SECTION_ROWS, "the exact-hash row kept its wording")
+    row("the operator's registry, config and extensions were never written to"
+        in mod.BASE_SECTION_ROWS, "the exact-hash row names the set it watches")
 finally:
     shutil.rmtree(work, ignore_errors=True)
 
