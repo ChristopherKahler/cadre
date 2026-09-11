@@ -32,13 +32,40 @@ _MCP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _BOARD = {"type": "board", "id": None}
 
 
+#: Set to a non-empty value to make Cadre behave as though base is absent.
+DISABLE_ENV = "CADRE_NO_BASE"
+
+
 def which_base() -> str | None:
     """Resolve the BASE binary — PATH first, then its canonical install home.
 
     A systemd-spawned hub carries a minimal PATH; ~/.local/bin (the installer's
     target) is not on it, and "BASE not detected" on a machine that has BASE
     is worse than no probe at all.
+
+    ``CADRE_NO_BASE`` forces the answer to None. It is an environment variable
+    rather than a parameter because the callers that most need it are CHILD
+    PROCESSES: the suite runs the CLI for real with ``sys.executable -m firm``,
+    and an in-process stub does not exist in that child. Measured 2026-09-10,
+    those children resolved the developer's own base and wrote pytest temp
+    paths into the operator's global workspace registry, which is then synced
+    into the CLAUDE.md loaded by every session they start.
+
+    BASE_HOME does not close that hole on its own. On WSL ``shutil.which`` and
+    the fallback below both resolve the WINDOWS binary across /mnt/c, and a
+    POSIX BASE_HOME handed to a Windows base did not redirect the write and did
+    not trip base's own isolation panic either -- measured, the registry gained
+    the entry regardless. The only thing that reliably stops a child is not
+    finding a binary at all.
+
+    "base is absent" is a first-class state throughout this codebase (degraded,
+    never broken), so this switch turns on a path that is already supported and
+    already tested rather than inventing a new one. That also makes it useful
+    outside the suite: an operator who wants Cadre to leave base alone has had
+    no way to say so.
     """
+    if os.environ.get(DISABLE_ENV, "").strip():
+        return None
     found = shutil.which("base")
     if found:
         return found
