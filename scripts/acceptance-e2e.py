@@ -29,6 +29,7 @@ that must fail. A green step with no control is not evidence.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -606,13 +607,263 @@ def main() -> int:
             b.add(PASS if rc2 == 0 else FAIL,
                   "the base bridge module loads from the installed package",
                   out2.strip()[:160])
-            b.add(BLOCKED, "base is the engine for this firm (extension wired)",
-                  "PENDING: the extension install path and its verbs "
-                  "(base cadre learn / base cadre complete, the write-back "
-                  "marker and the blocking stop hook) are on lane/"
-                  "base-extension and not yet merged to main. This row turns "
-                  "green when that lands and this harness is taught its exact "
-                  "command sequence.")
+            # ---- base is the engine: one row per assertion ----------
+            #
+            # Not one "base is the engine" row. Eleven, because when this goes
+            # red the operator needs the step that broke, not the news that
+            # something in a ten-command journey did. Each has its control
+            # beside it: the negative arm that fails if the check has gone
+            # blind. Measured end to end on Windows first; the sequence is
+            # .base-gbl/docs/2026-09-10-godwit-base-engine-journey.md.
+            #
+            # TWO TRAPS PAID FOR ALREADY, both live in these four lines.
+            #
+            # `sandbox` is tempfile.mkdtemp(), which on Windows lands under
+            # AppData\Local\Temp — INSIDE the user profile. base's own write
+            # tripwire panics there, because `dirs` never consults $HOME on
+            # Windows and cannot tell a fake tier under the profile from the
+            # real one. So this section takes a drive-root BASE_HOME instead.
+            #
+            # And BASE_HOME is only half of it: it governs the GLOBAL tier.
+            # The WORKSPACE tier follows the CURRENT DIRECTORY. Set BASE_HOME,
+            # run from the wrong cwd, and base reads and writes the operator's
+            # own graph while every assertion here still passes. Every base
+            # call below therefore passes cwd=ws.
+            base_home = (Path(Path(sys.executable).drive + "/cadre-accept-base")
+                         if IS_WIN else Path(tempfile.gettempdir()) / "cadre-accept-base")
+            shutil.rmtree(base_home, ignore_errors=True)
+            base_home.mkdir(parents=True, exist_ok=True)
+            benv = {"BASE_HOME": str(base_home), "PYTHONIOENCODING": "utf-8"}
+
+            def bmember(mid: str | None) -> dict:
+                e = dict(benv)
+                e["CADRE_MEMBER_ID"] = mid or ""
+                return e
+
+            # The operator's own graph, hashed BEFORE anything runs. Content
+            # hash and never mtime: fs::copy preserves mtime, so a harness
+            # keyed on it reports "unchanged" while writing.
+            real_graph = Path.home() / ".base" / "graph.nq"
+
+            def graph_digest() -> str:
+                try:
+                    return hashlib.md5(real_graph.read_bytes()).hexdigest()
+                except OSError:
+                    return "absent"
+
+            before_hash = graph_digest()
+
+            # 1. Isolation. Nothing else in this section may run until base is
+            #    demonstrably reading the FIRM's tier, because if it is reading
+            #    the operator's, every row below is writing their knowledge.
+            rc, out = run(["base", "scaffold", "."], cwd=ws, env=benv)
+            rc, out = run(["base", "doctor"], cwd=ws, env=benv)
+            reads_firm = str(ws) in out.replace("/", os.sep)
+            b.add(PASS if reads_firm else FAIL,
+                  "base reads the firm's own workspace tier, not the operator's",
+                  (f"tier under {ws}" if reads_firm else
+                   "base did NOT name the firm's directory. BASE_HOME governs "
+                   "the global tier only; the workspace tier follows cwd. "
+                   "Refusing to run the rest of this section."))
+            if not reads_firm:
+                return b.report()
+
+            # 2. The extension, through the shipped verb rather than a
+            #    python -c. `read_back` is the claim that matters: install
+            #    re-reads the landed file instead of trusting its own write,
+            #    so "ok" alone would pass over a manifest that never landed.
+            rc, out = run([str(venv_bin(venv, "cadre")), "extension", "install"],
+                          cwd=ws, env=benv)
+            landed = base_home / ".base-gbl" / "extensions" / "cadre.toml"
+            wired = rc == 0 and "read back" in out and landed.exists()
+            b.add(PASS if wired else FAIL,
+                  "the Cadre manifest installs into base and is read back",
+                  out.strip()[:160] if wired else
+                  f"rc={rc} landed={landed.exists()} :: {out.strip()[:200]}")
+
+            # 2b. THE ROW ABOVE CANNOT FAIL IN THE WAY THAT MATTERS, which is
+            #     the whole reason this one exists. `rc == 0`, the words "read
+            #     back" in the output, and a file on disk were ALL THREE TRUE
+            #     at d842529 while `base cadre` exited 127 on both platforms.
+            #     Measured, not reasoned about. An install reporting success
+            #     over a dead command IS F1, and nothing short of running the
+            #     handler can tell the two apart.
+            #
+            #     Note what this invokes: `base cadre`, the extension handler.
+            #     Every other cadre call in this section goes through the venv
+            #     console script, which reaches the CLI without ever testing
+            #     the manifest that is supposed to point at it.
+            rc, out = run(["base", "cadre", "--version"], cwd=ws, env=benv)
+            runs = rc == 0 and "cadre" in out.lower()
+            b.add(PASS if runs else FAIL,
+                  "the extension's command RUNS through base, not merely installs",
+                  f"`base cadre --version` -> {out.strip()[:120]}" if runs else
+                  f"rc={rc} :: {out.strip()[:200]} :: the manifest is installed "
+                  "and the command is dead — this is the F1 shape")
+
+            # 3. A generated domain block is not a live wire. base drops a
+            #    MATCHED domain carrying zero rules, silently and totally, so
+            #    the block existing proves nothing. The rule count is the
+            #    assertion; the block is not.
+            rc, out = run([str(vpy), "-c",
+                           "import sqlite3;"
+                           "from pathlib import Path;"
+                           "from firm.services import base_domain;"
+                           "c = sqlite3.connect('.firm/firm.db');"
+                           "c.row_factory = sqlite3.Row;"
+                           "r = base_domain.sync(Path('.').resolve(), "
+                           "__import__('firm.core.db', fromlist=['x'])"
+                           ".resolve_firm_id(c, None), conn=c);"
+                           "c.close(); print(r)"], cwd=ws, env=benv)
+            firm_id = None
+            try:
+                with sqlite3.connect(f"file:{ws / '.firm' / 'firm.db'}?mode=ro",
+                                     uri=True) as c:
+                    firm_id = c.execute("select id from firm limit 1").fetchone()[0]
+            except sqlite3.Error:
+                pass
+            rc2, out2 = run(["base", "rule", "list", "--domain", str(firm_id)],
+                            cwd=ws, env=benv)
+            live_rule = " 0 rules" not in out2 and "rules" in out2
+            b.add(PASS if live_rule else FAIL,
+                  "the firm's base domain carries a live rule",
+                  out2.strip().splitlines()[0][:140] if out2.strip() else
+                  "no rule count came back; base drops a domain with zero rules "
+                  "whole, so the block can be perfect and inject nothing")
+
+            # 4/5. Per-member scope, and the control that makes "different"
+            #      mean something. Two Members must see different briefings AND
+            #      a Board session must see none — without the second, two
+            #      arbitrary strings would pass.
+            members: list[str] = []
+            try:
+                with sqlite3.connect(f"file:{ws / '.firm' / 'firm.db'}?mode=ro",
+                                     uri=True) as c:
+                    members = [r[0] for r in
+                               c.execute("select id from member order by id")]
+            except sqlite3.Error:
+                pass
+            if len(members) < 2:
+                b.add(SKIP, "two Members get different briefings",
+                      f"the demo firm has {len(members)} member(s); this row "
+                      "needs two and is not asserting anything")
+            else:
+                one, two = members[0], members[1]
+                # The demo firm's unit ids are not this harness's to assume.
+                # Read the first one, give it to Member one, and mint a second
+                # for Member two so the two briefings have different content
+                # to differ ABOUT — two empty briefings are also "different".
+                _, uout = run([str(vpy), "-c",
+                               "import sqlite3, sys;"
+                               "c = sqlite3.connect('.firm/firm.db');"
+                               "u = [r[0] for r in c.execute("
+                               "'select id from unit order by id')];"
+                               "c.execute('update unit set assignee_member_id=?"
+                               " where id=?', (sys.argv[1], u[0]));"
+                               "c.execute(\"insert into unit (id, firm_id, name,"
+                               " project_id, assignee_member_id, status) select"
+                               " 'ACC-U2', firm_id, 'second unit', project_id,"
+                               " ?, 'in_progress' from unit where id=?\","
+                               " (sys.argv[2], u[0]));"
+                               "c.commit(); c.close(); print(u[0])",
+                               one, two], cwd=ws, env=benv)
+                unit_one = (uout.strip().splitlines() or [""])[-1].strip()
+                if not unit_one:
+                    b.add(FAIL, "the demo firm has a Unit to close",
+                          "no unit id came back, so the gate rows below would "
+                          "have asserted nothing")
+                    return b.report()
+                _, b1 = run([str(venv_bin(venv, "cadre")), "brief"],
+                            cwd=ws, env=bmember(one))
+                _, b2 = run([str(venv_bin(venv, "cadre")), "brief"],
+                            cwd=ws, env=bmember(two))
+                differ = bool(b1.strip()) and bool(b2.strip()) and b1 != b2
+                b.add(PASS if differ else FAIL,
+                      "two Members of one firm get different briefings",
+                      f"{one}: {b1.strip().splitlines()[0][:60] if b1.strip() else '(empty)'} | "
+                      f"{two}: {b2.strip().splitlines()[0][:60] if b2.strip() else '(empty)'}")
+
+                _, b0 = run([str(venv_bin(venv, "cadre")), "brief"],
+                            cwd=ws, env=bmember(None))
+                b.add(PASS if not b0.strip() else FAIL,
+                      "a Board session is briefed as nobody (scope control)",
+                      "silent, which is correct — the Board is not a Member"
+                      if not b0.strip() else
+                      "a Board session was handed a Member's queue: "
+                      + b0.strip()[:120])
+
+                # 6-8. The gate: armed, biting, and not biting the wrong person.
+                run([str(vpy), "-c",
+                     "from pathlib import Path;"
+                     "from firm.cli.install_hooks import install_writeback_hook;"
+                     "install_writeback_hook(Path('.').resolve())"],
+                    cwd=ws, env=benv)
+                gate = ws / ".claude" / "hooks" / "cadre-writeback-gate.py"
+
+                def fire_gate(mid: str) -> int:
+                    payload = json.dumps({"cwd": str(ws), "stop_hook_active": False})
+                    p = subprocess.run([str(vpy), str(gate)], cwd=str(ws),
+                                       env={**os.environ, **bmember(mid)},
+                                       input=payload.encode(),
+                                       capture_output=True, timeout=120)
+                    return p.returncode
+
+                b.add(PASS if fire_gate(one) == 0 else FAIL,
+                      "the write-back gate lets a Member with nothing owed finish",
+                      "exit 0 with no debt")
+
+                run([str(venv_bin(venv, "cadre")), "member", "grant",
+                     "authority", one, "--comment", "acceptance"],
+                    cwd=ws, env=benv)
+                rc, out = run([str(venv_bin(venv, "cadre")), "complete", unit_one],
+                              cwd=ws, env=bmember(one))
+                blocked = fire_gate(one)
+                b.add(PASS if blocked == 2 else FAIL,
+                      "closing a Unit with nothing recorded blocks the session",
+                      f"gate exit {blocked} (want 2) after: {out.strip()[:120]}")
+
+                b.add(PASS if fire_gate(two) == 0 else FAIL,
+                      "the other Member is not blocked by that debt (gate control)",
+                      "exit 0 — a gate that blocks everybody passes the row "
+                      "above and makes the framework unusable")
+
+                # 9/10. The graph, read empty BEFORE so a note found AFTER is
+                #       known to be this run's. Without the before-arm, a note
+                #       from any earlier run proves nothing.
+                _, empty = run(["base", "learn", "--list", "--domain",
+                                str(firm_id)], cwd=ws, env=benv)
+                was_empty = "No notes" in empty
+                b.add(PASS if was_empty else FAIL,
+                      "the firm's graph starts empty (evidence control)",
+                      "no notes yet" if was_empty else
+                      "the graph was NOT empty first, so a lesson found after "
+                      "the write-back proves nothing about who put it there")
+
+                lesson = ("The acceptance run taught that the gate and the "
+                          "command are one piece.")
+                rc, out = run([str(venv_bin(venv, "cadre")), "learn", "--unit",
+                               unit_one, "--type", "insight", "--text", lesson],
+                              cwd=ws, env=bmember(one))
+                released = fire_gate(one)
+                _, recalled = run(["base", "recall", "--keyword",
+                                   "acceptance run"], cwd=ws, env=benv)
+                readable = "one piece" in recalled
+                b.add(PASS if (released == 0 and readable) else FAIL,
+                      "a Member's lesson reaches the graph and is readable back out",
+                      f"gate released={released == 0}, recall found it={readable}"
+                      + ("" if readable else f" :: {recalled.strip()[:160]}"))
+
+            # 11. The guard that outranks every row above it. If this fails,
+            #     the run wrote the operator's own knowledge and the PASSes are
+            #     worthless.
+            after_hash = graph_digest()
+            b.add(PASS if before_hash == after_hash else FAIL,
+                  "the operator's own graph was never written to",
+                  f"content hash {before_hash[:12]} unchanged"
+                  if before_hash == after_hash else
+                  f"OPERATOR GRAPH CHANGED {before_hash[:12]} -> {after_hash[:12]}"
+                  " — this run contaminated real knowledge")
+            shutil.rmtree(base_home, ignore_errors=True)
 
         return b.report()
     finally:
