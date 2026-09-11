@@ -306,6 +306,71 @@ def _expand_hook_command(command: str, ws: Path) -> list[str]:
     return shlex.split(expanded, posix=not IS_WIN)
 
 
+# Copied DELIBERATELY from src/firm/pulse/spawn.py rather than imported. This
+# file imports only the standard library -- it runs against an INSTALLED wheel
+# in a throwaway venv, and importing the package under test to decide whether
+# it is safe to test the package under test is a circle. tests/ pins the two
+# lists equal, so the copy cannot drift in silence; that test, not this comment,
+# is what keeps them together.
+#
+# The short version of this list is what made the guard below fail open: it
+# carried two of these eight, so six real Mach-O binaries classified "unknown".
+_MACHO: tuple[bytes, ...] = (
+    b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",   # Mach-O 32-bit, BE / LE
+    b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",   # Mach-O 64-bit, BE / LE
+    b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",   # universal ("fat"), BE / LE
+    b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca",   # universal 64-bit, BE / LE
+)
+
+
+def section_may_run(base_kind: str, native_kind: str) -> bool:
+    """May the base-engine section run against the base it resolved?
+
+    UNKNOWN MEANS DENY. That is the fix, and the longer ``_MACHO`` list above
+    is the smaller half of it.
+
+    This used to read ``base_kind not in (native_kind, "script", "unknown")``,
+    inline, so "I could not identify this binary" was an ALLOW. Lengthening the
+    list shrinks that hole; only refusing what was not identified closes it.
+    The next unrecognised format -- a new Mach-O variant, a packer, a wrapper
+    nobody here has seen -- lands on "unknown" and is now refused instead of
+    admitted.
+
+    A refusal here costs one SKIPPED section on an unusual host. The admission
+    it replaces cost a rendered manifest written into the operator's real base
+    tier on 2026-09-11, by a probe whose every assertion passed.
+
+    ``script`` stays ALLOWED, unchanged: a shebang wrapper named ``base`` is
+    the normal shape of a dev install, and refusing it would skip the section
+    on ordinary machines. That is a deliberate carry-over, not an oversight --
+    it is also the reason this returns a plain bool rather than a verdict: the
+    caller needs one question answered, and a wider type here would invite the
+    same "what do I do with the third value" drift that #62 was about.
+    """
+    return base_kind in (native_kind, "script")
+
+
+def skip_reason(base_path: str | None, base_kind: str, native_kind: str) -> str:
+    """Why the section is being skipped, in words an operator can act on.
+
+    Split from the decision so the message cannot drift away from the verdict,
+    and so an unidentified binary does not get described as a cross-platform
+    one -- they need different remedies.
+    """
+    if base_kind == "unknown":
+        return (f"`base` resolves to {base_path} and this harness could not "
+                "identify it from its first four bytes. An unidentified base "
+                "is refused rather than admitted: it may ignore BASE_HOME and "
+                "write the operator's own tier while every row below passes. "
+                "Put a base this harness recognises first on PATH to check "
+                "this section here.")
+    return (f"`base` resolves to {base_path} — a {base_kind} binary under "
+            f"a {native_kind} interpreter. A cross-platform base ignores "
+            "BASE_HOME, so this section would write the operator's own "
+            "tier instead of the sandbox. Put a native base first on PATH "
+            "to check this section here.")
+
+
 def binary_kind(path: str | None) -> str:
     """Classify an executable by its MAGIC BYTES, never by its name.
 
@@ -324,7 +389,7 @@ def binary_kind(path: str | None) -> str:
         return "pe"
     if magic == b"\x7fELF":
         return "elf"
-    if magic[:4] == b"\xcf\xfa\xed\xfe" or magic[:4] == b"\xca\xfe\xba\xbe":
+    if magic[:4] in _MACHO:
         return "macho"
     if magic[:2] == b"#!":
         return "script"
@@ -1034,7 +1099,7 @@ def main() -> int:
                         "not measured: base is not on PATH on this host, so "
                         "nothing in the base-engine section could run. "
                         "Unmeasured, not passed.")
-        elif base_kind not in (native_kind, "script", "unknown"):
+        elif not section_may_run(base_kind, native_kind):
             # A base built for the OTHER platform still RUNS here -- WSL interop
             # executes the Windows binary quite happily -- and that is what makes
             # it dangerous rather than merely broken. It does not understand a
@@ -1053,11 +1118,7 @@ def main() -> int:
             # no base" and "this host has the wrong one" is worth keeping.
             b.add(PASS, "base is installed on this host", out.strip()[:80])
             b.add(SKIP, "the resolved base matches this platform",
-                  f"`base` resolves to {base_path} — a {base_kind} binary under "
-                  f"a {native_kind} interpreter. A cross-platform base ignores "
-                  "BASE_HOME, so this section would write the operator's own "
-                  "tier instead of the sandbox. Put a native base first on PATH "
-                  "to check this section here.")
+                  skip_reason(base_path, base_kind, native_kind))
             b.skip_rest(BASE_SECTION_ROWS,
                         "not measured: the resolved `base` is built for another "
                         "platform, so running this section would write the "
