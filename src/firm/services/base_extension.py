@@ -167,7 +167,10 @@ def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
                               "handler": "", "path": "", "reason": ""}
     base = which_base()
     if not base:
-        result["reason"] = "base is not installed — the extension is skipped, not failed"
+        from firm.sysconfig.service import base_absence_reason
+
+        result["reason"] = (
+            f"{base_absence_reason()} — the extension is skipped, not failed")
         return result
 
     try:

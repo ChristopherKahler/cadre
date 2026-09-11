@@ -156,7 +156,9 @@ def _base_learn(workspace: Path, domain: str, entity: str, text: str,
 
     base = which_base()
     if not base:
-        return {"ok": True, "graph": "skipped", "detail": "base is not installed"}
+        from firm.sysconfig.service import base_absence_reason
+
+        return {"ok": True, "graph": "skipped", "detail": base_absence_reason()}
     try:
         done = subprocess.run(
             [base, "learn", "--domain", domain, "--entity", entity,
@@ -269,7 +271,7 @@ def run_learn(workspace: Path | None = None, *, text: str,
         print(f"Error: {result['reason']}", file=sys.stderr)
         return 1
     where = {"written": f"recorded in the {firm} domain against {member}",
-             "skipped": "not recorded — base is not installed on this machine"}
+             "skipped": f"not recorded — {result['detail']}"}
     print(where.get(result["graph"], result["graph"]))
     if unit_id:
         print(f"write-back for {unit_id}: "
