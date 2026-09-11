@@ -10,7 +10,7 @@ it is indistinguishable from nobody having looked.
 
 ## Resolution
 
-- **Date:** 2026-09-10
+- **Date:** 2026-09-11
 - **Resolution query:** `GET /repos/{owner}/{repo}/commits/{ref}` — resolves a
   lightweight tag, an annotated tag, or a branch head the same way
 - **Advisory query:** `GET /advisories?ecosystem=actions&affects={owner}/{repo}`,
@@ -20,13 +20,13 @@ it is indistinguishable from nobody having looked.
 
 ## The six
 
-| Action | Was | Now | Tag at that SHA |
+| Action | Before pinning (2026-09-10) | Now | Tag at that SHA |
 |---|---|---|---|
-| `actions/checkout` | `v4` | `11d5960a326750d5838078e36cf38b85af677262` | v4.4.0 |
-| `actions/setup-python` | `v5` | `a26af69be951a213d495a4c3e4e4022e16d87065` | v5.6.0 |
-| `actions/upload-artifact` | `v4` | `ea165f8d65b6e75b540449e92b4886f43607fa02` | v4.6.2 |
-| `actions/download-artifact` | `v4` | `d3f86a106a0bac45b974a628896c90dbdf5c8093` | v4.3.0 |
-| `softprops/action-gh-release` | `v2` | `3bb12739c298aeb8a4eeaf626c5b8d85266b0e65` | v2.6.2 |
+| `actions/checkout` | `v4` | `3d3c42e5aac5ba805825da76410c181273ba90b1` | v7.0.1 |
+| `actions/setup-python` | `v5` | `5fda3b95a4ea91299a34e894583c3862153e4b97` | v7.0.0 |
+| `actions/upload-artifact` | `v4` | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` | v7.0.1 |
+| `actions/download-artifact` | `v4` | `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c` | v8.0.1 |
+| `softprops/action-gh-release` | `v2` | `efb35369e0ad2afab669f228072c1b0d510eae64` | v3.0.3 |
 | `pypa/gh-action-pypi-publish` | `release/v1` **(a branch)** | `dc37677b2e1c63e2034f94d8a5b11f265b73ba33` | v1.14.2 |
 
 ## Advisory check, per SHA
@@ -37,11 +37,11 @@ action in general — which is the distinction that decides whether a pin is saf
 
 | Action | Advisory | Severity | Vulnerable range | First patched | Pinned version | Affected? |
 |---|---|---|---|---|---|---|
-| `actions/checkout` | none | — | — | — | v4.4.0 | no |
-| `actions/setup-python` | none | — | — | — | v5.6.0 | no |
-| `actions/upload-artifact` | none | — | — | — | v4.6.2 | no |
-| `actions/download-artifact` | [GHSA-cxww-7g56-2vh6](https://github.com/advisories/GHSA-cxww-7g56-2vh6) | high | `>= 4.0.0, < 4.1.3` | 4.1.3 | v4.3.0 | **no** — past the range |
-| `softprops/action-gh-release` | none | — | — | — | v2.6.2 | no |
+| `actions/checkout` | none | — | — | — | v7.0.1 | no |
+| `actions/setup-python` | none | — | — | — | v7.0.0 | no |
+| `actions/upload-artifact` | none | — | — | — | v7.0.1 | no |
+| `actions/download-artifact` | [GHSA-cxww-7g56-2vh6](https://github.com/advisories/GHSA-cxww-7g56-2vh6) | high | `>= 4.0.0, < 4.1.3` | 4.1.3 | v8.0.1 | **no** — past the range |
+| `softprops/action-gh-release` | none | — | — | — | v3.0.3 | no |
 | `pypa/gh-action-pypi-publish` | [GHSA-vxmw-7h4f-hqxh](https://github.com/advisories/GHSA-vxmw-7h4f-hqxh) | low | `< 1.13.0` | 1.13.0 | v1.14.2 | **no** — past the range |
 
 `GHSA-cxww-7g56-2vh6` is arbitrary file write via artifact extraction.

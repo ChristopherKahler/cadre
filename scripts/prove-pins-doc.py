@@ -19,6 +19,7 @@ from __future__ import annotations
 import io
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -69,6 +70,52 @@ def sub(root: pathlib.Path, rel: str, old: str, new: str, *, count: int = 1):
     io.open(p, "w", encoding="utf-8", newline="\n").write(s.replace(old, new))
 
 
+def pin_rows(root: pathlib.Path) -> list[str]:
+    """The pin table rows of the fixture's own copy of the document.
+
+    Read, never hardcoded. Every value in that table is something the ledger
+    commit changes, so a fixture that names one goes stale on the next pin bump
+    and the arm it belongs to stops testing anything.
+    """
+    out, seen = [], False
+    for line in (root / DOC_REL).read_text(encoding="utf-8").splitlines():
+        if line.startswith("| Action |") and "Tag at that SHA" in line:
+            seen = True
+            continue
+        if seen:
+            if line.startswith("|---"):
+                continue
+            if not line.startswith("|"):
+                break
+            out.append(line)
+    if len(out) < 2:
+        sys.exit("REFUSING: fewer than two pin rows read from the fixture "
+                 "document. The arms below would mutate nothing and pass.")
+    return out
+
+
+def adv_rows(root: pathlib.Path) -> list[str]:
+    out, seen = [], False
+    for line in (root / DOC_REL).read_text(encoding="utf-8").splitlines():
+        if line.startswith("| Action |") and "Affected?" in line:
+            seen = True
+            continue
+        if seen:
+            if line.startswith("|---"):
+                continue
+            if not line.startswith("|"):
+                break
+            out.append(line)
+    if len(out) < 2:
+        sys.exit("REFUSING: fewer than two advisory rows read from the fixture "
+                 "document. The arms below would mutate nothing and pass.")
+    return out
+
+
+def cells_of(row: str) -> list[str]:
+    return [c.strip() for c in row.strip().strip("|").split("|")]
+
+
 RESULTS: list[tuple[str, bool]] = []
 
 
@@ -100,76 +147,93 @@ def main() -> int:
     print()
     print("scripts/check-pins-doc.py")
 
-    def agree(r):
-        """Bring the ledger up to the pins the workflows actually carry.
-
-        The live worktree is REALLY drifted right now - PR #56 moved
-        action-gh-release and the ledger update is deliberately a later commit -
-        so a baseline arm reading the tree as-is grades the repository instead
-        of the checker. This arm constructs agreement from the live files, and
-        the drift is reported separately at the end rather than hidden.
-        """
-        sub(r, DOC_REL,
-            "`3bb12739c298aeb8a4eeaf626c5b8d85266b0e65` | v2.6.2 |",
-            "`efb35369e0ad2afab669f228072c1b0d510eae64` | v3.0.3 |")
-        sub(r, DOC_REL,
-            "| `softprops/action-gh-release` | none | — | — | — | v2.6.2 | no |",
-            "| `softprops/action-gh-release` | none | — | — | — | v3.0.3 | no |")
-
-    arm("the doc and the workflows agree", "check-pins-doc.py", 0, agree,
+    # The baseline reads the tree as it is. Earlier this arm had to CONSTRUCT
+    # agreement, because the ledger was deliberately one commit behind the pins
+    # and a baseline reading the tree as-is graded the repository rather than
+    # the checker. Once the ledger is correct, constructing anything would hide
+    # a real disagreement, so the construction is gone.
+    arm("the doc and the workflows agree", "check-pins-doc.py", 0, None,
         "matches the workflows")
 
+    def wrong_sha(r):
+        row = pin_rows(r)[0]
+        sha = cells_of(row)[2]
+        sub(r, DOC_REL, row, row.replace(sha, "`" + "0" * 40 + "`"))
+
     arm("a workflow SHA differs from the ledger", "check-pins-doc.py", 1,
-        lambda r: sub(r, DOC_REL,
-                      "| `actions/checkout` | `v4` | `11d5960a326750d5838078e36cf38b85af677262` |",
-                      "| `actions/checkout` | `v4` | `0000000000000000000000000000000000000000` |"),
-        "records 0000000000000000000000000000000000000000")
+        wrong_sha, "records " + "0" * 40)
+
+    def wrong_tag(r):
+        row = pin_rows(r)[0]
+        c = cells_of(row)
+        sub(r, DOC_REL, row, row.replace("| " + c[3] + " |", "| v0.0.0-wrong |"))
 
     arm("a workflow TAG differs from the ledger", "check-pins-doc.py", 1,
-        lambda r: sub(r, DOC_REL,
-                      "`11d5960a326750d5838078e36cf38b85af677262` | v4.4.0 |",
-                      "`11d5960a326750d5838078e36cf38b85af677262` | v4.9.9 |"),
-        "records v4.9.9")
+        wrong_tag, "records v0.0.0-wrong")
 
     arm("an action is used but has NO ledger row", "check-pins-doc.py", 1,
-        lambda r: sub(r, DOC_REL,
-                      "| `actions/upload-artifact` | `v4` | `ea165f8d65b6e75b540449e92b4886f43607fa02` | v4.6.2 |\n",
-                      ""),
+        lambda r: sub(r, DOC_REL, pin_rows(r)[1] + "\n", ""),
         "has no row")
 
+    def ghost_row(r):
+        row = pin_rows(r)[0]
+        ghost = ("| `acme/ghost-action` | `v1` | `" + "1" * 40 + "` | v1.0.0 |")
+        sub(r, DOC_REL, row, ghost + "\n" + row)
+
     arm("a ledger row for an action nothing uses", "check-pins-doc.py", 1,
-        lambda r: sub(r, DOC_REL,
-                      "| `actions/checkout` | `v4` |",
-                      "| acme/ghost-action | `v4` | `1111111111111111111111111111111111111111` | v1.0.0 |\n| `actions/checkout` | `v4` |"),
-        "which no workflow uses")
+        ghost_row, "which no workflow uses")
+
+    def two_commits(r):
+        """Move ONE site of an action that has more than one site."""
+        import collections
+        rel = ".github/workflows/release.yml"
+        text = (r / rel).read_text(encoding="utf-8")
+        m = re.search(r"uses:\s*(\S+)@([0-9a-f]{40})", text)
+        if not m:
+            sys.exit("REFUSING: no pinned action found in " + rel)
+        sub(r, rel, m.group(1) + "@" + m.group(2),
+            m.group(1) + "@" + "2" * 40)
 
     arm("one action pinned to TWO different commits", "check-pins-doc.py", 1,
-        lambda r: sub(r, ".github/workflows/release.yml",
-                      "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                      "actions/checkout@2222222222222222222222222222222222222222"),
-        "more than one commit")
+        two_commits, "more than one commit")
 
     arm("a pinned action has no advisory row", "check-pins-doc.py", 1,
-        lambda r: sub(r, DOC_REL,
-                      "| `actions/setup-python` | none | — | — | — | v5.6.0 | no |\n",
-                      ""),
+        lambda r: sub(r, DOC_REL, adv_rows(r)[1] + "\n", ""),
         "no advisory row")
 
+    def wrong_adv_version(r):
+        row = adv_rows(r)[1]
+        c = cells_of(row)
+        sub(r, DOC_REL, row, row.replace("| " + c[5] + " |", "| v0.0.0-wrong |"))
+
     arm("the advisory row names a different version", "check-pins-doc.py", 1,
-        lambda r: sub(r, DOC_REL,
-                      "| `actions/setup-python` | none | — | — | — | v5.6.0 | no |",
-                      "| `actions/setup-python` | none | — | — | — | v5.0.0 | no |"),
-        "not the one pinned")
+        wrong_adv_version, "not the one pinned")
+
+    def blank_answer(r):
+        row = adv_rows(r)[1]
+        c = cells_of(row)
+        sub(r, DOC_REL, row,
+            "| " + c[0] + " |  | " + " | ".join(c[2:6]) + " |  |")
 
     arm("the advisory row leaves the answer blank", "check-pins-doc.py", 1,
-        lambda r: sub(r, DOC_REL,
-                      "| `actions/setup-python` | none | — | — | — | v5.6.0 | no |",
-                      "| `actions/setup-python` |  | — | — | — | v5.6.0 |  |"),
-        "records nothing")
+        blank_answer, "records nothing")
+
+    def break_date(r):
+        """Break whatever date the document carries, not a date I typed here.
+
+        The ledger commit rewrites this line to the day the advisory answers
+        were obtained, so a fixture naming a literal date goes stale the first
+        time the ledger is refreshed and the arm silently stops testing.
+        """
+        text = (r / DOC_REL).read_text(encoding="utf-8")
+        m = re.search(r"\*\*Date:\*\*\s*\d{4}-\d{2}-\d{2}", text)
+        if not m:
+            sys.exit("REFUSING: no date line to break, so this arm would "
+                     "mutate nothing and pass.")
+        sub(r, DOC_REL, m.group(0), "**Date:** sometime")
 
     arm("the document records no query DATE", "check-pins-doc.py", 1,
-        lambda r: sub(r, DOC_REL, "**Date:** 2026-09-10", "**Date:** sometime"),
-        "no '**date:** yyyy-mm-dd' line")
+        break_date, "no '**date:** yyyy-mm-dd' line")
 
     arm("the document records no advisory QUERY", "check-pins-doc.py", 1,
         lambda r: sub(r, DOC_REL, "**Advisory query:**", "Advisory query:"),
@@ -189,27 +253,52 @@ def main() -> int:
                    for f in ("tests.yml", "release.yml")],
         "found zero pinned actions")
 
+    def rename_header(r):
+        """Rename the SECOND column, whatever it is currently called.
+
+        Not a literal header string: the header itself is something the ledger
+        commit changes - `Was` became `Before pinning (2026-09-10)` so the column
+        says when it was true. A fixture quoting the old spelling would silently
+        mutate nothing and the arm would pass on an unmodified tree.
+        """
+        for line in (r / DOC_REL).read_text(encoding="utf-8").splitlines():
+            if line.startswith("| Action |") and "Tag at that SHA" in line:
+                c = cells_of(line)
+                sub(r, DOC_REL, line,
+                    "| " + c[0] + " | Renamed Column | " + " | ".join(c[2:]) + " |")
+                return
+        sys.exit("REFUSING: the pin table header was not found, so this arm "
+                 "would mutate nothing and pass.")
+
     arm("the pin table header was renamed", "check-pins-doc.py", 3,
-        lambda r: sub(r, DOC_REL, "| Action | Was | Now | Tag at that SHA |",
-                      "| Action | Was | Commit | Tag at that SHA |"),
-        "found zero rows under the pin table header")
+        rename_header, "found zero rows under the pin table header")
 
     print()
     print("scripts/check-action-pins.py")
     arm("every reference is a SHA with its tag", "check-action-pins.py", 0,
         None, "references scanned")
 
+    def drop_tag_comment(r):
+        rel = ".github/workflows/release.yml"
+        text = (r / rel).read_text(encoding="utf-8")
+        m = re.search(r"(\S+@[0-9a-f]{40})(\s*#\s*\S+)", text)
+        if not m:
+            sys.exit("REFUSING: no pinned reference with a tag comment in " + rel)
+        sub(r, rel, m.group(0), m.group(1))
+
     arm("a reference lost its tag comment", "check-action-pins.py", 1,
-        lambda r: sub(r, ".github/workflows/release.yml",
-                      "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0",
-                      "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"),
-        "no trailing comment")
+        drop_tag_comment, "no trailing comment")
+
+    def moving_tag(r):
+        rel = ".github/workflows/release.yml"
+        text = (r / rel).read_text(encoding="utf-8")
+        m = re.search(r"(\S+)@[0-9a-f]{40}(\s*#\s*(\S+))", text)
+        if not m:
+            sys.exit("REFUSING: no pinned reference found in " + rel)
+        sub(r, rel, m.group(0), m.group(1) + "@" + m.group(3) + m.group(2))
 
     arm("a reference went back to a moving tag", "check-action-pins.py", 1,
-        lambda r: sub(r, ".github/workflows/release.yml",
-                      "softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3",
-                      "softprops/action-gh-release@v3  # v3.0.3"),
-        "not a 40-character commit sha")
+        moving_tag, "not a 40-character commit sha")
 
     print()
     print("scripts/check-action-pins.py  -  BLINDNESS, and the control")

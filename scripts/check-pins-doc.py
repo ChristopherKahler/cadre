@@ -71,7 +71,7 @@ USES = re.compile(
 #: The two tables are found by their HEADER TEXT and read by COLUMN NAME, never
 #: by counting cells from either end. A column inserted in the middle then moves
 #: nothing silently: it either still has the named column or this refuses.
-PIN_HEAD = ("Action", "Was", "Now", "Tag at that SHA")
+PIN_HEAD = ("Action", "Before pinning (2026-09-10)", "Now", "Tag at that SHA")
 ADV_HEAD = ("Action", "Advisory", "Severity", "Vulnerable range",
             "First patched", "Pinned version", "Affected?")
 
