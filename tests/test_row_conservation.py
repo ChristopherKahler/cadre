@@ -210,17 +210,46 @@ def test_a_command_that_cannot_be_executed_returns_127(tmp_path, monkeypatch):
     eighteen rows were not skipped, they were never reached, and the summary
     said completed=false. That is the same row loss through a door the declared
     list cannot close, because no row runs at all.
+
+    WHAT THE OS RAISES HERE IS NOT THE SAME EVERYWHERE, which is why this
+    asserts the harness's own answer and not the exception's class. A directory
+    named `base` on PATH is EACCES on Linux; on Windows the loader searches
+    PATHEXT, finds no executable of that name, and raises ENOENT. Identical host
+    condition, two different exceptions, and the first version of this test
+    pinned the Linux wording and went red on windows-latest.
     """
-    (tmp_path / "base").mkdir()            # exists, cannot be executed
+    (tmp_path / "base").mkdir()            # exists, not executable as a command
     monkeypatch.setenv("PATH", str(tmp_path))
     rc, out = h.run(["base", "--version"])
     assert rc == 127, f"rc={rc} out={out!r}"
     assert "could not be run" in out
 
 
-def test_a_command_that_does_not_exist_still_returns_127(tmp_path, monkeypatch):
-    """The control: the pre-existing arm must keep working."""
+def test_a_command_that_does_not_exist_returns_the_same_127_and_the_same_words(
+        tmp_path, monkeypatch):
+    """Absent and unrunnable are ONE answer, worded identically on every OS.
+
+    They used to be two arms with two messages, so the same fact read
+    differently depending on the machine and two runs could not be compared.
+    Both mean "this host cannot start that command", both are 127, and the OS's
+    own errno text is appended either way, so nothing diagnostic is lost.
+    """
     monkeypatch.setenv("PATH", str(tmp_path))
     rc, out = h.run(["definitely-not-a-command-xyz"])
     assert rc == 127
-    assert "not found" in out
+    assert "could not be run" in out
+
+
+def test_the_unrunnable_message_is_not_platform_specific():
+    """RED ARM for the two above, and the reason #65 went red on Windows.
+
+    The harness must carry exactly one phrase for this condition. A second arm
+    with its own wording is how the same host fact came out as "not found" on
+    Windows and "could not be run" on Linux.
+    """
+    src = HARNESS.read_text(encoding="utf-8")
+    assert src.count('return 127, f"could not be run: {exc}"') == 1, (
+        "there should be exactly one unrunnable-command message in the harness")
+    assert 'return 127, f"not found: {exc}"' not in src, (
+        "the second, differently-worded arm is back; the same host condition "
+        "will again read one way on Linux and another on Windows")

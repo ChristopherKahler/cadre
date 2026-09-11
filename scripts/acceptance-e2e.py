@@ -231,24 +231,38 @@ def run(argv: list[str], *, cwd: Path | None = None, env: dict | None = None,
             # on the WRITE side, so a JSON payload arrives altered.
             input=stdin_text.encode("utf-8") if stdin_text is not None else None,
         )
-    except FileNotFoundError as exc:
-        return 127, f"not found: {exc}"
     except OSError as exc:
-        # EVERY way the OS can refuse to start the process, not just "absent".
+        # EVERY way the OS can refuse to start the process, under ONE message.
+        #
         # This caught FileNotFoundError alone, so a `base` that exists and
         # cannot be executed -- wrong permission bits, a directory of that
         # name, a dangling interpreter on the shebang line -- raised
         # PermissionError straight out of run() and killed the harness with a
-        # traceback. Measured 2026-09-11: PermissionError [Errno 13] at the
-        # base section's very first call took the run down, so the eighteen
-        # rows of that section were not SKIPPED, they were never reached, and
-        # the summary said 23 rows with completed=false.
+        # traceback. Measured 2026-09-11: EACCES at the base section's very
+        # first call took the run down, so the eighteen rows of that section
+        # were not SKIPPED, they were never reached, and the summary said 23
+        # rows with completed=false. That is the row-conservation defect
+        # arriving through a door the declared row list cannot close, because
+        # no row runs at all.
         #
-        # That is the row-conservation defect arriving through a door the
-        # declared row list cannot close, because no row runs at all. 127 is
-        # the right answer -- "this host cannot run that command" -- and it is
-        # exactly what the base section's first arm already knows how to
-        # handle: it SKIPs all eighteen rows and says why.
+        # ONE MESSAGE, NOT TWO, and that is the second half of the fix. The
+        # first attempt kept a separate "not found:" arm for
+        # FileNotFoundError, and the same missing command then produced
+        # different text on different systems: EACCES on Linux for a directory
+        # named `base`, but ENOENT on Windows, where the loader searches
+        # PATHEXT and never finds an executable of that name at all. So the
+        # harness said "could not be run" on one OS and "not found" on the
+        # other for the identical host condition. Caught by CI on
+        # windows-latest, which is exactly what the three-OS matrix is for.
+        #
+        # The distinction was never worth keeping: both mean "this host cannot
+        # start that command", both are answered with 127, and the OS's own
+        # errno text is appended, so nothing diagnostic is lost. What IS worth
+        # keeping is that an operator comparing two runs on two machines reads
+        # the same sentence for the same fact.
+        #
+        # 127 is the right code -- it is what the base section's first arm
+        # already knows how to handle: SKIP all eighteen rows and say why.
         return 127, f"could not be run: {exc}"
     except subprocess.TimeoutExpired:
         return 124, f"timed out after {timeout}s"
