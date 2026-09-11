@@ -34,18 +34,34 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 USES = re.compile(
     r"^\s*(?:-\s*)?uses:\s*(?P<action>[^@\s]+)@(?P<ref>\S+)(?P<rest>.*)$")
 
+#: Exit code for "the scan found nothing", kept distinct from a real offence so
+#: a caller can tell a check that failed from a check that never ran.
+RC_NOTHING_SCANNED = 3
+
 SHA = re.compile(r"^[0-9a-f]{40}$")
 TAG_COMMENT = re.compile(r"#\s*(?P<tag>\S+)")
 
 
-def offenders() -> list[str]:
+def offenders() -> tuple[list[str], int]:
+    """Returns (problems, how many action references were actually seen).
+
+    The count is not decoration. An empty set satisfies every assertion made
+    about its members, so a version of this that returned only the problem list
+    printed "every action reference names a commit SHA with its tag" after
+    scanning nothing at all — a workflow reformat that stopped this regex
+    matching, or a path change that emptied the glob, read as success. The
+    caller refuses on a count of zero. The count is the evidence; the verdict
+    on its own is not.
+    """
     found: list[str] = []
+    seen = 0
     for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml")):
         for lineno, line in enumerate(
                 path.read_text(encoding="utf-8").splitlines(), start=1):
             m = USES.match(line)
             if not m:
                 continue
+            seen += 1
             action, ref, rest = m.group("action"), m.group("ref"), m.group("rest")
             where = f"{path.relative_to(REPO_ROOT)}:{lineno}  {action}@{ref}"
             if not SHA.match(ref):
@@ -56,7 +72,7 @@ def offenders() -> list[str]:
                     f"{where}\n    pinned, but no trailing comment naming the "
                     f"tag it resolved from — the refresh mechanism and the next "
                     f"human both read that comment")
-    return found
+    return found, seen
 
 
 def main() -> int:
@@ -64,7 +80,16 @@ def main() -> int:
         print(f"no workflows directory at {WORKFLOWS}", file=sys.stderr)
         return 1
 
-    bad = offenders()
+    bad, seen = offenders()
+
+    if seen == 0:
+        print(f"found ZERO action references under {WORKFLOWS}.\n"
+              f"Every assertion below is made about an empty set, so it would "
+              f"pass.\nEither the glob stopped matching or the uses: shape "
+              f"changed. Refusing rather than reporting success.",
+              file=sys.stderr)
+        return RC_NOTHING_SCANNED
+
     if bad:
         print("GitHub Actions are not pinned to commits:\n", file=sys.stderr)
         for item in bad:
@@ -78,7 +103,8 @@ def main() -> int:
             file=sys.stderr)
         return 1
 
-    print("every action reference names a commit SHA with its tag")
+    print(f"every action reference names a commit SHA with its tag "
+          f"({seen} references scanned)")
     return 0
 
 

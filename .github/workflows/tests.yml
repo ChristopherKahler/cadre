@@ -94,6 +94,12 @@ jobs:
       # the repo's own gate reading check runs, and it can only read a run that
       # actually failed.
       - run: python scripts/check-action-pins.py
+      # A SEPARATE step, deliberately not chained behind the one above with
+      # `&&`. A non-zero exit swallowed by a chain is a check the merge gate
+      # cannot see go red, and #52 removed continue-on-error from this job for
+      # the same reason. check-action-pins.py checks the SHAPE of every pin;
+      # this checks that docs/ACTION-PINS.md still describes those pins.
+      - run: python scripts/check-pins-doc.py
 
   clean-install:
     name: clean install from the built wheel
