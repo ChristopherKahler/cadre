@@ -114,8 +114,19 @@ check that cannot fail. The first check to require is **clean install from the
 built wheel**, once it is green on `main`, alongside the Linux suite. The other
 two platforms join the required set when #25 and #26 are fixed. Tracked in #27.
 
-**Actions are pinned to major version tags, not to commits.** Pinning to a
-commit is the stricter practice, but a commit pin also stops receiving security
-patches, so it is only safe once someone has checked the advisories for the
-commit being pinned. That check has not been done, and pinning without it would
-trade one risk for a quieter one. Tracked in #30 rather than done half way.
+**Actions are pinned to commit SHAs, with the resolved tag beside them.** A tag
+is mutable: whoever controls an action can move `v4` onto different code and
+every workflow here picks it up on its next run with no diff to review. A commit
+cannot be moved.
+
+A commit pin also stops receiving security patches, which is why pinning alone
+would trade a loud risk for a quiet one. Two things make it safe. Every pinned
+SHA has a recorded advisory check in [ACTION-PINS.md](ACTION-PINS.md), naming
+the query, the date and the outcome, so a negative is evidence rather than an
+absence. And Dependabot watches the `github-actions` ecosystem weekly; it
+understands SHA pins and opens pull requests that move them, so the pins get
+refreshed by something other than memory.
+
+`scripts/check-action-pins.py` fails if any reference is not a 40-character SHA
+carrying its tag in a trailing comment. The `action-pins` job in `tests.yml`
+runs it on every push to a watched branch and on every pull request.
