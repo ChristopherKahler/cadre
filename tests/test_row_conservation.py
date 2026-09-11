@@ -25,6 +25,7 @@ then breaks the guard to prove it can go red.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 from pathlib import Path
 
@@ -297,3 +298,72 @@ def test_a_clean_board_still_returns_0():
     b = h.Board()
     b.add(h.PASS, "one")
     assert b.report() == 0
+# ---------------------------------------------------------------------------
+# the whole-harness list
+# ---------------------------------------------------------------------------
+
+def test_harness_rows_is_the_two_lists_and_nothing_else():
+    assert h.HARNESS_ROWS == h.PRE_BASE_ROWS + h.BASE_SECTION_ROWS
+
+
+def test_the_whole_harness_list_has_no_duplicates():
+    """A repeated name makes `skip_rest` emit one row where two are declared."""
+    names = h.HARNESS_ROWS
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    assert not dupes, f"HARNESS_ROWS repeats: {dupes}"
+
+
+def test_every_declared_name_is_a_string_the_harness_actually_contains():
+    """The list is a spec, not a wish -- checked by AST, not by grep.
+
+    A grep misses two whole classes of emit site, and both are in this file:
+    a name split across source lines, which the parser merges into one constant,
+    and a name BUILT by an f-string, which never appears as a literal at all.
+    The existing grep-based check passes over both, so it would have reported
+    every name present while two of them could drift freely.
+    """
+    tree = ast.parse(HARNESS.read_text(encoding="utf-8"))
+    literals = {n.value for n in ast.walk(tree)
+                if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+    # The two console-script rows are built by console_script_row(), so their
+    # value is never a literal anywhere. They are checked against the helper
+    # itself, which is the single spelling.
+    built = {h.console_script_row(e) for e in h.CONSOLE_SCRIPTS}
+    missing = [n for n in h.HARNESS_ROWS if n not in literals and n not in built]
+    assert not missing, (
+        "declared in HARNESS_ROWS but no such string exists in the harness, so "
+        f"no path can ever emit it: {missing}")
+
+
+def test_the_console_script_rows_come_from_one_spelling():
+    """Declared and emitted through the same helper, so they cannot drift."""
+    for exe in h.CONSOLE_SCRIPTS:
+        assert h.console_script_row(exe) in h.HARNESS_ROWS
+
+
+def test_end_run_is_the_only_thing_that_calls_report():
+    """One exit. The two bare `return b.report()` steps are what this closes.
+
+    Checked by AST because the phrase also appears in a docstring explaining the
+    defect, and a substring search cannot tell the prose from the code.
+    """
+    tree = ast.parse(HARNESS.read_text(encoding="utf-8"))
+    parents = {c: p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
+
+    def owner(node):
+        cur = parents.get(node)
+        while cur is not None:
+            if isinstance(cur, ast.FunctionDef):
+                return cur.name
+            cur = parents.get(cur)
+        return "<module>"
+
+    sites = [owner(n) for n in ast.walk(tree)
+             if isinstance(n, ast.Return) and isinstance(n.value, ast.Call)
+             and isinstance(n.value.func, ast.Attribute)
+             and n.value.func.attr == "report"
+             and isinstance(n.value.func.value, ast.Name)
+             and n.value.func.value.id == "b"]
+    assert sites == ["end_run"], (
+        f"`return b.report()` is called from {sites}, not from end_run alone. "
+        "Every other exit drops the rows it never reached.")
