@@ -35,7 +35,22 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, "/home/chriskahler/dev/cadre-wt-extension/src")
+# The repo, from THIS file's location, never a hard-coded checkout.
+# scripts/verify/x.py -> ../../..  This read one worktree's absolute path, so
+# running it from any other checkout imported THAT tree's firm package and
+# reported on it as though it were this one -- and it prints
+# `spawn.py md5=...` as provenance, so the wrong file arrived wearing a real
+# hash. Matches scripts/check-action-pins.py.
+REPO = Path(__file__).resolve().parent.parent.parent
+if not (REPO / ".git").exists():
+    print(f"REFUSE: {REPO} is not a git work tree, so this would import a firm "
+          f"package that is not the checkout under test")
+    sys.exit(91)
+if not (REPO / "src" / "firm").is_dir():
+    print(f"REFUSE: {REPO}/src/firm does not exist, so there is nothing here to "
+          f"verify")
+    sys.exit(92)
+sys.path.insert(0, str(REPO / "src"))
 
 from firm.pulse import spawn as spawn_mod  # noqa: E402
 
@@ -46,7 +61,16 @@ WANT = f"{FIRM}-{MEMBER}"
 NEVER = "zqnevertitle"
 SHARED_WT = "133ce31a-8475-4e49-a2e6-9d3160fa1c9f"
 
-BASE = shutil.which("base") or "/home/chriskahler/.local/bin/base"
+# No fallback into anybody's home directory. This read
+#   shutil.which("base") or "/home/chriskahler/.local/bin/base"
+# so on a host without base on PATH it reached for one operator's binary and
+# reported the result as this machine's. A verifier that cannot find the thing
+# it verifies must say so, not substitute a guess and print an md5 of it.
+BASE = shutil.which("base")
+if not BASE:
+    print("REFUSE: no `base` on PATH, and this verifier will not guess at one -- "
+          "a hash of somebody else's binary is not provenance")
+    sys.exit(93)
 print(f"PROVENANCE base={BASE} "
       f"version={subprocess.run([BASE, '--version'], capture_output=True, text=True).stdout.strip()} "
       f"md5={hashlib.md5(Path(BASE).read_bytes()).hexdigest()}")
