@@ -315,6 +315,109 @@ def test_an_empty_switch_is_not_a_set_switch(monkeypatch, tmp_path):
     assert REAL_WHICH_BASE() is None
 
 
+def test_a_suppressed_base_does_not_read_as_a_missing_one(monkeypatch):
+    """An operator must be able to tell a broken install from a set variable.
+
+    Both produce the same None from `which_base()`. Reporting both as "not
+    installed" makes a firm's own degraded message a lie about the host, and
+    whoever set the variable weeks ago cannot tell which they are looking at.
+    That is a fresh silent-success shape, which is the fault family this
+    codebase spent the day deleting.
+    """
+    monkeypatch.setenv("CADRE_NO_BASE", "1")
+    suppressed = sysconfig_service.base_absence_reason()
+
+    monkeypatch.delenv("CADRE_NO_BASE", raising=False)
+    missing = sysconfig_service.base_absence_reason()
+
+    assert suppressed != missing, "the two states are indistinguishable"
+    assert "CADRE_NO_BASE" in suppressed, (
+        "the message does not name the variable, so it does not say what to "
+        f"change: {suppressed!r}")
+    assert "CADRE_NO_BASE" not in missing
+
+
+def test_both_absence_messages_keep_the_skip_substring():
+    """The substring is load-bearing, not phrasing.
+
+    `firm extension install` branches on "not installed" in the reason to mean
+    "skip, do not fail", and keeps rc 0 there. A suppressed base is equally a
+    skip. Reword either sentence without that substring and a host-setup fact
+    turns into a failing exit code.
+    """
+    import os as _os
+
+    before = _os.environ.get("CADRE_NO_BASE")
+    try:
+        _os.environ["CADRE_NO_BASE"] = "1"
+        assert "not installed" in sysconfig_service.base_absence_reason()
+        _os.environ.pop("CADRE_NO_BASE")
+        assert "not installed" in sysconfig_service.base_absence_reason()
+    finally:
+        if before is None:
+            _os.environ.pop("CADRE_NO_BASE", None)
+        else:
+            _os.environ["CADRE_NO_BASE"] = before
+
+
+def test_init_says_the_switch_is_why_base_was_skipped(monkeypatch, ws, capsys):
+    """The report an operator actually reads, not just the helper behind it."""
+    monkeypatch.setenv("CADRE_NO_BASE", "1")
+    monkeypatch.setattr(sysconfig_service, "which_base", lambda: None)
+
+    assert run_init(ws) == 0
+    out = capsys.readouterr().out
+
+    assert "CADRE_NO_BASE" in out, (
+        "init reported base missing without saying a variable suppressed it")
+
+
+def test_doctor_names_the_switch_rather_than_blaming_the_install(monkeypatch,
+                                                                 tmp_path):
+    """`doctor` is where an operator goes when something looks wrong.
+
+    `is_current` is the line it prints for the firm's base domain, and it used
+    to say "base absent" for three different situations: base missing, base
+    suppressed, and base present but printing something unparseable. Someone
+    who set CADRE_NO_BASE reads "absent" and goes debugging an install that is
+    fine.
+
+    `rule_count` is stubbed to None because all three situations reach this
+    line through it; the point under test is which of them the message names.
+    """
+    from firm.services import base_domain
+
+    ws = tmp_path / "firm"
+    (ws / ".base").mkdir(parents=True)
+
+    # A block that is genuinely current, so `is_current` reaches the rule-count
+    # branch instead of returning "stale" earlier. `have` is rebuilt as
+    # BEGIN + <between> + END, so an empty between and a render that returns
+    # the same pair is the smallest input that gets past that check.
+    block = base_domain.BEGIN + base_domain.END
+    (ws / ".base" / "domains.toml").write_text(block, encoding="utf-8")
+    monkeypatch.setattr(base_domain, "render", lambda *a, **k: block)
+    monkeypatch.setattr(base_domain, "rule_count", lambda *a, **k: None)
+
+    monkeypatch.setenv("CADRE_NO_BASE", "1")
+    monkeypatch.setattr(sysconfig_service, "which_base", lambda: None)
+    _, suppressed = base_domain.is_current(ws, "demo", None)
+
+    monkeypatch.delenv("CADRE_NO_BASE", raising=False)
+    _, missing = base_domain.is_current(ws, "demo", None)
+
+    monkeypatch.setattr(sysconfig_service, "which_base", lambda: "/fake/base")
+    _, unparseable = base_domain.is_current(ws, "demo", None)
+
+    assert "CADRE_NO_BASE" in suppressed, suppressed
+    assert "CADRE_NO_BASE" not in missing, missing
+    assert len({suppressed, missing, unparseable}) == 3, (
+        "three different situations still produce fewer than three messages: "
+        f"{suppressed!r} / {missing!r} / {unparseable!r}")
+    assert "not recognised" in unparseable, (
+        "a base that is present but unparseable is reported as absent")
+
+
 def test_the_suite_does_not_reach_the_machines_real_base():
     """The control on conftest's autouse fixture, which this file depends on.
 
