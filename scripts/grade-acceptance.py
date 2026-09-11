@@ -28,7 +28,7 @@ Exit 1, naming what happened, on any of:
   * the summary says `"completed": false`
   * the summary carries no rows at all
   * the summary carries fewer rows than --min-rows
-  * the harness exited non-zero while reporting no FAIL row
+  * the harness exited non-zero for a reason its scoreboard does not explain
   * the counts in the summary disagree with the rows in the same summary
 
 The third and sixth are the same defect caught twice, on purpose, and they are
@@ -51,6 +51,16 @@ from pathlib import Path
 
 PASS, FAIL, BLOCKED, SKIP = "PASS", "FAIL", "BLOCKED", "SKIP"
 ORDER = (PASS, FAIL, BLOCKED, SKIP)
+
+# acceptance-e2e.py's report() answers in three values, and they are not
+# interchangeable with "zero or not zero". Before this, ANY non-zero with no
+# FAIL row was reported as "it did not finish" -- which would have been exactly
+# wrong for a run that finished cleanly and skipped a section, and would have
+# turned a legitimate host skip into a red build carrying a false explanation.
+RC_CLEAN = 0        # every row measured, nothing skipped
+RC_FAIL = 1         # at least one FAIL row
+RC_SKIPPED = 2      # no FAIL, but rows were SKIPPED: this host established less
+RC_REFUSED = 3      # the harness refused to start (its isolation check was blind)
 
 
 def _make_output_utf8_safe() -> None:
@@ -167,19 +177,55 @@ def grade(data: dict, harness_rc: int, min_rows: int) -> tuple[list[str], list[s
                 if line.strip():
                     problems.append(f"          {line[:150]}")
 
-    # Two ways the exit code and the scoreboard can contradict each other, and
-    # both matter. Neither is reachable by reading one of them.
-    if harness_rc != 0 and not tally[FAIL]:
-        problems.append(
-            f"the harness exited {harness_rc} but recorded no FAIL row. It did "
-            f"not finish: the summary comes from a finally: block and describes "
-            f"only the rows reached before it died. Read the harness log above "
-            f"for the traceback or the signal.")
-    if harness_rc == 0 and tally[FAIL]:
+    # The exit code and the scoreboard must agree, and the code carries three
+    # distinct answers. Each mismatch below means one of the two is lying, and
+    # which one it is changes what you do about it -- so they are named
+    # separately rather than lumped into "non-zero".
+    if harness_rc == RC_CLEAN and tally[FAIL]:
         problems.append(
             f"the harness exited 0 while recording {len(tally[FAIL])} FAIL "
             f"row(s). Its own report() is supposed to return 1 on any FAIL, so "
             f"the exit code is no longer telling the truth about the scoreboard.")
+    elif harness_rc == RC_CLEAN and tally[SKIP]:
+        problems.append(
+            f"the harness exited 0 while recording {len(tally[SKIP])} SKIP "
+            f"row(s). report() returns 2 when anything was skipped, because a "
+            f"run that did not measure part of its ground is not a clean run. "
+            f"Exit 0 here means the exit code has stopped matching the report.")
+    elif harness_rc == RC_FAIL and not tally[FAIL]:
+        problems.append(
+            "the harness exited 1 but recorded no FAIL row. report() returns 1 "
+            "only for a FAIL, so this run did not reach its own report: the "
+            "summary comes from a finally: block and describes only the rows "
+            "reached before it died. Read the harness log above for the "
+            "traceback or the signal.")
+    elif harness_rc == RC_SKIPPED and not tally[SKIP]:
+        problems.append(
+            "the harness exited 2, which report() returns only when rows were "
+            "SKIPPED, but the summary carries no SKIP row. The exit code and "
+            "the scoreboard are describing different runs.")
+    elif harness_rc == RC_REFUSED:
+        problems.append(
+            "the harness exited 3: it REFUSED to run. Its isolation check could "
+            "not see a tier it expects to watch, so it stopped rather than "
+            "record a placeholder that would pass forever. Nothing here was "
+            "measured. The harness log says which path it could not resolve.")
+    elif harness_rc not in (RC_CLEAN, RC_FAIL, RC_SKIPPED, RC_REFUSED):
+        problems.append(
+            f"the harness exited {harness_rc}, which report() never returns. It "
+            f"was killed or it died before reporting, and the summary describes "
+            f"only the rows reached before that.")
+
+    # rc 2 with SKIP rows present is the one non-zero that is NOT a problem.
+    # A host that cannot check a section is information, and the notices below
+    # print every skipped row with the reason it carries. Failing the build here
+    # would punish an honest "not established" and teach the next person to
+    # delete the SKIP instead of the cause.
+    if harness_rc == RC_SKIPPED and tally[SKIP]:
+        notices.append(
+            f"NOTE     the harness exited 2: {len(tally[SKIP])} row(s) were "
+            f"SKIPPED, so this OS established less than a full run would. Not a "
+            f"regression, and not a pass over that ground either.")
 
     # Printed, never swallowed. A BLOCKED row names an open defect and a SKIP
     # row names a fact about the host; a reader who cannot see them cannot tell
