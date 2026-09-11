@@ -42,6 +42,7 @@ that must fail. A green step with no control is not evidence.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -59,6 +60,41 @@ IS_WIN = sys.platform.startswith("win")
 TIMEOUT = 900
 
 PASS, FAIL, BLOCKED, SKIP = "PASS", "FAIL", "BLOCKED", "SKIP"
+
+# The base section's rows, by name, in the order the executed path emits them.
+#
+# WHY A LIST AND NOT A COUNT. This section has one arm that runs eighteen rows
+# and several that run none, and the skipped arms used to record NOTHING -- the
+# rows did not fail, they ceased to exist. A scoreboard that shrinks reports a
+# smaller run as a cleaner one, and a row that is absent says nothing at all,
+# while a SKIP row says "this host could not check it, and here is why". The two
+# are not close.
+#
+# A count would rot the first time someone added a row. Naming them means the
+# skipped path can emit exactly the rows the executed path would have, and
+# `Board.assert_section` can then require the executed path to emit exactly this
+# list -- so the list and the code cannot drift apart without a FAIL row saying
+# which name moved.
+BASE_SECTION_ROWS = [
+    "base is installed on this host",
+    "the resolved base matches this platform",
+    "the base bridge module loads from the installed package",
+    "base reads the firm's own workspace tier, not the operator's",
+    "the Cadre manifest installs into base and is read back",
+    "the extension's command RUNS through base, not merely installs",
+    "the firm's base domain carries a live rule",
+    "the demo firm has a Unit to close",
+    "two Members of one firm get different briefings",
+    "a Board session is briefed as nobody (scope control)",
+    "the write-back gate lets a Member with nothing owed finish",
+    "closing a Unit with nothing recorded blocks the session",
+    "the other Member is not blocked by that debt (gate control)",
+    "the firm's graph starts empty (evidence control)",
+    "a Member's lesson reaches the graph and is readable back out",
+    "the isolation digest can actually detect a change",
+    "the other platform's tier is being watched",
+    "the operator's own graph and registry were never written to",
+]
 
 
 class Board:
@@ -78,6 +114,47 @@ class Board:
     def count(self, status: str) -> int:
         return sum(1 for r in self.rows if r["status"] == status)
 
+    def skip_rest(self, names: list[str], detail: str) -> None:
+        """Record SKIP for every declared row this section has not reached.
+
+        Called on each path that stops the section early, with the reason that
+        path stopped. The rows are emitted in declared order, so a skipped run
+        and a full run put the same names on the scoreboard in the same places
+        and the two are directly comparable.
+        """
+        done = {r["name"] for r in self.rows}
+        for name in names:
+            if name not in done:
+                self.add(SKIP, name, detail)
+
+    def assert_section(self, start: int, names: list[str], section: str) -> None:
+        """Require the rows emitted since `start` to be exactly `names`.
+
+        This is the half that keeps the declared list honest. Without it the
+        list is a comment: delete a `b.add` and the executed path quietly emits
+        seventeen rows where it declares eighteen, which is the same
+        disappearance the list exists to prevent, one level up. Both directions
+        are covered -- a name in the code but not the list is drift too.
+        """
+        emitted = [r["name"] for r in self.rows[start:]]
+        if emitted == names:
+            return
+        missing = [n for n in names if n not in emitted]
+        extra = [n for n in emitted if n not in names]
+        dupes = sorted({n for n in emitted if emitted.count(n) > 1})
+        why = []
+        if missing:
+            why.append("DECLARED BUT NEVER EMITTED: " + "; ".join(missing))
+        if extra:
+            why.append("EMITTED BUT NOT DECLARED: " + "; ".join(extra))
+        if dupes:
+            why.append("EMITTED TWICE: " + "; ".join(dupes))
+        if not why:
+            why.append(f"same {len(names)} names in a different order; the list "
+                       "is the spec, so reorder the list or the code")
+        self.add(FAIL, f"the {section} section recorded every row it declares",
+                 f"declared {len(names)}, emitted {len(emitted)}\n" + "\n".join(why))
+
     def report(self) -> int:
         print()
         print("=" * 78)
@@ -89,6 +166,12 @@ class Board:
         print(f"  {self.count(PASS)} pass · {self.count(FAIL)} fail · "
               f"{self.count(BLOCKED)} blocked · {self.count(SKIP)} skip "
               f"· {time.time() - self.t0:.0f}s")
+        # USABLE is a claim about what was PROVEN, so a skip has to change the
+        # headline and not merely add a footnote. A run that skipped the whole
+        # base section proved 23 rows and left every base row unmeasured;
+        # printing USABLE there is a verdict that reads green over the thing it
+        # names. NOT ESTABLISHED is not a failure — it says this host could not
+        # check it, which is the truth.
         if self.count(FAIL):
             print()
             print("  NOT USABLE END TO END on this OS. The FAIL rows are "
@@ -97,10 +180,34 @@ class Board:
             print()
             print("  Usable as far as it goes, with known defects blocking the "
                   "BLOCKED rows. Each names its defect.")
+        elif self.count(SKIP):
+            print()
+            print(f"  NOT ESTABLISHED on this OS: {self.count(PASS)} row(s) "
+                  f"passed and {self.count(SKIP)} were SKIPPED, so the skipped "
+                  "ground is unmeasured rather than proven. Each SKIP row says "
+                  "what this host could not check and why.")
         else:
             print()
-            print("  USABLE END TO END on this OS.")
-        return 1 if self.count(FAIL) else 0
+            print(f"  USABLE END TO END on this OS. All {self.count(PASS)} "
+                  "rows measured, none skipped.")
+        # THE EXIT CODE IS THE HALF CI AND THE NEXT VERIFIER ACTUALLY READ.
+        # The headline above already refuses to say USABLE over a skipped
+        # section; returning 0 there said it again in the one place a script
+        # can see. A run that proved nothing is not a clean run.
+        #
+        #   0  every row measured, nothing skipped
+        #   1  at least one FAIL -- something that should work here does not
+        #   2  no FAIL, but rows were SKIPPED, so this host did not establish
+        #      the skipped ground. Not a failure; not a pass either.
+        #
+        # 2 is distinct from 1 on purpose: scripts/grade-acceptance.py needs to
+        # tell "the harness died" from "the harness declined to measure", and a
+        # single non-zero cannot carry that.
+        if self.count(FAIL):
+            return 1
+        if self.count(SKIP):
+            return 2
+        return 0
 
 
 def run(argv: list[str], *, cwd: Path | None = None, env: dict | None = None,
@@ -124,8 +231,39 @@ def run(argv: list[str], *, cwd: Path | None = None, env: dict | None = None,
             # on the WRITE side, so a JSON payload arrives altered.
             input=stdin_text.encode("utf-8") if stdin_text is not None else None,
         )
-    except FileNotFoundError as exc:
-        return 127, f"not found: {exc}"
+    except OSError as exc:
+        # EVERY way the OS can refuse to start the process, under ONE message.
+        #
+        # This caught FileNotFoundError alone, so a `base` that exists and
+        # cannot be executed -- wrong permission bits, a directory of that
+        # name, a dangling interpreter on the shebang line -- raised
+        # PermissionError straight out of run() and killed the harness with a
+        # traceback. Measured 2026-09-11: EACCES at the base section's very
+        # first call took the run down, so the eighteen rows of that section
+        # were not SKIPPED, they were never reached, and the summary said 23
+        # rows with completed=false. That is the row-conservation defect
+        # arriving through a door the declared row list cannot close, because
+        # no row runs at all.
+        #
+        # ONE MESSAGE, NOT TWO, and that is the second half of the fix. The
+        # first attempt kept a separate "not found:" arm for
+        # FileNotFoundError, and the same missing command then produced
+        # different text on different systems: EACCES on Linux for a directory
+        # named `base`, but ENOENT on Windows, where the loader searches
+        # PATHEXT and never finds an executable of that name at all. So the
+        # harness said "could not be run" on one OS and "not found" on the
+        # other for the identical host condition. Caught by CI on
+        # windows-latest, which is exactly what the three-OS matrix is for.
+        #
+        # The distinction was never worth keeping: both mean "this host cannot
+        # start that command", both are answered with 127, and the OS's own
+        # errno text is appended, so nothing diagnostic is lost. What IS worth
+        # keeping is that an operator comparing two runs on two machines reads
+        # the same sentence for the same fact.
+        #
+        # 127 is the right code -- it is what the base section's first arm
+        # already knows how to handle: SKIP all eighteen rows and say why.
+        return 127, f"could not be run: {exc}"
     except subprocess.TimeoutExpired:
         return 124, f"timed out after {timeout}s"
     out = (p.stdout or b"").decode("utf-8", errors="replace")
@@ -163,6 +301,92 @@ def _expand_hook_command(command: str, ws: Path) -> list[str]:
     expanded = command.replace("$CLAUDE_PROJECT_DIR", str(ws))
     expanded = expanded.replace("${CLAUDE_PROJECT_DIR}", str(ws))
     return shlex.split(expanded, posix=not IS_WIN)
+
+
+def binary_kind(path: str | None) -> str:
+    """Classify an executable by its MAGIC BYTES, never by its name.
+
+    The Windows base sits at /mnt/c/Users/<user>/.local/bin/base with no .exe
+    suffix, so a filename test calls it POSIX and is wrong in the one case that
+    matters. Four bytes off the front cannot be fooled that way.
+    """
+    if not path:
+        return "absent"
+    try:
+        with open(path, "rb") as fh:
+            magic = fh.read(4)
+    except OSError:
+        return "unreadable"
+    if magic[:2] == b"MZ":
+        return "pe"
+    if magic == b"\x7fELF":
+        return "elf"
+    if magic[:4] == b"\xcf\xfa\xed\xfe" or magic[:4] == b"\xca\xfe\xba\xbe":
+        return "macho"
+    if magic[:2] == b"#!":
+        return "script"
+    return "unknown"
+
+
+def operator_files() -> list[Path]:
+    """Every operator file this run could contaminate, on BOTH platform tiers.
+
+    ABSENT IS A PASSING VALUE. That is the whole reason this function exists
+    instead of a hard-coded list. The previous version watched
+    ``/mnt/c/Users/<home.name>/.base-gbl/base.toml``, and there is no username
+    for which that resolves: the Windows account is `Chris` and the WSL account
+    is `chriskahler`, so from WSL it pointed at a directory that does not exist
+    and from Windows a POSIX prefix resolves nowhere either. It therefore hashed
+    the constant string "absent" on every run -- stable before, stable after,
+    and the isolation row passed while the file it was named for filled up with
+    junk. A watched path that cannot resolve is not a watch, it is a no-op that
+    reads green.
+
+    So the cross-tier side is GLOBBED rather than constructed, and the caller
+    refuses when the other platform's tier root exists but the glob finds
+    nothing.
+    """
+    home = Path.home()
+    files = [home / ".base" / "graph.nq",
+             home / ".base-gbl" / "base.toml",
+             home / ".base-gbl" / ".base" / "graph.nq",
+             home / ".base-gbl" / ".base" / "changes.jsonl",
+             home / ".base-gbl" / ".base" / "domains.toml",
+             home / ".claude" / "CLAUDE.md"]
+    # Installed extensions: a hand-install overwrote one of these tonight and
+    # left `base cadre` dead, so the directory is watched as a whole.
+    files.extend(sorted((home / ".base-gbl" / "extensions").glob("*.toml")))
+    files.extend(cross_tier_files())
+    return files
+
+
+def cross_tier_root() -> Path:
+    """Where the OTHER platform's home directories live, seen from this one."""
+    return (Path("//wsl.localhost/Ubuntu/home") if IS_WIN
+            else Path("/mnt/c/Users"))
+
+
+def cross_tier_files() -> list[Path]:
+    return sorted(cross_tier_root().glob("*/.base-gbl/base.toml"))
+
+
+def operator_digest(files: list[Path] | None = None) -> str:
+    """One content hash over ``files``, defaulting to every operator file.
+
+    Content hash and never mtime: `fs::copy` preserves mtime, so a harness
+    keyed on it reports "unchanged" while writing. Keyed by full path, not by
+    name, because several of these are called base.toml.
+
+    ``files`` is injectable so the harness can prove the mechanism detects a
+    change at all, rather than assuming a stable number means nothing moved.
+    """
+    parts = []
+    for f in (operator_files() if files is None else files):
+        try:
+            parts.append(str(f) + ":" + hashlib.md5(f.read_bytes()).hexdigest())
+        except OSError:
+            parts.append(str(f) + ":absent")
+    return hashlib.md5("|".join(parts).encode()).hexdigest()
 
 
 def venv_bin(venv: Path, name: str) -> Path:
@@ -219,7 +443,42 @@ def main() -> int:
               "locale-encoding defects. Clear it for an honest run.")
     print()
 
+    # Opened HERE, before the first command, and closed in the last row.
+    #
+    # It used to be taken inside the base section, hundreds of lines below the
+    # `cadre init` calls it needed to watch, so it could only ever see its own
+    # section. Widening WHAT it hashed would not have helped: the window itself
+    # was in the wrong place, and the contamination happened before it opened.
+    # REFUSE rather than record a placeholder. If the other platform's tier
+    # root is right there and the glob finds nothing under it, the cross-tier
+    # arm is dead and every "unchanged" this run reports is worth nothing.
+    if cross_tier_root().is_dir() and not cross_tier_files():
+        print(f"  REFUSING: {cross_tier_root()} exists but no tier was found "
+              "under it. The cross-platform isolation check would silently "
+              "watch nothing, which is how six junk workspaces reached the "
+              "operator's registry while this harness reported clean.")
+        return 3
+
+    run_start_digest = operator_digest()
+    print(f"  watching    {len(operator_files())} operator file(s), "
+          f"{len(cross_tier_files())} on the other tier")
+
     sandbox = Path(tempfile.mkdtemp(prefix="cadre-accept-"))
+
+    # `cadre init` scaffolds the firm's BASE tier, so it shells out to whatever
+    # base this host carries. Before that landed these calls were inert; now an
+    # un-isolated one registers this throwaway sandbox in the OPERATOR's global
+    # workspace registry, which `base workspace sync` then copies into the
+    # CLAUDE.md they load in every session. Measured: six `cadre-accept-*`
+    # entries from three runs, on both platforms.
+    #
+    # CADRE_NO_BASE is the load-bearing half. BASE_HOME alone does not hold on
+    # WSL, where `base` resolves to the WINDOWS binary across /mnt/c and a POSIX
+    # BASE_HOME neither redirects its write nor trips base's own isolation
+    # panic. Not finding a binary at all is the only thing that reliably stops a
+    # child process.
+    SANDBOX_ENV = {"CADRE_NO_BASE": "1",
+                   "BASE_HOME": str(sandbox / "base-home")}
     venv = sandbox / "venv"
     ws = sandbox / "demo-firm"
     print(f"  sandbox     {sandbox}")
@@ -343,7 +602,8 @@ def main() -> int:
               "CONTROL: no firm database exists before init",
               f"{db} absent" if not db.exists() else
               "a database already exists, so 'init created it' proves nothing")
-        rc, out = run([str(venv_bin(venv, "cadre")), "init", str(ws), "--demo"])
+        rc, out = run([str(venv_bin(venv, "cadre")), "init", str(ws), "--demo"],
+                      env=SANDBOX_ENV)
         b.add(PASS if rc == 0 and db.is_file() else FAIL,
               "cadre init --demo creates a firm",
               f"rc={rc}\n{out[-700:]}")
@@ -372,7 +632,7 @@ def main() -> int:
 
         # ---- 7. hooks + idempotence ------------------------------------
         rc, out = run([str(venv_bin(venv, "cadre")), "init", str(ws),
-                       "--install-hooks"])
+                       "--install-hooks"], env=SANDBOX_ENV)
         hook = ws / ".claude" / "hooks" / "cadre-session-pulse.py"
         settings = ws / ".claude" / "settings.json"
         wired = settings.is_file() and "cadre-session-pulse" in \
@@ -488,7 +748,8 @@ def main() -> int:
                      "contract reads that silence as 'no firm here'. Record "
                      "the interpreter path at install time and have the hook "
                      "read it."))
-        rc, out = run([str(venv_bin(venv, "cadre")), "init", str(ws), "--demo"])
+        rc, out = run([str(venv_bin(venv, "cadre")), "init", str(ws), "--demo"],
+                      env=SANDBOX_ENV)
         again_ok = rc == 0 and ("skip" in out.lower() or "already" in out.lower())
         b.add(PASS if again_ok else FAIL,
               "re-running init is idempotent, not destructive",
@@ -612,30 +873,397 @@ def main() -> int:
                   "Nothing below this line can run until it is fixed.")
 
         # ---- 11. base as the engine, via the extension -----------------
+        #
+        # EVERY PATH OUT OF THIS SECTION RECORDS ALL EIGHTEEN OF ITS ROWS.
+        # It used to record one SKIP and drop the other seventeen on a host
+        # whose `base` is built for another platform, so the same harness wrote
+        # a full scoreboard on one machine and a much shorter one on another --
+        # and nothing in the shorter one said the difference was unmeasured
+        # rows rather than a smaller job. A row that is absent says nothing at
+        # all; a SKIP row says what this host could not check and why.
+        #
+        # BASE_SECTION_ROWS is the declared list, `skip_rest` fills whatever an
+        # early exit did not reach, and `end_base_section` asserts the two
+        # against each other on the way out.
+        base_section_start = len(b.rows)
+        base_home: Path | None = None
+
+        def end_base_section() -> int:
+            """The ONE way out of this section.
+
+            A bare `return b.report()` did none of these four things: it left
+            the remaining rows unrecorded, skipped the conservation check, left
+            the sandbox BASE_HOME on disk, and -- since the `completed` flag
+            landed -- returned without setting `finished`, so the summary said
+            the harness had died when it had declined to measure on purpose.
+            """
+            nonlocal finished
+            b.assert_section(base_section_start, BASE_SECTION_ROWS,
+                             "base as the engine")
+            if base_home is not None:
+                shutil.rmtree(base_home, ignore_errors=True)
+            finished = True
+            return b.report()
+
         rc, out = run(["base", "--version"])
+        base_path = shutil.which("base")
+        base_kind = binary_kind(base_path)
+        native_kind = "pe" if IS_WIN else ("macho" if sys.platform == "darwin" else "elf")
         if rc != 0:
             b.add(SKIP, "base is installed on this host",
                   "base not on PATH; the extension journey cannot be checked "
                   "here. This is a host setup fact, not a Cadre defect.")
+            b.skip_rest(BASE_SECTION_ROWS,
+                        "not measured: base is not on PATH on this host, so "
+                        "nothing in the base-engine section could run. "
+                        "Unmeasured, not passed.")
+        elif base_kind not in (native_kind, "script", "unknown"):
+            # A base built for the OTHER platform still RUNS here -- WSL interop
+            # executes the Windows binary quite happily -- and that is what makes
+            # it dangerous rather than merely broken. It does not understand a
+            # POSIX BASE_HOME, so every isolated call below would land in the
+            # operator's REAL tier while each assertion passed. Measured tonight:
+            # six junk workspaces in the operator's global registry, written by
+            # runs that looked clean.
+            #
+            # Skipped rather than failed, and rather than aborted, for the same
+            # reason the arm above skips a host with no base: which binary this
+            # shell resolves is a host setup fact, not a Cadre defect. A section
+            # that says THIS HOST CANNOT CHECK THIS is honest. One that runs
+            # anyway writes somebody's knowledge.
+            # `base` IS installed here -- that row is a PASS. Only the
+            # platform match fails, and the difference between "this host has
+            # no base" and "this host has the wrong one" is worth keeping.
+            b.add(PASS, "base is installed on this host", out.strip()[:80])
+            b.add(SKIP, "the resolved base matches this platform",
+                  f"`base` resolves to {base_path} — a {base_kind} binary under "
+                  f"a {native_kind} interpreter. A cross-platform base ignores "
+                  "BASE_HOME, so this section would write the operator's own "
+                  "tier instead of the sandbox. Put a native base first on PATH "
+                  "to check this section here.")
+            b.skip_rest(BASE_SECTION_ROWS,
+                        "not measured: the resolved `base` is built for another "
+                        "platform, so running this section would write the "
+                        "operator's own tier instead of the sandbox. "
+                        "Unmeasured, not passed.")
         else:
             b.add(PASS, "base is installed on this host", out.strip()[:80])
+            b.add(PASS, "the resolved base matches this platform",
+                  f"{base_path} ({base_kind})")
             rc2, out2 = run([str(vpy), "-c",
                              "import firm.services.base_domain as m;"
                              "print(getattr(m,'__file__',''))"], cwd=sandbox)
             b.add(PASS if rc2 == 0 else FAIL,
                   "the base bridge module loads from the installed package",
                   out2.strip()[:160])
-            b.add(BLOCKED, "base is the engine for this firm (extension wired)",
-                  "PENDING: the extension install path and its verbs "
-                  "(base cadre learn / base cadre complete, the write-back "
-                  "marker and the blocking stop hook) are on lane/"
-                  "base-extension and not yet merged to main. This row turns "
-                  "green when that lands and this harness is taught its exact "
-                  "command sequence.")
+            # ---- base is the engine: one row per assertion ----------
+            #
+            # Not one "base is the engine" row. Eleven, because when this goes
+            # red the operator needs the step that broke, not the news that
+            # something in a ten-command journey did. Each has its control
+            # beside it: the negative arm that fails if the check has gone
+            # blind. Measured end to end on Windows first; the sequence is
+            # .base-gbl/docs/2026-09-10-godwit-base-engine-journey.md.
+            #
+            # TWO TRAPS PAID FOR ALREADY, both live in these four lines.
+            #
+            # `sandbox` is tempfile.mkdtemp(), which on Windows lands under
+            # AppData\Local\Temp — INSIDE the user profile. base's own write
+            # tripwire panics there, because `dirs` never consults $HOME on
+            # Windows and cannot tell a fake tier under the profile from the
+            # real one. So this section takes a drive-root BASE_HOME instead.
+            #
+            # And BASE_HOME is only half of it: it governs the GLOBAL tier.
+            # The WORKSPACE tier follows the CURRENT DIRECTORY. Set BASE_HOME,
+            # run from the wrong cwd, and base reads and writes the operator's
+            # own graph while every assertion here still passes. Every base
+            # call below therefore passes cwd=ws.
+            base_home = (Path(Path(sys.executable).drive + "/cadre-accept-base")
+                         if IS_WIN else Path(tempfile.gettempdir()) / "cadre-accept-base")
+            shutil.rmtree(base_home, ignore_errors=True)
+            base_home.mkdir(parents=True, exist_ok=True)
+            benv = {"BASE_HOME": str(base_home), "PYTHONIOENCODING": "utf-8"}
 
-        rc = b.report()
-        finished = True
-        return rc
+            def bmember(mid: str | None) -> dict:
+                e = dict(benv)
+                e["CADRE_MEMBER_ID"] = mid or ""
+                return e
+
+            before_hash = run_start_digest
+
+            # 1. Isolation. Nothing else in this section may run until base is
+            #    demonstrably reading the FIRM's tier, because if it is reading
+            #    the operator's, every row below is writing their knowledge.
+            rc, out = run(["base", "scaffold", "."], cwd=ws, env=benv)
+            rc, out = run(["base", "doctor"], cwd=ws, env=benv)
+            reads_firm = str(ws) in out.replace("/", os.sep)
+            b.add(PASS if reads_firm else FAIL,
+                  "base reads the firm's own workspace tier, not the operator's",
+                  (f"tier under {ws}" if reads_firm else
+                   "base did NOT name the firm's directory. BASE_HOME governs "
+                   "the global tier only; the workspace tier follows cwd. "
+                   "Refusing to run the rest of this section."))
+            if not reads_firm:
+                b.skip_rest(BASE_SECTION_ROWS,
+                            "not measured: base was reading a tier other than "
+                            "the firm's, so every row below would have been "
+                            "writing the operator's own knowledge.")
+                return end_base_section()
+
+            # 2. The extension, through the shipped verb rather than a
+            #    python -c. `read_back` is the claim that matters: install
+            #    re-reads the landed file instead of trusting its own write,
+            #    so "ok" alone would pass over a manifest that never landed.
+            rc, out = run([str(venv_bin(venv, "cadre")), "extension", "install"],
+                          cwd=ws, env=benv)
+            landed = base_home / ".base-gbl" / "extensions" / "cadre.toml"
+            wired = rc == 0 and "read back" in out and landed.exists()
+            b.add(PASS if wired else FAIL,
+                  "the Cadre manifest installs into base and is read back",
+                  out.strip()[:160] if wired else
+                  f"rc={rc} landed={landed.exists()} :: {out.strip()[:200]}")
+
+            # 2b. THE ROW ABOVE CANNOT FAIL IN THE WAY THAT MATTERS, which is
+            #     the whole reason this one exists. `rc == 0`, the words "read
+            #     back" in the output, and a file on disk were ALL THREE TRUE
+            #     at d842529 while `base cadre` exited 127 on both platforms.
+            #     Measured, not reasoned about. An install reporting success
+            #     over a dead command IS F1, and nothing short of running the
+            #     handler can tell the two apart.
+            #
+            #     Note what this invokes: `base cadre`, the extension handler.
+            #     Every other cadre call in this section goes through the venv
+            #     console script, which reaches the CLI without ever testing
+            #     the manifest that is supposed to point at it.
+            rc, out = run(["base", "cadre", "--version"], cwd=ws, env=benv)
+            runs = rc == 0 and "cadre" in out.lower()
+            b.add(PASS if runs else FAIL,
+                  "the extension's command RUNS through base, not merely installs",
+                  f"`base cadre --version` -> {out.strip()[:120]}" if runs else
+                  f"rc={rc} :: {out.strip()[:200]} :: the manifest is installed "
+                  "and the command is dead — this is the F1 shape")
+
+            # 3. A generated domain block is not a live wire. base drops a
+            #    MATCHED domain carrying zero rules, silently and totally, so
+            #    the block existing proves nothing. The rule count is the
+            #    assertion; the block is not.
+            rc, out = run([str(vpy), "-c",
+                           "import sqlite3;"
+                           "from pathlib import Path;"
+                           "from firm.services import base_domain;"
+                           "c = sqlite3.connect('.firm/firm.db');"
+                           "c.row_factory = sqlite3.Row;"
+                           "r = base_domain.sync(Path('.').resolve(), "
+                           "__import__('firm.core.db', fromlist=['x'])"
+                           ".resolve_firm_id(c, None), conn=c);"
+                           "c.close(); print(r)"], cwd=ws, env=benv)
+            firm_id = None
+            try:
+                with sqlite3.connect(f"file:{ws / '.firm' / 'firm.db'}?mode=ro",
+                                     uri=True) as c:
+                    firm_id = c.execute("select id from firm limit 1").fetchone()[0]
+            except sqlite3.Error:
+                pass
+            rc2, out2 = run(["base", "rule", "list", "--domain", str(firm_id)],
+                            cwd=ws, env=benv)
+            live_rule = " 0 rules" not in out2 and "rules" in out2
+            b.add(PASS if live_rule else FAIL,
+                  "the firm's base domain carries a live rule",
+                  out2.strip().splitlines()[0][:140] if out2.strip() else
+                  "no rule count came back; base drops a domain with zero rules "
+                  "whole, so the block can be perfect and inject nothing")
+
+            # 4/5. Per-member scope, and the control that makes "different"
+            #      mean something. Two Members must see different briefings AND
+            #      a Board session must see none — without the second, two
+            #      arbitrary strings would pass.
+            members: list[str] = []
+            try:
+                with sqlite3.connect(f"file:{ws / '.firm' / 'firm.db'}?mode=ro",
+                                     uri=True) as c:
+                    members = [r[0] for r in
+                               c.execute("select id from member order by id")]
+            except sqlite3.Error:
+                pass
+            if len(members) < 2:
+                # Named exactly as BASE_SECTION_ROWS names it. This row used to
+                # read "two Members get different briefings" on this path and
+                # "two Members of one firm get different briefings" on the
+                # other, so one assertion wore two names depending on the host
+                # and no reader could line the two scoreboards up.
+                b.add(SKIP, "the demo firm has a Unit to close",
+                      f"the demo firm has {len(members)} member(s); the unit "
+                      "rows need two and are not asserting anything")
+                b.add(SKIP, "two Members of one firm get different briefings",
+                      f"the demo firm has {len(members)} member(s); this row "
+                      "needs two and is not asserting anything")
+                b.skip_rest(BASE_SECTION_ROWS,
+                            f"not measured: the demo firm has {len(members)} "
+                            "member(s) and these rows need two.")
+            else:
+                one, two = members[0], members[1]
+                # The demo firm's unit ids are not this harness's to assume.
+                # Read the first one, give it to Member one, and mint a second
+                # for Member two so the two briefings have different content
+                # to differ ABOUT — two empty briefings are also "different".
+                _, uout = run([str(vpy), "-c",
+                               "import sqlite3, sys;"
+                               "c = sqlite3.connect('.firm/firm.db');"
+                               "u = [r[0] for r in c.execute("
+                               "'select id from unit order by id')];"
+                               "c.execute('update unit set assignee_member_id=?"
+                               " where id=?', (sys.argv[1], u[0]));"
+                               "c.execute(\"insert into unit (id, firm_id, name,"
+                               " project_id, assignee_member_id, status) select"
+                               " 'ACC-U2', firm_id, 'second unit', project_id,"
+                               " ?, 'in_progress' from unit where id=?\","
+                               " (sys.argv[2], u[0]));"
+                               "c.commit(); c.close(); print(u[0])",
+                               one, two], cwd=ws, env=benv)
+                unit_one = (uout.strip().splitlines() or [""])[-1].strip()
+                if not unit_one:
+                    b.add(FAIL, "the demo firm has a Unit to close",
+                          "no unit id came back, so the gate rows below would "
+                          "have asserted nothing")
+                    b.skip_rest(BASE_SECTION_ROWS,
+                                "not measured: there was no Unit to close, so "
+                                "the gate and write-back rows had nothing to "
+                                "act on.")
+                    return end_base_section()
+                b.add(PASS, "the demo firm has a Unit to close", unit_one)
+                _, b1 = run([str(venv_bin(venv, "cadre")), "brief"],
+                            cwd=ws, env=bmember(one))
+                _, b2 = run([str(venv_bin(venv, "cadre")), "brief"],
+                            cwd=ws, env=bmember(two))
+                differ = bool(b1.strip()) and bool(b2.strip()) and b1 != b2
+                b.add(PASS if differ else FAIL,
+                      "two Members of one firm get different briefings",
+                      f"{one}: {b1.strip().splitlines()[0][:60] if b1.strip() else '(empty)'} | "
+                      f"{two}: {b2.strip().splitlines()[0][:60] if b2.strip() else '(empty)'}")
+
+                _, b0 = run([str(venv_bin(venv, "cadre")), "brief"],
+                            cwd=ws, env=bmember(None))
+                b.add(PASS if not b0.strip() else FAIL,
+                      "a Board session is briefed as nobody (scope control)",
+                      "silent, which is correct — the Board is not a Member"
+                      if not b0.strip() else
+                      "a Board session was handed a Member's queue: "
+                      + b0.strip()[:120])
+
+                # 6-8. The gate: armed, biting, and not biting the wrong person.
+                run([str(vpy), "-c",
+                     "from pathlib import Path;"
+                     "from firm.cli.install_hooks import install_writeback_hook;"
+                     "install_writeback_hook(Path('.').resolve())"],
+                    cwd=ws, env=benv)
+                gate = ws / ".claude" / "hooks" / "cadre-writeback-gate.py"
+
+                def fire_gate(mid: str) -> int:
+                    payload = json.dumps({"cwd": str(ws), "stop_hook_active": False})
+                    p = subprocess.run([str(vpy), str(gate)], cwd=str(ws),
+                                       env={**os.environ, **bmember(mid)},
+                                       input=payload.encode(),
+                                       capture_output=True, timeout=120)
+                    return p.returncode
+
+                b.add(PASS if fire_gate(one) == 0 else FAIL,
+                      "the write-back gate lets a Member with nothing owed finish",
+                      "exit 0 with no debt")
+
+                run([str(venv_bin(venv, "cadre")), "member", "grant",
+                     "authority", one, "--comment", "acceptance"],
+                    cwd=ws, env=benv)
+                rc, out = run([str(venv_bin(venv, "cadre")), "complete", unit_one],
+                              cwd=ws, env=bmember(one))
+                blocked = fire_gate(one)
+                b.add(PASS if blocked == 2 else FAIL,
+                      "closing a Unit with nothing recorded blocks the session",
+                      f"gate exit {blocked} (want 2) after: {out.strip()[:120]}")
+
+                b.add(PASS if fire_gate(two) == 0 else FAIL,
+                      "the other Member is not blocked by that debt (gate control)",
+                      "exit 0 — a gate that blocks everybody passes the row "
+                      "above and makes the framework unusable")
+
+                # 9/10. The graph, read empty BEFORE so a note found AFTER is
+                #       known to be this run's. Without the before-arm, a note
+                #       from any earlier run proves nothing.
+                _, empty = run(["base", "learn", "--list", "--domain",
+                                str(firm_id)], cwd=ws, env=benv)
+                was_empty = "No notes" in empty
+                b.add(PASS if was_empty else FAIL,
+                      "the firm's graph starts empty (evidence control)",
+                      "no notes yet" if was_empty else
+                      "the graph was NOT empty first, so a lesson found after "
+                      "the write-back proves nothing about who put it there")
+
+                lesson = ("The acceptance run taught that the gate and the "
+                          "command are one piece.")
+                rc, out = run([str(venv_bin(venv, "cadre")), "learn", "--unit",
+                               unit_one, "--type", "insight", "--text", lesson],
+                              cwd=ws, env=bmember(one))
+                released = fire_gate(one)
+                _, recalled = run(["base", "recall", "--keyword",
+                                   "acceptance run"], cwd=ws, env=benv)
+                readable = "one piece" in recalled
+                b.add(PASS if (released == 0 and readable) else FAIL,
+                      "a Member's lesson reaches the graph and is readable back out",
+                      f"gate released={released == 0}, recall found it={readable}"
+                      + ("" if readable else f" :: {recalled.strip()[:160]}"))
+
+            # 11. The guard that outranks every row above it. If this fails,
+            #     the run wrote the operator's own knowledge and the PASSes are
+            #     worthless.
+            # RED ARM for the row below. A stable hash means nothing unless a
+            # changed file moves it, and the previous digest could not have
+            # been moved by anything -- one of its four paths never resolved
+            # and the rest were not the files being written. Proven on a probe
+            # file rather than assumed, and never on the operator's own.
+            probe = sandbox / "digest-probe.txt"
+            probe.write_text("before", encoding="utf-8")
+            probe_before = operator_digest([probe])
+            probe.write_text("after", encoding="utf-8")
+            b.add(PASS if operator_digest([probe]) != probe_before else FAIL,
+                  "the isolation digest can actually detect a change",
+                  "a changed byte moves the hash"
+                  if operator_digest([probe]) != probe_before else
+                  "the digest is CONSTANT across a changed file, so every "
+                  "'unchanged' this harness reports is meaningless")
+
+            # And the cross-tier arm must be watching a real file, not "absent".
+            # A glob match proves a path EXISTS. It does not prove the file
+            # can be read, and an existing-but-unreadable file makes
+            # operator_digest record "absent" for it -- the same no-op that
+            # reads green, one level down from the one that caused this row.
+            # So read the bytes.
+            cross = cross_tier_files()
+            readable = []
+            for f in cross:
+                try:
+                    f.read_bytes()
+                    readable.append(f)
+                except OSError as exc:
+                    b.add(FAIL, "the other platform's tier is being watched",
+                          f"{f} matched the glob but could not be read ({exc}); "
+                          "the digest would record it as absent and pass "
+                          "forever")
+                    break
+            else:
+                b.add(PASS if readable else SKIP,
+                      "the other platform's tier is being watched",
+                      ", ".join(str(f) for f in readable) + " (read back)"
+                      if readable else
+                      f"no tier under {cross_tier_root()} — nothing to "
+                      "cross-check on this host")
+
+            after_hash = operator_digest()
+            b.add(PASS if before_hash == after_hash else FAIL,
+                  "the operator's own graph and registry were never written to",
+                  f"content hash {before_hash[:12]} unchanged"
+                  if before_hash == after_hash else
+                  f"OPERATOR GRAPH CHANGED {before_hash[:12]} -> {after_hash[:12]}"
+                  " — this run contaminated real knowledge")
+        return end_base_section()
     finally:
         if a.json_out:
             Path(a.json_out).write_text(json.dumps({

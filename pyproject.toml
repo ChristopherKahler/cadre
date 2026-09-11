@@ -55,8 +55,14 @@ Homepage = "https://github.com/ChristopherKahler/cadre"
 where = ["src"]
 
 [tool.setuptools.package-data]
+# base_ext ships a TEMPLATE, not a .toml — "base_ext/*.toml" does not match
+# "cadre.toml.template" and a wheel built on that line carries no manifest at
+# all. Both patterns are listed so the entry keeps working if a concrete .toml
+# is ever added beside it. tests/services/test_base_extension.py globs these
+# patterns against the real directory rather than string-matching them, because
+# a pattern that is present and matches nothing is the failure this line had.
 firm = ["migrations/*.sql", "dashboard/*.html", "dashboard/next/*.html",
-        "templates/**/*", "base_ext/*.toml"]
+        "templates/**/*", "base_ext/*.toml", "base_ext/*.toml.template"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

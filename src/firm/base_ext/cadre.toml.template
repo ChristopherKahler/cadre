@@ -1,6 +1,20 @@
-# Cadre — base extension manifest. SOURCE OF TRUTH, shipped in the repo.
+# Cadre — base extension manifest TEMPLATE. SOURCE OF TRUTH, shipped in the repo.
 #
-# Installed to ~/.base-gbl/extensions/cadre.toml by firm.services.base_extension,
+# THIS FILE IS NOT INSTALLABLE AS IT STANDS, and its name says so. Run
+#
+#     cadre extension install
+#
+# which renders the placeholders below for this machine, validates, and only
+# then installs the result to ~/.base-gbl/extensions/cadre.toml.
+#
+# Handing this file straight to `base extension install` would install a
+# manifest whose handler points at a path that exists nowhere: base checks
+# neither at validate nor at install time, so it reports success and `base
+# cadre` then exits 127. That is F6. The `.template` suffix is the fix — there
+# is no `cadre.toml` in the package for that command to find, so it refuses
+# with "Cannot read file" instead of succeeding over a dead command.
+#
+# Installed by firm.services.base_extension,
 # which renders {{framework_dir}} for the machine, validates, and only then
 # installs. Replaces the 2026-07-03 manifest, which declared a prompt domain
 # keyed on ".firm/" and "member run" carrying three rules written about one
@@ -159,6 +173,10 @@ name = "cadre"
 # every test passed. From an installed wheel framework_dir is site-packages,
 # and site-packages/bin/cadre exists on NEITHER platform - so `base cadre`
 # validated, installed, read back clean, and died on every real install.
-handler = "{{handler}}"
+# The token is the error message. base echoes an unresolved handler path back
+# verbatim ("handler not found: <path>"), so anyone who installs this template
+# without rendering it reads the remedy in base's own output rather than a
+# mystery path. See F6 in firm/services/base_extension.py.
+handler = "{{handler-UNRENDERED-run-cadre-extension-install-instead}}"
 description = "Cadre firm CLI — brief a member, record what it learned, close its work, and run the firm"
 usage = "base cadre <brief|learn|complete|pulse|unit|doctor> [flags]"
