@@ -77,6 +77,12 @@ class Board:
         print(f"  {self.count(PASS)} pass · {self.count(FAIL)} fail · "
               f"{self.count(BLOCKED)} blocked · {self.count(SKIP)} skip "
               f"· {time.time() - self.t0:.0f}s")
+        # USABLE is a claim about what was PROVEN, so a skip has to change the
+        # headline and not merely add a footnote. A run that skipped the whole
+        # base section proved 23 rows and left every base row unmeasured;
+        # printing USABLE there is a verdict that reads green over the thing it
+        # names. NOT ESTABLISHED is not a failure — it says this host could not
+        # check it, which is the truth.
         if self.count(FAIL):
             print()
             print("  NOT USABLE END TO END on this OS. The FAIL rows are "
@@ -85,9 +91,16 @@ class Board:
             print()
             print("  Usable as far as it goes, with known defects blocking the "
                   "BLOCKED rows. Each names its defect.")
+        elif self.count(SKIP):
+            print()
+            print(f"  NOT ESTABLISHED on this OS: {self.count(PASS)} row(s) "
+                  f"passed and {self.count(SKIP)} were SKIPPED, so the skipped "
+                  "ground is unmeasured rather than proven. Each SKIP row says "
+                  "what this host could not check and why.")
         else:
             print()
-            print("  USABLE END TO END on this OS.")
+            print(f"  USABLE END TO END on this OS. All {self.count(PASS)} "
+                  "rows measured, none skipped.")
         return 1 if self.count(FAIL) else 0
 
 
@@ -153,30 +166,89 @@ def _expand_hook_command(command: str, ws: Path) -> list[str]:
     return shlex.split(expanded, posix=not IS_WIN)
 
 
-def operator_digest() -> str:
-    """One hash over every operator file this run could contaminate.
+def binary_kind(path: str | None) -> str:
+    """Classify an executable by its MAGIC BYTES, never by its name.
 
-    Content hash and never mtime: `fs::copy` preserves mtime, so a harness
-    keyed on it reports "unchanged" while writing.
+    The Windows base sits at /mnt/c/Users/<user>/.local/bin/base with no .exe
+    suffix, so a filename test calls it POSIX and is wrong in the one case that
+    matters. Four bytes off the front cannot be fooled that way.
+    """
+    if not path:
+        return "absent"
+    try:
+        with open(path, "rb") as fh:
+            magic = fh.read(4)
+    except OSError:
+        return "unreadable"
+    if magic[:2] == b"MZ":
+        return "pe"
+    if magic == b"\x7fELF":
+        return "elf"
+    if magic[:4] == b"\xcf\xfa\xed\xfe" or magic[:4] == b"\xca\xfe\xba\xbe":
+        return "macho"
+    if magic[:2] == b"#!":
+        return "script"
+    return "unknown"
 
-    It watches the graph AND the workspace registry, and on WSL BOTH platform
-    tiers. It began as a hash of the graph alone and passed while the run was
-    appending junk workspaces to the operator's REGISTRY, which is a different
-    file; and the Linux tier read clean through a run whose writes were landing
-    in the Windows one across /mnt/c. One file is not isolation and one tier is
-    not either.
+
+def operator_files() -> list[Path]:
+    """Every operator file this run could contaminate, on BOTH platform tiers.
+
+    ABSENT IS A PASSING VALUE. That is the whole reason this function exists
+    instead of a hard-coded list. The previous version watched
+    ``/mnt/c/Users/<home.name>/.base-gbl/base.toml``, and there is no username
+    for which that resolves: the Windows account is `Chris` and the WSL account
+    is `chriskahler`, so from WSL it pointed at a directory that does not exist
+    and from Windows a POSIX prefix resolves nowhere either. It therefore hashed
+    the constant string "absent" on every run -- stable before, stable after,
+    and the isolation row passed while the file it was named for filled up with
+    junk. A watched path that cannot resolve is not a watch, it is a no-op that
+    reads green.
+
+    So the cross-tier side is GLOBBED rather than constructed, and the caller
+    refuses when the other platform's tier root exists but the glob finds
+    nothing.
     """
     home = Path.home()
-    watched = [home / ".base" / "graph.nq",
-               home / ".base-gbl" / ".base" / "graph.nq",
-               home / ".base-gbl" / "base.toml",
-               Path("/mnt/c/Users") / home.name / ".base-gbl" / "base.toml"]
+    files = [home / ".base" / "graph.nq",
+             home / ".base-gbl" / "base.toml",
+             home / ".base-gbl" / ".base" / "graph.nq",
+             home / ".base-gbl" / ".base" / "changes.jsonl",
+             home / ".base-gbl" / ".base" / "domains.toml",
+             home / ".claude" / "CLAUDE.md"]
+    # Installed extensions: a hand-install overwrote one of these tonight and
+    # left `base cadre` dead, so the directory is watched as a whole.
+    files.extend(sorted((home / ".base-gbl" / "extensions").glob("*.toml")))
+    files.extend(cross_tier_files())
+    return files
+
+
+def cross_tier_root() -> Path:
+    """Where the OTHER platform's home directories live, seen from this one."""
+    return (Path("//wsl.localhost/Ubuntu/home") if IS_WIN
+            else Path("/mnt/c/Users"))
+
+
+def cross_tier_files() -> list[Path]:
+    return sorted(cross_tier_root().glob("*/.base-gbl/base.toml"))
+
+
+def operator_digest(files: list[Path] | None = None) -> str:
+    """One content hash over ``files``, defaulting to every operator file.
+
+    Content hash and never mtime: `fs::copy` preserves mtime, so a harness
+    keyed on it reports "unchanged" while writing. Keyed by full path, not by
+    name, because several of these are called base.toml.
+
+    ``files`` is injectable so the harness can prove the mechanism detects a
+    change at all, rather than assuming a stable number means nothing moved.
+    """
     parts = []
-    for f in watched:
+    for f in (operator_files() if files is None else files):
         try:
-            parts.append(f.name + ":" + hashlib.md5(f.read_bytes()).hexdigest())
+            parts.append(str(f) + ":" + hashlib.md5(f.read_bytes()).hexdigest())
         except OSError:
-            parts.append(f.name + ":absent")
+            parts.append(str(f) + ":absent")
     return hashlib.md5("|".join(parts).encode()).hexdigest()
 
 
@@ -240,7 +312,19 @@ def main() -> int:
     # `cadre init` calls it needed to watch, so it could only ever see its own
     # section. Widening WHAT it hashed would not have helped: the window itself
     # was in the wrong place, and the contamination happened before it opened.
+    # REFUSE rather than record a placeholder. If the other platform's tier
+    # root is right there and the glob finds nothing under it, the cross-tier
+    # arm is dead and every "unchanged" this run reports is worth nothing.
+    if cross_tier_root().is_dir() and not cross_tier_files():
+        print(f"  REFUSING: {cross_tier_root()} exists but no tier was found "
+              "under it. The cross-platform isolation check would silently "
+              "watch nothing, which is how six junk workspaces reached the "
+              "operator's registry while this harness reported clean.")
+        return 3
+
     run_start_digest = operator_digest()
+    print(f"  watching    {len(operator_files())} operator file(s), "
+          f"{len(cross_tier_files())} on the other tier")
 
     sandbox = Path(tempfile.mkdtemp(prefix="cadre-accept-"))
 
@@ -647,12 +731,37 @@ def main() -> int:
 
         # ---- 11. base as the engine, via the extension -----------------
         rc, out = run(["base", "--version"])
+        base_path = shutil.which("base")
+        base_kind = binary_kind(base_path)
+        native_kind = "pe" if IS_WIN else ("macho" if sys.platform == "darwin" else "elf")
         if rc != 0:
             b.add(SKIP, "base is installed on this host",
                   "base not on PATH; the extension journey cannot be checked "
                   "here. This is a host setup fact, not a Cadre defect.")
+        elif base_kind not in (native_kind, "script", "unknown"):
+            # A base built for the OTHER platform still RUNS here -- WSL interop
+            # executes the Windows binary quite happily -- and that is what makes
+            # it dangerous rather than merely broken. It does not understand a
+            # POSIX BASE_HOME, so every isolated call below would land in the
+            # operator's REAL tier while each assertion passed. Measured tonight:
+            # six junk workspaces in the operator's global registry, written by
+            # runs that looked clean.
+            #
+            # Skipped rather than failed, and rather than aborted, for the same
+            # reason the arm above skips a host with no base: which binary this
+            # shell resolves is a host setup fact, not a Cadre defect. A section
+            # that says THIS HOST CANNOT CHECK THIS is honest. One that runs
+            # anyway writes somebody's knowledge.
+            b.add(SKIP, "the resolved base matches this platform",
+                  f"`base` resolves to {base_path} — a {base_kind} binary under "
+                  f"a {native_kind} interpreter. A cross-platform base ignores "
+                  "BASE_HOME, so this section would write the operator's own "
+                  "tier instead of the sandbox. Put a native base first on PATH "
+                  "to check this section here.")
         else:
             b.add(PASS, "base is installed on this host", out.strip()[:80])
+            b.add(PASS, "the resolved base matches this platform",
+                  f"{base_path} ({base_kind})")
             rc2, out2 = run([str(vpy), "-c",
                              "import firm.services.base_domain as m;"
                              "print(getattr(m,'__file__',''))"], cwd=sandbox)
@@ -897,6 +1006,48 @@ def main() -> int:
             # 11. The guard that outranks every row above it. If this fails,
             #     the run wrote the operator's own knowledge and the PASSes are
             #     worthless.
+            # RED ARM for the row below. A stable hash means nothing unless a
+            # changed file moves it, and the previous digest could not have
+            # been moved by anything -- one of its four paths never resolved
+            # and the rest were not the files being written. Proven on a probe
+            # file rather than assumed, and never on the operator's own.
+            probe = sandbox / "digest-probe.txt"
+            probe.write_text("before", encoding="utf-8")
+            probe_before = operator_digest([probe])
+            probe.write_text("after", encoding="utf-8")
+            b.add(PASS if operator_digest([probe]) != probe_before else FAIL,
+                  "the isolation digest can actually detect a change",
+                  "a changed byte moves the hash"
+                  if operator_digest([probe]) != probe_before else
+                  "the digest is CONSTANT across a changed file, so every "
+                  "'unchanged' this harness reports is meaningless")
+
+            # And the cross-tier arm must be watching a real file, not "absent".
+            # A glob match proves a path EXISTS. It does not prove the file
+            # can be read, and an existing-but-unreadable file makes
+            # operator_digest record "absent" for it -- the same no-op that
+            # reads green, one level down from the one that caused this row.
+            # So read the bytes.
+            cross = cross_tier_files()
+            readable = []
+            for f in cross:
+                try:
+                    f.read_bytes()
+                    readable.append(f)
+                except OSError as exc:
+                    b.add(FAIL, "the other platform's tier is being watched",
+                          f"{f} matched the glob but could not be read ({exc}); "
+                          "the digest would record it as absent and pass "
+                          "forever")
+                    break
+            else:
+                b.add(PASS if readable else SKIP,
+                      "the other platform's tier is being watched",
+                      ", ".join(str(f) for f in readable) + " (read back)"
+                      if readable else
+                      f"no tier under {cross_tier_root()} — nothing to "
+                      "cross-check on this host")
+
             after_hash = operator_digest()
             b.add(PASS if before_hash == after_hash else FAIL,
                   "the operator's own graph and registry were never written to",
