@@ -16,6 +16,13 @@ These went unnoticed because they never fail. They produce confident output
 about the wrong thing, which is the one failure mode no amount of reading the
 result will catch. So the guard is mechanical and runs in CI.
 
+THE SECOND DEFECT (issue #69). The sweep read `scripts/` and stopped, so the
+117 files of `src/` were never checked at all. Nothing about a directory that
+is not swept looks different from a directory that is clean, so the gap was
+invisible in exactly the way the original defect was. `src/` is now swept too.
+`tests/` is not, on purpose, and a test below enforces that -- the fixtures
+there are deliberate and thirteen of them are this module's own red arms.
+
 The rule: resolve roots from the script's own location, and REFUSE with a
 distinct exit code when what you find is not the thing you meant to measure.
 `scripts/check-action-pins.py` is the reference shape.
@@ -29,6 +36,27 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO / "scripts"
+
+# ISSUE #69. The sweep covered `scripts/` and nothing else, so the 117 files of
+# `src/` -- the product itself -- were never looked at. A sweep that does not
+# reach a directory reads exactly like a clean one, which is the failure this
+# guard exists to catch, one level up from where it was catching it.
+#
+# `tests/` is DELIBERATELY NOT SWEPT, and the exclusion is enforced by a test
+# below rather than left to memory. Measured at 5d19e1b45f75 with this module's
+# own `_offending_lines()`: `tests/` is 116 files and 29 offending lines, and
+# THIRTEEN of those 29 are in THIS FILE -- the eight parametrized red-arm lines,
+# three fixture writes, and two docstring continuation lines that the KNOWN
+# LIMIT below does not exempt. Sweep `tests/` and the guard fails on its own
+# arms, and a guard that fails on correct code gets edited until it stops
+# guarding.
+#
+# The issue body says 23 hits in `tests/`. That figure is a NON-RECURSIVE sweep
+# of the 68 top-level files; the recursive sweep this module actually performs
+# finds 116 files and 29 lines. The conclusion is unchanged, and the larger
+# number makes it stronger.
+SWEPT_ROOTS = (SCRIPTS, REPO / "src")
+NOT_SWEPT = REPO / "tests"
 
 # A POSIX or Windows home directory with a NAMED user in it. `~` is fine,
 # `$HOME` is fine; a literal person's home is not, because it resolves on
@@ -82,9 +110,17 @@ def _match_of(line: str):
 COMMENT_PREFIXES = ("#", "//", "*", '"""', "'''")
 
 
-def _script_files() -> list[Path]:
+def _swept_files() -> list[Path]:
+    """Every checkable file under every swept root.
+
+    RECURSIVE -- `rglob`, not `glob` -- and the distinction is not cosmetic. A
+    non-recursive sweep of `tests/` sees 68 files where the recursive one sees
+    116, and that is exactly how the issue body arrived at 23 hits where this
+    module finds 29.
+    """
     return sorted(
-        p for p in SCRIPTS.rglob("*")
+        p for root in SWEPT_ROOTS
+        for p in root.rglob("*")
         if p.is_file()
         and p.suffix in {".sh", ".py"}
         and "__pycache__" not in p.parts)
@@ -105,17 +141,71 @@ def _offending_lines(path: Path) -> list[str]:
     return out
 
 
-def test_there_are_scripts_to_check():
-    """The guard must be looking at something. An empty sweep passes forever."""
-    files = _script_files()
-    assert len(files) >= 5, f"only found {len(files)} scripts under {SCRIPTS}"
+@pytest.mark.parametrize("root", SWEPT_ROOTS, ids=lambda p: p.name)
+def test_every_swept_root_contributes_files(root):
+    """The guard must be looking at something, and at each root SEPARATELY.
+
+    A floor on the combined total is a weaker claim than it looks: `scripts/`
+    alone clears any reasonable floor, so a `src/` that silently stopped being
+    swept -- renamed, moved, excluded by a filter typo -- would hide behind the
+    scripts count while every file in the product went unchecked. Assert the
+    anchor was found before asserting anything about what it anchors.
+    """
+    assert root.is_dir(), f"{root} is not a directory, so it contributes nothing"
+    mine = [p for p in _swept_files() if root in p.parents]
+    assert len(mine) >= 5, f"only {len(mine)} file(s) swept under {root}"
 
 
-@pytest.mark.parametrize("script", _script_files(), ids=lambda p: p.name)
-def test_no_script_hard_codes_a_named_home_directory(script):
-    bad = _offending_lines(script)
+def test_the_sweep_does_not_reach_the_tests_directory():
+    """`tests/` is excluded ON PURPOSE, so the exclusion is asserted, not assumed.
+
+    Thirteen of that directory's offending lines are inside THIS FILE: the red
+    arms below hard-code `/home/someone/...` because that string is the thing
+    they exist to prove the guard catches. Sweep `tests/` and the guard fails on
+    its own arms, and the next person makes it green by weakening it.
+    """
+    reached = [p for p in _swept_files() if NOT_SWEPT in p.parents]
+    assert not reached, (
+        f"{len(reached)} file(s) under {NOT_SWEPT} entered the sweep, starting "
+        f"with {reached[0]}. Those fixtures are deliberate and the guard would "
+        "fail on its own red arms.")
+
+
+def test_a_violation_planted_in_src_is_actually_caught():
+    """THE ARM FOR ISSUE #69, and it was seen RED before the sweep was widened.
+
+    A `tmp_path` fixture cannot make this claim. It proves the PATTERN matches;
+    it says nothing about whether the sweep's ROOTS reach the product. So the
+    violation is planted in the real `src/` tree, the real sweep is asked about
+    it, and the file is removed in a `finally`.
+
+    Measured against the sweep before this change, as its assertion message:
+    `src/ is not in the sweep (15 files swept, none of them the planted one)`.
+    """
+    planted = REPO / "src" / "firm" / "_hardcoded_root_red_arm.py"
+    assert not planted.exists(), (
+        f"{planted} already exists; refusing to overwrite a real file")
+    try:
+        planted.write_text('ROOT = "/home/someone/dev/checkout"\n',
+                           encoding="utf-8")
+        swept = _swept_files()
+        assert planted in swept, (
+            f"src/ is not in the sweep ({len(swept)} files swept, none of them "
+            "the planted one), so every file in the product is unchecked while "
+            "this guard reads green")
+        assert _offending_lines(planted), (
+            "the planted violation is inside the sweep but was not reported")
+    finally:
+        planted.unlink(missing_ok=True)
+    assert not planted.exists(), f"the arm left {planted} behind"
+
+
+@pytest.mark.parametrize("swept", _swept_files(),
+                         ids=lambda p: str(p.relative_to(REPO)))
+def test_no_swept_file_hard_codes_a_named_home_directory(swept):
+    bad = _offending_lines(swept)
     assert not bad, (
-        "this script carries a named home directory in EXECUTABLE code, so it "
+        "this file carries a named home directory in EXECUTABLE code, so it "
         "resolves on one machine and silently measures the wrong thing (or "
         "nothing) everywhere else:\n  " + "\n  ".join(bad) +
         "\nResolve the root from the script's own location the way "
