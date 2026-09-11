@@ -1007,75 +1007,6 @@ def _preset_token_value(root: Path, kind: str, ref: str, key: str) -> str:
     return ""
 
 
-def base_domain_env() -> dict[str, str]:
-    """The env every `base` call gets. Shared with base_domain so a harness
-    pointing base at a scratch tier is not silently re-pointed home.
-    """
-    from firm.services.base_domain import _base_env
-    return _base_env()
-
-
-def _scaffold_base_graph(workspace: Path,
-                         firm_id: str = "",
-                         proposal: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Give the newborn firm its BASE workspace — the firm's own memory.
-
-    Every founded firm gets `.base/` (graph, domains.toml, global registry
-    entry) so Members have an institutional memory from day one; the charter's
-    §6 charges them with using and maintaining it. BASE absent is not an
-    error — licensees may not carry it — and a scaffold failure degrades the
-    firm, it never aborts a founding.
-
-    Returns the three states SEPARATELY, because they fail separately and a
-    single flag cannot tell them apart. A firm can have its tier scaffolded, a
-    correct domain block written, and STILL reach no Member, because base drops
-    a matched domain that carries zero rules. This function used to return True
-    on `base scaffold` exiting 0 and throw away everything ``sync`` told it, so
-    that firm was reported as wired. chief-of-staff-cto shipped that way.
-    """
-    from firm.sysconfig.service import which_base
-    result: dict[str, Any] = {"scaffolded": False, "domain_ok": False,
-                              "rule_seeded": False, "live": False, "detail": ""}
-    base = which_base()
-    if not base:
-        result["detail"] = "base is not installed — the firm is degraded, not broken"
-        return result
-    try:
-        # Explicit env, never ambient — a systemd-spawned hub's PATH is bare.
-        proc = subprocess.run(
-            [base, "scaffold", str(workspace)],
-            capture_output=True, text=True, timeout=120,
-            env=base_domain_env(),
-        )
-        if proc.returncode != 0:
-            result["detail"] = (
-                f"base scaffold exited {proc.returncode}: "
-                f"{(proc.stderr or proc.stdout or '').strip()[:200]}")
-            return result
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        result["detail"] = f"base scaffold did not run: {exc}"
-        return result
-    result["scaffolded"] = True
-
-    from firm.services import base_domain
-    synced = base_domain.sync(workspace, firm_id, proposal=proposal or {})
-    result["domain_ok"] = bool(synced.get("ok"))
-    result["rule_seeded"] = bool(synced.get("rule_seeded"))
-    if not result["domain_ok"]:
-        result["detail"] = (
-            "the firm has a BASE tier but no domain block, so its graph reaches "
-            f"no Member: {synced.get('reason') or 'unknown'}")
-        return result
-    if not result["rule_seeded"]:
-        result["detail"] = (
-            "the firm's domain block was written but carries no rules, so base "
-            "drops it whole and injects nothing — run firm doctor --fix")
-        return result
-    result["live"] = True
-    result["detail"] = "the firm's graph reaches its Members"
-    return result
-
-
 def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
     """Scaffold the workspace and write the approved org.
 
@@ -1114,7 +1045,8 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
     workspace.mkdir(parents=True, exist_ok=True)
     if run_init(workspace, force=False, demo=False, install_hooks_flag=False) != 0:
         return {"ok": False, "error": "could not initialize the firm workspace"}
-    base_wire = _scaffold_base_graph(workspace, fid, proposal)
+    from firm.services import base_domain
+    base_wire = base_domain.wire_workspace(workspace, fid, proposal)
 
     conn = connect(get_db_path(workspace))
     try:
