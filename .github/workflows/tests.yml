@@ -182,3 +182,89 @@ jobs:
           name: dist
           path: dist/
           retention-days: 14
+
+  # Issue #49. scripts/acceptance-e2e.py is the instrument behind this project's
+  # headline claim -- can a real user install Cadre and USE it, on this OS -- and
+  # until this job existed, no workflow ran it. That scoreboard was only ever
+  # true while somebody had recently typed the command by hand.
+  #
+  # What that costs is checked in one file over. scripts/e2e-test.sh:274 asserts
+  # a fixed MCP tool count, and its own comment records that the number had
+  # DRIFTED, because nothing executed the assertion between hand-runs. It is the
+  # same fault family as a hook that is registered and cannot run (#40), or an
+  # install() that reads its own TOML back instead of running the handler (#44):
+  # a check that exists, looks authoritative, and is never executed in the way
+  # that would make it authoritative.
+  #
+  # Standalone beside test, action-pins and clean-install, so it inherits both
+  # triggers at the top of this file with no second trigger list. Measured on
+  # PR #52: the sha carrying the standalone action-pins job produced ten check
+  # runs where every previous sha produced eight, green on the push suite and on
+  # the pull request suite, so a job placed here is visible to the merge gate.
+  acceptance:
+    name: acceptance (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # The harness builds a wheel, makes a virtual environment and drives a whole
+    # firm. Measured 2026-09-10 at 842d8bc on a warm developer box: 22s on Linux,
+    # 62s on Windows. The ceiling is here so that a child wedged behind the
+    # harness's own 900s per-subprocess timeout cannot hold a runner for the
+    # six-hour default.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: "3.12"
+
+      # Nothing installs the project first and nothing puts src on the path. The
+      # harness builds a wheel, installs it into an empty virtual environment and
+      # drives the journey against the INSTALLED package, carrying its own
+      # control that firm resolved from that environment rather than from this
+      # checkout. Installing the project here would defeat the measurement.
+      #
+      # PYTHONIOENCODING stays unset on purpose, exactly as on the Windows suite
+      # leg above: setting it hands every child process a UTF-8 stdout for free
+      # and hides the locale defects this run exists to catch.
+      #
+      # This step decides nothing. It records the exit code and moves on. If both
+      # this step and the grader could turn the job red, the job's colour would
+      # come from whichever fired first, which is the same
+      # which-check-actually-decided-this ambiguity that #49 is about.
+      - name: Run the acceptance harness
+        shell: bash
+        run: |
+          set +e
+          python scripts/acceptance-e2e.py --json acceptance.json
+          rc=$?
+          set -e
+          echo "$rc" > acceptance-rc.txt
+          echo "harness exit code $rc -- the grading step below is the one that decides"
+
+      # The single decision point. A FAIL row reds the build. BLOCKED and SKIP
+      # rows are printed with the reason they carry and do not red it, because a
+      # genuinely-pending row is information, and a SKIP that gets swallowed is
+      # indistinguishable from a row that quietly stopped being emitted.
+      #
+      # Both inputs, never one of them. acceptance-e2e.py writes its JSON from a
+      # finally: block, so a harness that dies half way through still leaves a
+      # summary saying 0 fail. The exit code alone misses a report that stopped
+      # telling the truth; the summary alone misses the crash.
+      #
+      # --min-rows is a FLOOR against a scoreboard that collapses, not an
+      # equality check: rows that disappear rather than fail are invisible to any
+      # FAIL count. Measured 2026-09-10 at 842d8bc, 26 rows on Linux and 26 on
+      # Windows, both on a box that has `base` installed. A runner does not, so
+      # its three base rows collapse to a single SKIP and 24 is the number to
+      # expect here. The floor sits at 20 to leave a platform room to branch
+      # differently -- macOS is the leg nobody on this repo can run by hand --
+      # while still catching a board that halves.
+      - name: Grade the scoreboard
+        shell: bash
+        run: |
+          python scripts/grade-acceptance.py acceptance.json \
+            --harness-rc "$(cat acceptance-rc.txt)" \
+            --min-rows 20
