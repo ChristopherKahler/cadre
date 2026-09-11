@@ -153,6 +153,33 @@ def _expand_hook_command(command: str, ws: Path) -> list[str]:
     return shlex.split(expanded, posix=not IS_WIN)
 
 
+def operator_digest() -> str:
+    """One hash over every operator file this run could contaminate.
+
+    Content hash and never mtime: `fs::copy` preserves mtime, so a harness
+    keyed on it reports "unchanged" while writing.
+
+    It watches the graph AND the workspace registry, and on WSL BOTH platform
+    tiers. It began as a hash of the graph alone and passed while the run was
+    appending junk workspaces to the operator's REGISTRY, which is a different
+    file; and the Linux tier read clean through a run whose writes were landing
+    in the Windows one across /mnt/c. One file is not isolation and one tier is
+    not either.
+    """
+    home = Path.home()
+    watched = [home / ".base" / "graph.nq",
+               home / ".base-gbl" / ".base" / "graph.nq",
+               home / ".base-gbl" / "base.toml",
+               Path("/mnt/c/Users") / home.name / ".base-gbl" / "base.toml"]
+    parts = []
+    for f in watched:
+        try:
+            parts.append(f.name + ":" + hashlib.md5(f.read_bytes()).hexdigest())
+        except OSError:
+            parts.append(f.name + ":absent")
+    return hashlib.md5("|".join(parts).encode()).hexdigest()
+
+
 def venv_bin(venv: Path, name: str) -> Path:
     d = venv / ("Scripts" if IS_WIN else "bin")
     return d / (name + (".exe" if IS_WIN else ""))
@@ -207,7 +234,30 @@ def main() -> int:
               "locale-encoding defects. Clear it for an honest run.")
     print()
 
+    # Opened HERE, before the first command, and closed in the last row.
+    #
+    # It used to be taken inside the base section, hundreds of lines below the
+    # `cadre init` calls it needed to watch, so it could only ever see its own
+    # section. Widening WHAT it hashed would not have helped: the window itself
+    # was in the wrong place, and the contamination happened before it opened.
+    run_start_digest = operator_digest()
+
     sandbox = Path(tempfile.mkdtemp(prefix="cadre-accept-"))
+
+    # `cadre init` scaffolds the firm's BASE tier, so it shells out to whatever
+    # base this host carries. Before that landed these calls were inert; now an
+    # un-isolated one registers this throwaway sandbox in the OPERATOR's global
+    # workspace registry, which `base workspace sync` then copies into the
+    # CLAUDE.md they load in every session. Measured: six `cadre-accept-*`
+    # entries from three runs, on both platforms.
+    #
+    # CADRE_NO_BASE is the load-bearing half. BASE_HOME alone does not hold on
+    # WSL, where `base` resolves to the WINDOWS binary across /mnt/c and a POSIX
+    # BASE_HOME neither redirects its write nor trips base's own isolation
+    # panic. Not finding a binary at all is the only thing that reliably stops a
+    # child process.
+    SANDBOX_ENV = {"CADRE_NO_BASE": "1",
+                   "BASE_HOME": str(sandbox / "base-home")}
     venv = sandbox / "venv"
     ws = sandbox / "demo-firm"
     print(f"  sandbox     {sandbox}")
@@ -325,7 +375,8 @@ def main() -> int:
               "CONTROL: no firm database exists before init",
               f"{db} absent" if not db.exists() else
               "a database already exists, so 'init created it' proves nothing")
-        rc, out = run([str(venv_bin(venv, "cadre")), "init", str(ws), "--demo"])
+        rc, out = run([str(venv_bin(venv, "cadre")), "init", str(ws), "--demo"],
+                      env=SANDBOX_ENV)
         b.add(PASS if rc == 0 and db.is_file() else FAIL,
               "cadre init --demo creates a firm",
               f"rc={rc}\n{out[-700:]}")
@@ -354,7 +405,7 @@ def main() -> int:
 
         # ---- 7. hooks + idempotence ------------------------------------
         rc, out = run([str(venv_bin(venv, "cadre")), "init", str(ws),
-                       "--install-hooks"])
+                       "--install-hooks"], env=SANDBOX_ENV)
         hook = ws / ".claude" / "hooks" / "cadre-session-pulse.py"
         settings = ws / ".claude" / "settings.json"
         wired = settings.is_file() and "cadre-session-pulse" in \
@@ -470,7 +521,8 @@ def main() -> int:
                      "contract reads that silence as 'no firm here'. Record "
                      "the interpreter path at install time and have the hook "
                      "read it."))
-        rc, out = run([str(venv_bin(venv, "cadre")), "init", str(ws), "--demo"])
+        rc, out = run([str(venv_bin(venv, "cadre")), "init", str(ws), "--demo"],
+                      env=SANDBOX_ENV)
         again_ok = rc == 0 and ("skip" in out.lower() or "already" in out.lower())
         b.add(PASS if again_ok else FAIL,
               "re-running init is idempotent, not destructive",
@@ -640,18 +692,7 @@ def main() -> int:
                 e["CADRE_MEMBER_ID"] = mid or ""
                 return e
 
-            # The operator's own graph, hashed BEFORE anything runs. Content
-            # hash and never mtime: fs::copy preserves mtime, so a harness
-            # keyed on it reports "unchanged" while writing.
-            real_graph = Path.home() / ".base" / "graph.nq"
-
-            def graph_digest() -> str:
-                try:
-                    return hashlib.md5(real_graph.read_bytes()).hexdigest()
-                except OSError:
-                    return "absent"
-
-            before_hash = graph_digest()
+            before_hash = run_start_digest
 
             # 1. Isolation. Nothing else in this section may run until base is
             #    demonstrably reading the FIRM's tier, because if it is reading
@@ -856,9 +897,9 @@ def main() -> int:
             # 11. The guard that outranks every row above it. If this fails,
             #     the run wrote the operator's own knowledge and the PASSes are
             #     worthless.
-            after_hash = graph_digest()
+            after_hash = operator_digest()
             b.add(PASS if before_hash == after_hash else FAIL,
-                  "the operator's own graph was never written to",
+                  "the operator's own graph and registry were never written to",
                   f"content hash {before_hash[:12]} unchanged"
                   if before_hash == after_hash else
                   f"OPERATOR GRAPH CHANGED {before_hash[:12]} -> {after_hash[:12]}"
