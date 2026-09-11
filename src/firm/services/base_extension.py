@@ -1,10 +1,36 @@
 """Install Cadre's base extension manifest, and refuse to install a bad one.
 
-The manifest source of truth ships in the repo at ``firm/base_ext/cadre.toml``
-so ``pip install cadre`` carries it. Only one value in it is machine-specific —
-``framework_dir`` — so installing is: render that one placeholder, write the
-result to a temporary file, ask base to validate it, and only then ask base to
-install it. Validate before install, every time, with no path that skips it.
+The manifest source of truth ships in the repo at
+``firm/base_ext/cadre.toml.template`` so ``pip install cadre`` carries it. Two
+values in it are machine-specific — ``framework_dir`` and the command handler —
+so installing is: render those placeholders, write the result to a temporary
+file, ask base to validate it, and only then ask base to install it. Validate
+before install, every time, with no path that skips it.
+
+THE FILENAME IS PART OF THE PRODUCT, and this is F6. There are two ways to
+install this manifest and they used to disagree. The product's own route
+renders the placeholders; the obvious hand route —
+
+    base extension install <site-packages>/firm/base_ext/cadre.toml
+
+— did not, and measured on base 0.15.0 it returned rc 0, printed "Installed
+cadre v0.2.0", listed the extension, and left ``base cadre`` exiting 127. An
+install that reports success over a dead command is the same fault as F1.
+
+Neither ``base extension validate`` nor ``base extension install`` looks at
+whether a handler path exists (measured: rc 0 on a handler pointing at
+nothing), so base cannot be made to refuse on the manifest's CONTENT. It does
+refuse on a missing FILE: rc 1, "Cannot install: invalid manifest: Cannot read
+file". So the shipped file is named ``cadre.toml.template`` and no
+``cadre.toml`` exists in the package at all — the hand route now refuses at
+install time, which is the whole of the F6 verdict.
+
+The second half is for whoever types the ``.template`` path anyway. base echoes
+the unresolved handler verbatim in its error, so the placeholder is written to
+BE the instruction:
+
+    base: command 'cadre' (ext:cadre) — handler not found:
+      .../{{handler-UNRENDERED-run-cadre-extension-install-instead}}
 
 Two things this module refuses to do, both because they have already gone wrong
 once on this machine:
@@ -30,12 +56,25 @@ from pathlib import Path
 from typing import Any
 
 PLACEHOLDER = "{{framework_dir}}"
-HANDLER_PLACEHOLDER = "{{handler}}"
+# Not "{{handler}}". base prints the unresolved path back at the user when a
+# command's handler is missing, so this token is written to read as the fix —
+# see the module docstring. The name is load-bearing, not decoration.
+HANDLER_PLACEHOLDER = "{{handler-UNRENDERED-run-cadre-extension-install-instead}}"
+
+
+MANIFEST_TEMPLATE_NAME = "cadre.toml.template"
 
 
 def manifest_source() -> Path:
-    """The shipped manifest, inside the installed package."""
-    return Path(__file__).resolve().parent.parent / "base_ext" / "cadre.toml"
+    """The shipped manifest TEMPLATE, inside the installed package.
+
+    ``.template``, never ``cadre.toml``. The suffix is what makes the hand
+    install refuse instead of succeeding over a dead command — F6, explained in
+    full in the module docstring. ``_installed_path`` and the staged temp file
+    keep the plain ``cadre.toml`` name, because that is what base writes and
+    what it derives the extension name from.
+    """
+    return Path(__file__).resolve().parent.parent / "base_ext" / MANIFEST_TEMPLATE_NAME
 
 
 def framework_root() -> Path:
