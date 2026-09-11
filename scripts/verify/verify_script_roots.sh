@@ -106,9 +106,17 @@ echo "=== THE CONTROL NO LONGER PASSES ON A FILE THAT DOES NOT EXIST ==="
 # strings compare equal, and the run reports UNTOUCHED. MISSING must not be
 # confusable with a hash, and an absent file that gets CREATED must read as a
 # change.
-python3 - <<'PYEOF'
+# $REPO, passed as argv. The heredoc is quoted so the shell does not expand
+# inside it, which is why this reads the path from sys.argv rather than
+# interpolating. It used to open the worktree by absolute path -- the prover for
+# issue #64 containing issue #64. It passed only because that worktree happened
+# to sit on this branch, so the file was byte-identical: a coincidence of machine
+# state, not a property of the code. From any other checkout it either dies on a
+# missing path or, worse, proves ANOTHER branch's copy while reporting PASS.
+python3 - "$REPO" <<'PYEOF'
 import subprocess
-script = "/home/chriskahler/dev/cadre-wt-extension/scripts/verify/verify_ext_install.sh"
+import sys
+script = f"{sys.argv[1]}/scripts/verify/verify_ext_install.sh"
 body = open(script, encoding="utf-8").read()
 start = body.index("state() {")
 end = body.index("}", start) + 1

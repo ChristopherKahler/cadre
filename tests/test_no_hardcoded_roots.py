@@ -30,15 +30,55 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO / "scripts"
 
-# A POSIX or Windows home directory with a NAMED user in it. `~` is fine, `$HOME`
-# is fine; a literal person's home is not, because it resolves on exactly one
-# machine and silently resolves to nothing everywhere else.
+# A POSIX or Windows home directory with a NAMED user in it. `~` is fine,
+# `$HOME` is fine; a literal person's home is not, because it resolves on
+# exactly one machine and silently resolves to nothing everywhere else.
+#
+# NO LOOKBEHIND. This began as `(?<!["'])(...)`, which refused to match a path
+# immediately preceded by a quote -- and a quoted path is the NORMAL way to
+# write one in Python. So the guard saw the shell half of issue #64
+# (`cd /home/...`) and was blind to the Python half
+# (`sys.path.insert(0, "/home/...")`), which is the half it was written for.
+# NO PURPOSE FOR THAT EXCLUSION COULD BE ESTABLISHED; it is deleted rather than
+# rationalised. A guard carrying an unexplained exclusion is worse than one that
+# over-matches, because the exclusion is invisible until it costs something.
+#
+# Measured by sandpiper over this tree: 0 executable-line hits with the
+# lookbehind, 3 without it. It was the only reason the tree passed its own
+# guard. Exemptions are named and reasoned in ALLOWED below, never a mechanism
+# that silently covers every quoted string.
+#
+# Named groups so a test can assert WHICH branch matched. An arm that fires
+# through a different alternation than the one it names proves the wrong thing
+# while reading green -- the Windows arm did exactly that, matching the POSIX
+# `/Users/` branch re-anchored after `C:`. Windows first: longest alternative
+# wins, so `C:\Users\x` cannot be claimed by the bare `/Users/` branch.
 HOME_PATH = re.compile(
-    r"""(?<!["'])(/home/[A-Za-z0-9._-]+|/Users/[A-Za-z0-9._-]+"""
-    r"""|[A-Za-z]:[\\/]Users[\\/][A-Za-z0-9._-]+)""")
+    r"""(?P<windows>[A-Za-z]:[\\/]+Users[\\/]+[A-Za-z0-9._-]+)"""
+    r"""|(?P<posix_home>/home/[A-Za-z0-9._-]+)"""
+    r"""|(?P<posix_users>/Users/[A-Za-z0-9._-]+)""")
+
+
+def _match_of(line: str):
+    """(branch name, matched text) for a line, or None. Used by the red arms."""
+    m = HOME_PATH.search(line)
+    if not m:
+        return None
+    return m.lastgroup, m.group(0)
 
 # Lines that MENTION a path while explaining why it was removed are the point of
 # the fix, not a violation of it. Only comments get this pass; code never does.
+#
+# KNOWN LIMIT, stated rather than discovered later: this recognises prose by the
+# line's PREFIX, so it exempts a comment line and the opening line of a
+# docstring, but NOT a continuation line inside one. A docstring that quotes a
+# real path on its second line is reported as a violation.
+#
+# That is the conservative direction -- it over-reports prose rather than
+# under-reporting code -- and it was left this way deliberately: the alternative
+# is parsing each file to find docstring ranges, and a guard that is harder to
+# read than the rule it enforces is the next thing to go quietly wrong. Reword
+# the docstring; a literal machine path is not needed to explain the shape.
 COMMENT_PREFIXES = ("#", "//", "*", '"""', "'''")
 
 
@@ -83,17 +123,56 @@ def test_no_script_hard_codes_a_named_home_directory(script):
         "code when it is not what you meant to measure.")
 
 
+# Every arm names the branch it must fire through, and asserts it. The Windows
+# arm used to be written with forward slashes and passed by matching the POSIX
+# `/Users/` branch re-anchored after `C:` -- green, while proving nothing about
+# the alternative it tests. "Something matched" is not the claim; "THIS matched"
+# is.
+@pytest.mark.parametrize("branch,line", [
+    ("posix_home", 'cd /home/someone/dev/checkout || exit 1'),
+    ("posix_home", 'sys.path.insert(0, "/home/someone/dev/checkout/src")'),
+    ("posix_home", "ROOT = '/home/someone/dev/x'"),
+    ("posix_home", 'cd "/home/someone/dev/x" || exit 1'),
+    ("posix_home", 'BASE = "/home/someone/.local/bin/base"'),
+    ("posix_users", 'ROOT = "/Users/someone/dev/checkout"'),
+    ("windows", r'ROOT = "C:\Users\someone\dev\checkout"'),
+    ("windows", 'ROOT = "C:/Users/someone/dev/checkout"'),
+])
+def test_each_branch_of_the_guard_fires_through_ITSELF(branch, line):
+    """RED ARM. A sweep that matches nothing reads exactly like a clean sweep.
+
+    Four of these eight lines were invisible before the lookbehind came out, and
+    they are not edge cases: two of them are the literal lines from issue #64.
+    """
+    got = _match_of(line)
+    assert got is not None, f"{line!r} is invisible to the guard"
+    matched_branch, text = got
+    assert matched_branch == branch, (
+        f"{line!r} matched the {matched_branch!r} branch, not {branch!r}. The "
+        f"arm would pass while proving nothing about the branch it names "
+        f"(matched {text!r}).")
+
+
 def test_the_guard_can_actually_fail(tmp_path):
-    """RED ARM. A sweep that matches nothing reads exactly like a clean sweep."""
+    """The same claim through the real file sweep, not just the regex."""
     bad = tmp_path / "bad.sh"
     bad.write_text('cd /home/someone/dev/checkout || exit 1\n', encoding="utf-8")
     assert _offending_lines(bad), (
         "the pattern does not match a plain hard-coded home path, so every "
         "script above passed this guard without being checked")
 
+    quoted = tmp_path / "bad_quoted.py"
+    quoted.write_text(
+        'sys.path.insert(0, "/home/someone/dev/checkout/src")\n', encoding="utf-8")
+    assert _offending_lines(quoted), (
+        "a QUOTED path is invisible to the sweep. That is the normal way to "
+        "write one in Python and it is the exact half of issue #64 this exists "
+        "to catch")
+
     win = tmp_path / "bad2.py"
-    win.write_text('ROOT = "C:/Users/someone/dev/checkout"\n', encoding="utf-8")
-    assert _offending_lines(win), "the pattern misses Windows home paths"
+    win.write_text('ROOT = "C:' + chr(92) + 'Users' + chr(92) + 'someone' + chr(92)
+                   + 'dev"\n', encoding="utf-8")
+    assert _offending_lines(win), "Windows paths with backslashes are missed"
 
 
 def test_the_guard_does_not_fire_on_a_comment_explaining_the_fix(tmp_path):

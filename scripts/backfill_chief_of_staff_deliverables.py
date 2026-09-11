@@ -42,7 +42,36 @@ from firm.core.db import connect, get_db_path
 from firm.core import repo
 from firm.services.document import register_deliverable
 
-WORKSPACE = Path("/home/chriskahler/firms/chief-of-staff")
+def _workspace() -> Path:
+    """The firm this one-off acts on, named by the caller.
+
+    This used to be one operator's absolute home path, baked in. That resolves
+    on exactly one machine and, on any other, resolves to nothing -- so the
+    script would walk an empty glob and report finding no deliverables rather
+    than saying it could not find the firm. Same shape as issue #64: a confident
+    result about something other than what it names.
+
+    REFUSING is the point. A one-off that writes to a firm database must not
+    proceed against a path it was not given.
+
+        python scripts/<this>.py /path/to/firm
+        CADRE_FIRM_WORKSPACE=/path/to/firm python scripts/<this>.py
+    """
+    import os
+
+    raw = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("CADRE_FIRM_WORKSPACE", "")
+    if not raw:
+        sys.exit("REFUSE: name the firm workspace as the first argument, or set "
+                 "CADRE_FIRM_WORKSPACE. This script used to hard-code one "
+                 "operator's path and silently did nothing everywhere else.")
+    ws = Path(raw).expanduser().resolve()
+    if not (ws / ".firm").is_dir():
+        sys.exit(f"REFUSE: {ws} has no .firm directory, so it is not a firm "
+                 f"workspace and nothing here would act on the right database.")
+    return ws
+
+
+WORKSPACE = _workspace()
 FIRM_ID = "chief-of-staff"
 DELIVERABLES = "deliverables"
 
