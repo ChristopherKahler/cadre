@@ -27,6 +27,8 @@ import pytest
 
 from firm.services import base_extension
 
+ROOT_FOR_SOURCE = Path(__file__).resolve().parent.parent.parent
+
 
 def _parsed() -> dict:
     raw = base_extension.manifest_source().read_text(encoding="utf-8")
@@ -261,9 +263,21 @@ def test_the_wheel_is_told_to_carry_the_manifest():
         pytest.skip(f"no pyproject at {pyproject} — not a source checkout")
     parsed = tomllib.load(pyproject.open("rb"))
     package_data = parsed["tool"]["setuptools"]["package-data"]["firm"]
-    assert "base_ext/*.toml" in package_data, (
-        f"package-data does not carry base_ext, so a wheel drops the manifest: "
-        f"{package_data}")
+
+    # GLOBBED, not string-matched. `"base_ext/*.toml" in package_data` was true
+    # and green while the shipped file was renamed to cadre.toml.template, which
+    # that pattern does not match — the entry was present and carried nothing.
+    # A packaging guard has to ask whether the real files are covered.
+    import fnmatch
+    base_ext = base_extension.manifest_source().parent
+    on_disk = sorted(p.name for p in base_ext.iterdir() if p.is_file())
+    assert on_disk, f"{base_ext} is empty, so there is no manifest to ship"
+    patterns = [p.split("/", 1)[1] for p in package_data if p.startswith("base_ext/")]
+    unmatched = [n for n in on_disk
+                 if not any(fnmatch.fnmatch(n, pat) for pat in patterns)]
+    assert not unmatched, (
+        f"package-data patterns {patterns} match none of {unmatched}, so a wheel "
+        f"drops them: {package_data}")
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +456,101 @@ def test_the_shipped_manifest_is_inside_the_package():
     assert src.exists(), f"{src} is missing, so pip install cadre ships no manifest"
     assert src.parent.name == "base_ext"
     assert src.parent.parent.name == "firm"
+
+
+# ---------------------------------------------------------------------------
+# F6 — the two install routes must agree, and the filename is what makes them
+# ---------------------------------------------------------------------------
+
+def test_the_package_ships_no_installable_cadre_toml():
+    """THE F6 FIX, and the only part of it base can be made to enforce.
+
+    Measured on base 0.15.0 under an isolated BASE_HOME: `base extension
+    validate` and `base extension install` BOTH return 0 for a manifest whose
+    handler points at a path that exists nowhere. base never looks. So there is
+    no content this file could carry that would make the obvious hand install
+
+        base extension install <site-packages>/firm/base_ext/cadre.toml
+
+    refuse — it would report success, list the extension, and leave `base
+    cadre` exiting 127.
+
+    base DOES refuse a file it cannot read: rc 1, "Cannot install: invalid
+    manifest: Cannot read file". The absence of this filename is therefore the
+    refusal, which is why it is asserted rather than left to chance.
+    """
+    shipped = base_extension.manifest_source().parent / "cadre.toml"
+    assert not shipped.exists(), (
+        f"{shipped} is back. `base extension install` will accept it, report "
+        f"success, and leave `base cadre` dead — that is F6 reopened. The "
+        f"shipped file must be {base_extension.MANIFEST_TEMPLATE_NAME}.")
+
+
+def test_the_shipped_manifest_is_named_as_a_template():
+    src = base_extension.manifest_source()
+    assert src.name == base_extension.MANIFEST_TEMPLATE_NAME
+    assert src.name.endswith(".template"), (
+        "the suffix is the refusal; without it the hand install succeeds over a "
+        "dead command")
+
+
+def test_the_handler_placeholder_tells_the_reader_what_to_do():
+    """base prints an unresolved handler path back verbatim, so make it useful.
+
+    Measured: `base <ext>` exits 127 with
+
+        base: command 'x' (ext:x) — handler not found: <the literal token>
+
+    A token reading `{{handler}}` makes that message a puzzle. This one makes it
+    an instruction. The test asserts the words that carry the remedy, not the
+    exact string, so the token can be reworded but not hollowed out.
+    """
+    token = base_extension.HANDLER_PLACEHOLDER
+    assert token.startswith("{{") and token.endswith("}}")
+    lowered = token.lower()
+    assert "unrendered" in lowered, (
+        f"{token!r} does not say the manifest was never rendered")
+    assert "cadre" in lowered and "extension" in lowered and "install" in lowered, (
+        f"{token!r} does not name `cadre extension install`, so base's error "
+        f"message names the symptom and not the fix")
+    assert token in base_extension.manifest_source().read_text(encoding="utf-8"), (
+        "the shipped template does not carry the token the code renders")
+
+
+def test_the_rename_did_not_follow_the_manifest_into_base():
+    """base derives the extension name from the file it writes, not from ours.
+
+    The staged temp file and the installed path both stay `cadre.toml`. If the
+    `.template` suffix leaked into either, base would install an extension named
+    after a template and `base cadre` would not resolve.
+    """
+    assert base_extension._installed_path().name == "cadre.toml"
+    src = (ROOT_FOR_SOURCE / "src" / "firm" / "services" / "base_extension.py"
+           ).read_text(encoding="utf-8")
+    assert 'staged = Path(tmpdir) / "cadre.toml"' in src, (
+        "the staged manifest is no longer named cadre.toml")
+
+
+def test_the_packaging_glob_check_can_actually_fail():
+    """RED ARM for test_the_wheel_is_told_to_carry_the_manifest.
+
+    That test globs the package-data patterns against the real directory. This
+    one runs the same logic over a package-data list with the template pattern
+    removed and requires it to find the file uncovered. Without this, a globbing
+    check that silently matched everything would read exactly like a passing one
+    — which is the whole family of fault F6 belongs to.
+    """
+    import fnmatch
+    base_ext = base_extension.manifest_source().parent
+    on_disk = sorted(p.name for p in base_ext.iterdir() if p.is_file())
+    crippled = ["migrations/*.sql", "base_ext/*.toml"]      # the pre-F6 line
+    patterns = [p.split("/", 1)[1] for p in crippled if p.startswith("base_ext/")]
+    unmatched = [n for n in on_disk
+                 if not any(fnmatch.fnmatch(n, pat) for pat in patterns)]
+    assert base_extension.MANIFEST_TEMPLATE_NAME in unmatched, (
+        "the old `base_ext/*.toml` pattern appears to match "
+        f"{base_extension.MANIFEST_TEMPLATE_NAME}, so the packaging guard above "
+        "cannot fail and proves nothing")
 
 
 # ---------------------------------------------------------------------------
