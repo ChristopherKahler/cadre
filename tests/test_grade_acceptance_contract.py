@@ -183,6 +183,8 @@ def test_counts_that_disagree_with_the_rows_are_still_red():
     (_rows(skips=5), 2, 0),
     (_rows(skips=5), 0, 1),
     (_rows(fails=1), 1, 1),
+    (_rows(blocked=2), 4, 0),
+    (_rows(blocked=2), 0, 1),
 ])
 def test_the_grader_exits_the_way_ci_will_read_it(tmp_path, rows, rc, want):
     """Through argv and the process exit code, which is what the job reads."""
@@ -192,3 +194,52 @@ def test_the_grader_exits_the_way_ci_will_read_it(tmp_path, rows, rc, want):
                         "--harness-rc", str(rc), "--min-rows", "1"],
                        capture_output=True, text=True, timeout=120)
     assert p.returncode == want, (p.stdout + p.stderr)[:1000]
+# ---------------------------------------------------------------------------
+# rc 4 -- a known defect BLOCKED rows
+#
+# THE DEFECT THIS CLOSES. report() returned 0 for a run whose only non-PASS
+# rows were BLOCKED, and the grader had no rc-0-with-BLOCKED check, so the
+# contradiction read GREEN in both instruments. That is the one mismatch
+# neither half could catch, which is exactly why it survived.
+# ---------------------------------------------------------------------------
+
+def test_a_blocked_run_at_rc_4_is_GREEN():
+    """CI stays green on BLOCKED. The code exists to stop the lie, not to red.
+
+    A BLOCKED row names an open defect that is already tracked. Failing the
+    build here punishes the harness for being honest and teaches the next
+    person to delete the row instead of fixing the defect.
+    """
+    assert _problems(_rows(blocked=2), 4) == []
+
+
+def test_a_blocked_run_at_rc_4_says_so_in_the_notices():
+    _, notices = g.grade(_summary(_rows(blocked=2)), 4, 1)
+    assert any("exited 4" in n for n in notices)
+    assert any("2 row(s) were BLOCKED" in n for n in notices)
+
+
+def test_rc_0_while_a_blocked_row_exists_is_red():
+    """THE ARM FOR THE WHOLE CHANGE, and it was red before report() learned 4."""
+    problems = _problems(_rows(blocked=2), 0)
+    assert any("exited 0 while recording 2 BLOCKED" in p for p in problems)
+
+
+def test_rc_4_with_no_blocked_row_is_a_contradiction():
+    """The other direction, or the test above is satisfied by a rule that
+    never fires."""
+    problems = _problems(_rows(), 4)
+    assert any("describing different runs" in p for p in problems)
+
+
+def test_rc_4_is_not_reported_as_an_impossible_exit_code():
+    """Before the grader learned 4 it fell through to the catch-all and called
+    a legitimate exit a harness that was killed. A red build with a false
+    explanation sends the reader hunting a crash that never happened."""
+    problems = _problems(_rows(blocked=2), 4)
+    assert not any("never returns" in p for p in problems)
+
+
+def test_rc_4_is_never_described_as_a_harness_that_did_not_finish():
+    problems, notices = g.grade(_summary(_rows(blocked=2)), 4, 1)
+    assert not any("did not finish" in line for line in problems + notices)

@@ -202,12 +202,31 @@ class Board:
         #   1  at least one FAIL -- something that should work here does not
         #   2  no FAIL, but rows were SKIPPED, so this host did not establish
         #      the skipped ground. Not a failure; not a pass either.
+        #   4  no FAIL, but a known defect BLOCKED rows. Not a failure either,
+        #      and emphatically not a clean run.
         #
-        # 2 is distinct from 1 on purpose: scripts/grade-acceptance.py needs to
-        # tell "the harness died" from "the harness declined to measure", and a
-        # single non-zero cannot carry that.
+        # 2 and 4 are distinct from 1 on purpose: scripts/grade-acceptance.py
+        # needs to tell "the harness died" from "the harness declined to
+        # measure" from "a known defect stopped it", and a single non-zero
+        # cannot carry that. 3 is the isolation refusal, taken already.
+        #
+        # 4 EXISTS BECAUSE THIS RETURNED 0. The headline four lines above has
+        # always ranked BLOCKED between FAIL and SKIP and printed "Usable as far
+        # as it goes, with known defects blocking the BLOCKED rows" -- while the
+        # exit code said 0, which this same comment block defines as "every row
+        # measured, nothing skipped". That is not what happened, and the exit
+        # code is the half CI and grade-acceptance.py actually read. The
+        # ordering below follows the headline's own precedence rather than
+        # inventing a second one.
+        #
+        # This is NOT a red build. grade-acceptance.py stays green on 4, for
+        # the reason it is green on a BLOCKED row today: a BLOCKED row names an
+        # open defect that is already tracked, and failing the build here
+        # teaches the next person to delete the row instead of the defect.
         if self.count(FAIL):
             return 1
+        if self.count(BLOCKED):
+            return 4
         if self.count(SKIP):
             return 2
         return 0

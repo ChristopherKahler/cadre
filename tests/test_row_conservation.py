@@ -154,17 +154,28 @@ def test_assert_section_ignores_rows_recorded_before_the_section():
     ([("PASS",), ("SKIP",)], 2),
     ([("PASS",), ("FAIL",)], 1),
     ([("PASS",), ("FAIL",), ("SKIP",)], 1),
-    ([("PASS",), ("BLOCKED",)], 0),
+    # THIS CASE USED TO EXPECT 0, and that expectation was the defect rather
+    # than an oversight: it PINNED report() returning "every row measured,
+    # nothing skipped" for a run a known defect had stopped. Anyone fixing
+    # report() would have watched this line go red and could reasonably have
+    # concluded the fix was wrong. Changed on purpose, with the reason here.
+    ([("PASS",), ("BLOCKED",)], 4),
+    ([("PASS",), ("BLOCKED",), ("SKIP",)], 4),
+    ([("PASS",), ("FAIL",), ("BLOCKED",)], 1),
 ])
-def test_report_returns_the_three_way_answer(statuses, want, capsys):
-    """A run that skipped rows must not exit 0.
+def test_report_returns_the_four_way_answer(statuses, want, capsys):
+    """A run that skipped rows, or was blocked, must not exit 0.
 
     The headline already refused to say USABLE over a skipped section. The exit
     code is the half CI and the next verifier actually read, and it said 0 --
     so run B exited clean having measured eighteen fewer rows than run A.
 
-    FAIL outranks SKIP: 1 means something that should work here does not, and
-    that is the more urgent of the two.
+    The precedence is FAIL, then BLOCKED, then SKIP, and it is the headline's
+    own order rather than a second one invented here. FAIL outranks both: 1
+    means something that should work on this host does not, and that is the
+    most urgent of the three. BLOCKED outranks SKIP because a known defect
+    stopping a row is a fact about the product, while a skip is a fact about
+    the host.
     """
     b = h.Board()
     for (status,) in statuses:
@@ -253,3 +264,36 @@ def test_the_unrunnable_message_is_not_platform_specific():
     assert 'return 127, f"not found: {exc}"' not in src, (
         "the second, differently-worded arm is back; the same host condition "
         "will again read one way on Linux and another on Windows")
+# ---------------------------------------------------------------------------
+# the exit code carries BLOCKED too
+# ---------------------------------------------------------------------------
+
+def test_report_returns_4_when_a_row_is_blocked():
+    """It returned 0, which report()'s own comment defines as "every row
+    measured, nothing skipped". A run stopped by a known defect is not that."""
+    b = h.Board()
+    b.add(h.PASS, "one")
+    b.add(h.BLOCKED, "two", "a known defect")
+    assert b.report() == 4
+
+
+def test_a_fail_still_outranks_a_blocked():
+    b = h.Board()
+    b.add(h.FAIL, "one")
+    b.add(h.BLOCKED, "two", "a known defect")
+    assert b.report() == 1
+
+
+def test_a_blocked_outranks_a_skip():
+    """The headline has always ranked BLOCKED above SKIP. The exit code now
+    agrees with it instead of inventing a second precedence."""
+    b = h.Board()
+    b.add(h.BLOCKED, "one", "a known defect")
+    b.add(h.SKIP, "two", "not on this host")
+    assert b.report() == 4
+
+
+def test_a_clean_board_still_returns_0():
+    b = h.Board()
+    b.add(h.PASS, "one")
+    assert b.report() == 0
