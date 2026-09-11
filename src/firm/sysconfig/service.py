@@ -77,6 +77,29 @@ def which_base() -> str | None:
 # Describe
 # ---------------------------------------------------------------------------
 
+def base_absence_reason() -> str:
+    """Why ``base`` is unavailable, in words an operator can act on.
+
+    Two very different situations produce the same ``None`` from
+    ``which_base()``: the machine has no base, or it has one and
+    ``CADRE_NO_BASE`` says leave it alone. Reporting both as "not installed"
+    makes a firm's own degraded message a lie about the host, and an operator
+    who set the variable last month has no way to tell which one they are
+    reading. That is a fresh silent-success shape, which is the fault family
+    this codebase keeps deleting.
+
+    BOTH sentences contain the words "not installed" on purpose. Callers branch
+    on that substring to mean "skip, do not fail" -- `firm extension install`
+    does it to keep rc 0 on a host without base -- and a suppressed base is
+    equally a skip rather than a failure. Changing the wording without keeping
+    that substring turns a skip into an error exit.
+    """
+    if os.environ.get(DISABLE_ENV, "").strip():
+        return (f"base is suppressed by {DISABLE_ENV}, so it is treated as not "
+                f"installed — unset {DISABLE_ENV} to let Cadre use base again")
+    return "base is not installed"
+
+
 def describe(workspace: Path) -> dict[str, Any]:
     adapter = detect_platform(workspace)
     surfaces = []
@@ -97,6 +120,7 @@ def describe(workspace: Path) -> dict[str, Any]:
         "crypto_available": vault_mod.crypto_available(),
         "base": {
             "present": which_base() is not None,
+            "absence_reason": "" if which_base() else base_absence_reason(),
             "ext_capable": _base_ext_capable(),
             "workspace_graph": (workspace / ".base").is_dir(),
         },

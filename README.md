@@ -316,3 +316,17 @@ MIT.
 ## Acknowledgments
 
 The "AI-operated company" mental model was formatively explored by [Paperclip](https://github.com/), a 53k-star project validating the concept for multi-operator orgs on 24/7 cron heartbeats. Cadre takes that frame, inverts the scheduling model, rescopes for solo operators, and keeps its own vocabulary — **Firm / Member / Unit / Gate / Contract runtime** — because the products are different and the language should be too. See [CADRE-VS-PAPERCLIP.md](CADRE-VS-PAPERCLIP.md) for the full architectural and positioning breakdown.
+
+## Environment
+
+`CADRE_NO_BASE` — set it to any non-empty value and Cadre behaves as though
+[base](https://docs.basemode.ai) is not installed: no graph writes, no
+extension install, no domain wiring. A firm without base is degraded, never
+broken, so everything else keeps working and every command that would have used
+base says plainly that the variable is why it did not.
+
+Set it when base is on the machine and you want Cadre to leave it alone — a
+shared build agent, a test run that must not touch your own tier, or simply
+trying Cadre out without it adopting your graph. An empty or blank value counts
+as unset, so a `.env` that carries `CADRE_NO_BASE=` does not silently switch
+base off.

@@ -185,8 +185,15 @@ def is_current(workspace: Path, firm_id: str, conn: Any) -> tuple[bool, str]:
     # 0.15.0. This check is the reason the finding stops being invisible.
     count = rule_count(Path(workspace), firm_id)
     if count is None:
-        return True, ("domain block matches the roster; rule count unread "
-                      "(base absent or its output unrecognised)")
+        # `rule_count` returns None for three different situations and this is
+        # the line an operator reads in `doctor`. "base absent" covering all
+        # three means someone who set CADRE_NO_BASE goes looking for a broken
+        # install, and someone whose base prints something we cannot parse
+        # never learns that base is fine. Ask which one it is.
+        from firm.sysconfig.service import base_absence_reason, which_base
+        why = (base_absence_reason() if which_base() is None
+               else "base is installed but its rule listing was not recognised")
+        return True, f"domain block matches the roster; rule count unread — {why}"
     if count == 0:
         return False, ("the firm's domain carries no rules, so base drops the "
                        "whole block — the block is perfect and injects nothing")
@@ -339,10 +346,13 @@ def scaffold_tier(workspace: Path) -> dict[str, Any]:
     import subprocess
     from firm.sysconfig.service import which_base
 
+    from firm.sysconfig.service import base_absence_reason
+
     result: dict[str, Any] = {"scaffolded": False, "detail": ""}
     base = which_base()
     if not base:
-        result["detail"] = "base is not installed — the firm is degraded, not broken"
+        result["detail"] = (
+            f"{base_absence_reason()} — the firm is degraded, not broken")
         return result
     try:
         # Explicit env, never ambient — a systemd-spawned hub's PATH is bare.
