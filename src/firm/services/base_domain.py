@@ -21,12 +21,32 @@ from __future__ import annotations
 
 import os
 import re
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 BEGIN = "# >>> cadre:base-domain (generated — edit prompt_keywords freely, the"
 BEGIN2 = "# rest is rebuilt from the roster on every sync) >>>"
 END = "# <<< cadre:base-domain <<<"
+
+
+class Verdict(Enum):
+    """What ``assess`` was able to establish about the firm's domain block.
+
+    Three outcomes, because there are three situations and a bool holds two.
+    ``is_current`` returned ``tuple[bool, str]``, so "the rule count could not
+    be read at all" had nowhere to go and was answered True -- unreadable
+    presented as healthy, and ``firm doctor`` printed a tick over it (#62).
+
+    The distinction that matters is not stale-vs-current, it is
+    ESTABLISHED-vs-NOT. CURRENT and STALE are both findings of fact.
+    UNDETERMINABLE is the absence of one, and it is a first-class value here so
+    that a caller can act on it without substring-matching a message.
+    """
+
+    CURRENT = "current"
+    STALE = "stale"
+    UNDETERMINABLE = "undeterminable"
 
 
 def _roster_words(conn: Any, firm_id: str) -> list[str]:
@@ -150,34 +170,59 @@ def sync(workspace: Path, firm_id: str, *, conn: Any = None,
         return {"ok": False, "reason": str(exc), "changed": False}
 
 
-def is_current(workspace: Path, firm_id: str, conn: Any) -> tuple[bool, str]:
-    """(current, detail) — does the on-disk block match the live roster.
+def assess(workspace: Path, firm_id: str, conn: Any) -> tuple[Verdict, str]:
+    """(verdict, detail) -- what could be established about the domain block.
 
-    Used by ``firm doctor``; the finding is mechanical, so ``--fix`` repairs it.
+    Replaces ``is_current``, and the rename is load-bearing rather than
+    cosmetic. Widening the return type while keeping the name would have left
+    every call site that did not move both COMPILING and PASSING, because every
+    ``Enum`` member is truthy: ``doctor`` would have put the verdict straight in
+    as a check's pass/fail and printed a tick, which is the defect surviving its
+    own fix. With the old name gone, a caller that did not move is an
+    AttributeError, and an AttributeError cannot be mistaken for health.
+
+    ``firm doctor`` routes on the verdict. STALE is mechanical, so ``--fix``
+    repairs it. UNDETERMINABLE is NOT: rebuilding the block from the roster
+    cannot make an unreadable base readable, and a tool that claims that repair
+    is committing the same fault this function was fixed for.
     """
     path = Path(workspace) / ".base" / "domains.toml"
     if not path.exists():
-        return True, "no BASE tier on this firm — nothing to wire"
+        # Determinable, and the answer is that there is nothing to be stale
+        # against: with no BASE tier there is no block that can drift from the
+        # roster. Stays CURRENT, which is exactly the behaviour before #62 --
+        # that issue widened the outcome TYPE and deliberately did not
+        # re-decide this branch.
+        return Verdict.CURRENT, "no BASE tier on this firm — nothing to wire"
     try:
         body = path.read_text(encoding="utf-8")
     except OSError as exc:
-        return False, str(exc)
+        # The mirror image of #62, in the same function. This answered False,
+        # i.e. "the block is stale", which nobody established -- a file you
+        # could not read cannot be called out of date. It errs loud instead of
+        # quiet so it was the less dangerous of the two, but it is the same
+        # mistake, and routing it mechanical had ``--fix`` rebuilding a file it
+        # had just failed to read.
+        return Verdict.UNDETERMINABLE, str(exc)
     if BEGIN not in body:
-        return False, ("the firm's graph reaches no Member — domains.toml has "
-                       "no domain block, so base injects nothing firm-specific")
+        return Verdict.STALE, (
+            "the firm's graph reaches no Member — domains.toml has no domain "
+            "block, so base injects nothing firm-specific")
     # Two [[domain]] entries sharing a name make base match NEITHER, so the
     # marker block being perfect is not sufficient: count every block carrying
     # this firm's name. Measured on chief-of-staff 2026-09-09.
     named = body.count('name = "' + firm_id + '"')
     if named > 1:
-        return False, (f"{named} domain blocks are named {firm_id!r} — base "
-                       "matches none of them while the name is duplicated")
+        return Verdict.STALE, (
+            f"{named} domain blocks are named {firm_id!r} — base matches none "
+            "of them while the name is duplicated")
     want = render(Path(workspace), firm_id, _roster_words(conn, firm_id))
     head, _, rest = body.partition(BEGIN)
     have = BEGIN + rest.partition(END)[0] + END
     if have.strip() != want.strip():
-        return False, ("the domain block is stale against the roster — "
-                       "Members are missing from its triggers")
+        return Verdict.STALE, (
+            "the domain block is stale against the roster — Members are "
+            "missing from its triggers")
     # A perfect block is not a live wire. base drops a MATCHED domain that
     # carries zero rules, silently and totally, so a firm can pass every
     # structural check above and still reach no Member. Measured on
@@ -185,19 +230,26 @@ def is_current(workspace: Path, firm_id: str, conn: Any) -> tuple[bool, str]:
     # 0.15.0. This check is the reason the finding stops being invisible.
     count = rule_count(Path(workspace), firm_id)
     if count is None:
-        # `rule_count` returns None for three different situations and this is
-        # the line an operator reads in `doctor`. "base absent" covering all
-        # three means someone who set CADRE_NO_BASE goes looking for a broken
-        # install, and someone whose base prints something we cannot parse
-        # never learns that base is fine. Ask which one it is.
+        # THE #62 BRANCH. ``rule_count`` answers None for three separate
+        # causes -- base unresolvable, ``base rule list`` exiting non-zero, and
+        # output its count regex does not recognise -- and all three mean the
+        # same thing here: nothing was established. This returned True.
+        #
+        # The reason string below still splits suppressed from missing from
+        # unparseable, because an operator who set CADRE_NO_BASE must not be
+        # sent debugging an install that is fine. The reason was never the
+        # defect; the outcome type was.
         from firm.sysconfig.service import base_absence_reason, which_base
         why = (base_absence_reason() if which_base() is None
                else "base is installed but its rule listing was not recognised")
-        return True, f"domain block matches the roster; rule count unread — {why}"
+        return Verdict.UNDETERMINABLE, (
+            f"domain block matches the roster; rule count unread — {why}")
     if count == 0:
-        return False, ("the firm's domain carries no rules, so base drops the "
-                       "whole block — the block is perfect and injects nothing")
-    return True, f"domain block matches the roster, {count} rule(s) live"
+        return Verdict.STALE, (
+            "the firm's domain carries no rules, so base drops the whole "
+            "block — the block is perfect and injects nothing")
+    return (Verdict.CURRENT,
+            f"domain block matches the roster, {count} rule(s) live")
 
 
 _SEED_RULE = ("Members of this firm read the firm's own graph before acting and "

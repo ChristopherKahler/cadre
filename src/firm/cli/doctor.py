@@ -33,13 +33,29 @@ from firm.core.migrate import (
     discover_migrations,
 )
 
-ROUTES = ("mechanical", "train", "board")
+# "operator" is the route for a finding the firm cannot fix, because
+# the firm is not what is broken: the machine could not establish an
+# answer. `--fix` selects on "mechanical", so this route is what keeps
+# it from claiming a repair it cannot make.
+ROUTES = ("mechanical", "train", "board", "operator")
 
 
 def _check(key: str, label: str, ok: bool, route: str, detail: str = "",
-           fix: str | None = None) -> dict[str, Any]:
+           fix: str | None = None, state: str = "") -> dict[str, Any]:
+    """One card. ``state`` is the pass/fail with its third value restored.
+
+    ``ok`` is a bool and a bool has two values, so a check that could not
+    ESTABLISH its answer still had to pick one of them -- and picking True
+    is how `base-domain` printed a tick over a rule count it had failed to
+    read (#62). ``state`` carries "undeterminable" as a first-class value,
+    so a caller can tell the three apart without substring-matching
+    ``detail``. It defaults to the ok/finding pair so every card carries a
+    meaningful one, and it is additive -- `firm doctor --json` gains a key
+    in its checks array and loses none.
+    """
     return {"key": key, "label": label, "ok": ok, "route": route,
-            "detail": detail, "fix": fix}
+            "detail": detail, "fix": fix,
+            "state": state or ("ok" if ok else "finding")}
 
 
 def _parse_json_col(row: dict[str, Any] | None, col: str) -> dict[str, Any]:
@@ -181,10 +197,18 @@ def diagnose(workspace: Path, firm_id: str, *,
         # only by an explicit `base recall`, which is the tool call the
         # mechanism exists to remove. Derived from the roster, so --fix it.
         from firm.services import base_domain as _base_domain
-        _bd_ok, _bd_detail = _base_domain.is_current(workspace, firm_id, conn)
+        _bd = _base_domain.assess(workspace, firm_id, conn)
+        _bd_verdict, _bd_detail = _bd
+        # UNDETERMINABLE is deliberately NOT mechanical. `fix()` selects on
+        # route == "mechanical", and rebuilding the block from the roster
+        # cannot make an unreadable base readable, so routing it away is
+        # what stops `--fix` reporting a repair it did not make.
         checks.append(_check(
             "base-domain", "The firm's graph reaches its Members",
-            _bd_ok, "mechanical", _bd_detail,
+            _bd_verdict is _base_domain.Verdict.CURRENT,
+            "mechanical" if _bd_verdict is _base_domain.Verdict.STALE
+            else "operator",
+            _bd_detail, state=_bd_verdict.value,
             fix="rebuild .base/domains.toml from the roster"))
 
         # 6. goal — board
@@ -385,7 +409,11 @@ def run_doctor(workspace: Path, *, firm_id: str | None = None,
     healthy = all(c["ok"] for c in checks)
     print(f"firm doctor — {firm_id}")
     for c in checks:
-        mark = "✓" if c["ok"] else "✗"
+        # .get, never [], because cards are built by hand elsewhere --
+        # tests/cli/test_base_wire_reporting.py passes a five-key dict
+        # straight into fix() -- and a new key must not KeyError on one.
+        undeterminable = c.get("state") == "undeterminable"
+        mark = "?" if undeterminable else ("✓" if c["ok"] else "✗")
         route = "" if c["ok"] else f"  [{c['route']}]"
         print(f"  {mark} {c['label']}{route} — {c['detail']}")
     for d in did:
@@ -398,4 +426,8 @@ def run_doctor(workspace: Path, *, firm_id: str | None = None,
             print("  → judgment findings: re-run Train from the dashboard")
         if any(not c["ok"] and c["route"] == "board" for c in checks):
             print("  → authority findings: the Board decides these")
+        if any(not c["ok"] and c["route"] == "operator" for c in checks):
+            print("  → undeterminable: this machine could not read the "
+                  "answer, so the firm is not what needs repairing — "
+                  "install base, or unset CADRE_NO_BASE, then re-run")
     return 0
