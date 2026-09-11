@@ -61,6 +61,41 @@ TIMEOUT = 900
 
 PASS, FAIL, BLOCKED, SKIP = "PASS", "FAIL", "BLOCKED", "SKIP"
 
+# The base section's rows, by name, in the order the executed path emits them.
+#
+# WHY A LIST AND NOT A COUNT. This section has one arm that runs eighteen rows
+# and several that run none, and the skipped arms used to record NOTHING -- the
+# rows did not fail, they ceased to exist. A scoreboard that shrinks reports a
+# smaller run as a cleaner one, and a row that is absent says nothing at all,
+# while a SKIP row says "this host could not check it, and here is why". The two
+# are not close.
+#
+# A count would rot the first time someone added a row. Naming them means the
+# skipped path can emit exactly the rows the executed path would have, and
+# `Board.assert_section` can then require the executed path to emit exactly this
+# list -- so the list and the code cannot drift apart without a FAIL row saying
+# which name moved.
+BASE_SECTION_ROWS = [
+    "base is installed on this host",
+    "the resolved base matches this platform",
+    "the base bridge module loads from the installed package",
+    "base reads the firm's own workspace tier, not the operator's",
+    "the Cadre manifest installs into base and is read back",
+    "the extension's command RUNS through base, not merely installs",
+    "the firm's base domain carries a live rule",
+    "the demo firm has a Unit to close",
+    "two Members of one firm get different briefings",
+    "a Board session is briefed as nobody (scope control)",
+    "the write-back gate lets a Member with nothing owed finish",
+    "closing a Unit with nothing recorded blocks the session",
+    "the other Member is not blocked by that debt (gate control)",
+    "the firm's graph starts empty (evidence control)",
+    "a Member's lesson reaches the graph and is readable back out",
+    "the isolation digest can actually detect a change",
+    "the other platform's tier is being watched",
+    "the operator's own graph and registry were never written to",
+]
+
 
 class Board:
     def __init__(self) -> None:
@@ -78,6 +113,47 @@ class Board:
 
     def count(self, status: str) -> int:
         return sum(1 for r in self.rows if r["status"] == status)
+
+    def skip_rest(self, names: list[str], detail: str) -> None:
+        """Record SKIP for every declared row this section has not reached.
+
+        Called on each path that stops the section early, with the reason that
+        path stopped. The rows are emitted in declared order, so a skipped run
+        and a full run put the same names on the scoreboard in the same places
+        and the two are directly comparable.
+        """
+        done = {r["name"] for r in self.rows}
+        for name in names:
+            if name not in done:
+                self.add(SKIP, name, detail)
+
+    def assert_section(self, start: int, names: list[str], section: str) -> None:
+        """Require the rows emitted since `start` to be exactly `names`.
+
+        This is the half that keeps the declared list honest. Without it the
+        list is a comment: delete a `b.add` and the executed path quietly emits
+        seventeen rows where it declares eighteen, which is the same
+        disappearance the list exists to prevent, one level up. Both directions
+        are covered -- a name in the code but not the list is drift too.
+        """
+        emitted = [r["name"] for r in self.rows[start:]]
+        if emitted == names:
+            return
+        missing = [n for n in names if n not in emitted]
+        extra = [n for n in emitted if n not in names]
+        dupes = sorted({n for n in emitted if emitted.count(n) > 1})
+        why = []
+        if missing:
+            why.append("DECLARED BUT NEVER EMITTED: " + "; ".join(missing))
+        if extra:
+            why.append("EMITTED BUT NOT DECLARED: " + "; ".join(extra))
+        if dupes:
+            why.append("EMITTED TWICE: " + "; ".join(dupes))
+        if not why:
+            why.append(f"same {len(names)} names in a different order; the list "
+                       "is the spec, so reorder the list or the code")
+        self.add(FAIL, f"the {section} section recorded every row it declares",
+                 f"declared {len(names)}, emitted {len(emitted)}\n" + "\n".join(why))
 
     def report(self) -> int:
         print()
@@ -114,7 +190,24 @@ class Board:
             print()
             print(f"  USABLE END TO END on this OS. All {self.count(PASS)} "
                   "rows measured, none skipped.")
-        return 1 if self.count(FAIL) else 0
+        # THE EXIT CODE IS THE HALF CI AND THE NEXT VERIFIER ACTUALLY READ.
+        # The headline above already refuses to say USABLE over a skipped
+        # section; returning 0 there said it again in the one place a script
+        # can see. A run that proved nothing is not a clean run.
+        #
+        #   0  every row measured, nothing skipped
+        #   1  at least one FAIL -- something that should work here does not
+        #   2  no FAIL, but rows were SKIPPED, so this host did not establish
+        #      the skipped ground. Not a failure; not a pass either.
+        #
+        # 2 is distinct from 1 on purpose: scripts/grade-acceptance.py needs to
+        # tell "the harness died" from "the harness declined to measure", and a
+        # single non-zero cannot carry that.
+        if self.count(FAIL):
+            return 1
+        if self.count(SKIP):
+            return 2
+        return 0
 
 
 def run(argv: list[str], *, cwd: Path | None = None, env: dict | None = None,
@@ -140,6 +233,23 @@ def run(argv: list[str], *, cwd: Path | None = None, env: dict | None = None,
         )
     except FileNotFoundError as exc:
         return 127, f"not found: {exc}"
+    except OSError as exc:
+        # EVERY way the OS can refuse to start the process, not just "absent".
+        # This caught FileNotFoundError alone, so a `base` that exists and
+        # cannot be executed -- wrong permission bits, a directory of that
+        # name, a dangling interpreter on the shebang line -- raised
+        # PermissionError straight out of run() and killed the harness with a
+        # traceback. Measured 2026-09-11: PermissionError [Errno 13] at the
+        # base section's very first call took the run down, so the eighteen
+        # rows of that section were not SKIPPED, they were never reached, and
+        # the summary said 23 rows with completed=false.
+        #
+        # That is the row-conservation defect arriving through a door the
+        # declared row list cannot close, because no row runs at all. 127 is
+        # the right answer -- "this host cannot run that command" -- and it is
+        # exactly what the base section's first arm already knows how to
+        # handle: it SKIPs all eighteen rows and says why.
+        return 127, f"could not be run: {exc}"
     except subprocess.TimeoutExpired:
         return 124, f"timed out after {timeout}s"
     out = (p.stdout or b"").decode("utf-8", errors="replace")
@@ -749,6 +859,38 @@ def main() -> int:
                   "Nothing below this line can run until it is fixed.")
 
         # ---- 11. base as the engine, via the extension -----------------
+        #
+        # EVERY PATH OUT OF THIS SECTION RECORDS ALL EIGHTEEN OF ITS ROWS.
+        # It used to record one SKIP and drop the other seventeen on a host
+        # whose `base` is built for another platform, so the same harness wrote
+        # a full scoreboard on one machine and a much shorter one on another --
+        # and nothing in the shorter one said the difference was unmeasured
+        # rows rather than a smaller job. A row that is absent says nothing at
+        # all; a SKIP row says what this host could not check and why.
+        #
+        # BASE_SECTION_ROWS is the declared list, `skip_rest` fills whatever an
+        # early exit did not reach, and `end_base_section` asserts the two
+        # against each other on the way out.
+        base_section_start = len(b.rows)
+        base_home: Path | None = None
+
+        def end_base_section() -> int:
+            """The ONE way out of this section.
+
+            A bare `return b.report()` did none of these four things: it left
+            the remaining rows unrecorded, skipped the conservation check, left
+            the sandbox BASE_HOME on disk, and -- since the `completed` flag
+            landed -- returned without setting `finished`, so the summary said
+            the harness had died when it had declined to measure on purpose.
+            """
+            nonlocal finished
+            b.assert_section(base_section_start, BASE_SECTION_ROWS,
+                             "base as the engine")
+            if base_home is not None:
+                shutil.rmtree(base_home, ignore_errors=True)
+            finished = True
+            return b.report()
+
         rc, out = run(["base", "--version"])
         base_path = shutil.which("base")
         base_kind = binary_kind(base_path)
@@ -757,6 +899,10 @@ def main() -> int:
             b.add(SKIP, "base is installed on this host",
                   "base not on PATH; the extension journey cannot be checked "
                   "here. This is a host setup fact, not a Cadre defect.")
+            b.skip_rest(BASE_SECTION_ROWS,
+                        "not measured: base is not on PATH on this host, so "
+                        "nothing in the base-engine section could run. "
+                        "Unmeasured, not passed.")
         elif base_kind not in (native_kind, "script", "unknown"):
             # A base built for the OTHER platform still RUNS here -- WSL interop
             # executes the Windows binary quite happily -- and that is what makes
@@ -771,12 +917,21 @@ def main() -> int:
             # shell resolves is a host setup fact, not a Cadre defect. A section
             # that says THIS HOST CANNOT CHECK THIS is honest. One that runs
             # anyway writes somebody's knowledge.
+            # `base` IS installed here -- that row is a PASS. Only the
+            # platform match fails, and the difference between "this host has
+            # no base" and "this host has the wrong one" is worth keeping.
+            b.add(PASS, "base is installed on this host", out.strip()[:80])
             b.add(SKIP, "the resolved base matches this platform",
                   f"`base` resolves to {base_path} — a {base_kind} binary under "
                   f"a {native_kind} interpreter. A cross-platform base ignores "
                   "BASE_HOME, so this section would write the operator's own "
                   "tier instead of the sandbox. Put a native base first on PATH "
                   "to check this section here.")
+            b.skip_rest(BASE_SECTION_ROWS,
+                        "not measured: the resolved `base` is built for another "
+                        "platform, so running this section would write the "
+                        "operator's own tier instead of the sandbox. "
+                        "Unmeasured, not passed.")
         else:
             b.add(PASS, "base is installed on this host", out.strip()[:80])
             b.add(PASS, "the resolved base matches this platform",
@@ -835,7 +990,11 @@ def main() -> int:
                    "the global tier only; the workspace tier follows cwd. "
                    "Refusing to run the rest of this section."))
             if not reads_firm:
-                return b.report()
+                b.skip_rest(BASE_SECTION_ROWS,
+                            "not measured: base was reading a tier other than "
+                            "the firm's, so every row below would have been "
+                            "writing the operator's own knowledge.")
+                return end_base_section()
 
             # 2. The extension, through the shipped verb rather than a
             #    python -c. `read_back` is the claim that matters: install
@@ -913,9 +1072,20 @@ def main() -> int:
             except sqlite3.Error:
                 pass
             if len(members) < 2:
-                b.add(SKIP, "two Members get different briefings",
+                # Named exactly as BASE_SECTION_ROWS names it. This row used to
+                # read "two Members get different briefings" on this path and
+                # "two Members of one firm get different briefings" on the
+                # other, so one assertion wore two names depending on the host
+                # and no reader could line the two scoreboards up.
+                b.add(SKIP, "the demo firm has a Unit to close",
+                      f"the demo firm has {len(members)} member(s); the unit "
+                      "rows need two and are not asserting anything")
+                b.add(SKIP, "two Members of one firm get different briefings",
                       f"the demo firm has {len(members)} member(s); this row "
                       "needs two and is not asserting anything")
+                b.skip_rest(BASE_SECTION_ROWS,
+                            f"not measured: the demo firm has {len(members)} "
+                            "member(s) and these rows need two.")
             else:
                 one, two = members[0], members[1]
                 # The demo firm's unit ids are not this harness's to assume.
@@ -941,7 +1111,12 @@ def main() -> int:
                     b.add(FAIL, "the demo firm has a Unit to close",
                           "no unit id came back, so the gate rows below would "
                           "have asserted nothing")
-                    return b.report()
+                    b.skip_rest(BASE_SECTION_ROWS,
+                                "not measured: there was no Unit to close, so "
+                                "the gate and write-back rows had nothing to "
+                                "act on.")
+                    return end_base_section()
+                b.add(PASS, "the demo firm has a Unit to close", unit_one)
                 _, b1 = run([str(venv_bin(venv, "cadre")), "brief"],
                             cwd=ws, env=bmember(one))
                 _, b2 = run([str(venv_bin(venv, "cadre")), "brief"],
@@ -1074,11 +1249,7 @@ def main() -> int:
                   if before_hash == after_hash else
                   f"OPERATOR GRAPH CHANGED {before_hash[:12]} -> {after_hash[:12]}"
                   " — this run contaminated real knowledge")
-            shutil.rmtree(base_home, ignore_errors=True)
-
-        rc = b.report()
-        finished = True
-        return rc
+        return end_base_section()
     finally:
         if a.json_out:
             Path(a.json_out).write_text(json.dumps({
