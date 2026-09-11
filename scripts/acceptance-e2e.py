@@ -93,7 +93,10 @@ BASE_SECTION_ROWS = [
     "a Member's lesson reaches the graph and is readable back out",
     "the isolation digest can actually detect a change",
     "the other platform's tier is being watched",
+    "the append scan can actually detect a planted write",
+    "the append scan ignores another session's writes",
     "the operator's own graph and registry were never written to",
+    "no appended write carries this run's fingerprint",
 ]
 
 
@@ -344,13 +347,20 @@ def operator_files() -> list[Path]:
 
     So the cross-tier side is GLOBBED rather than constructed, and the caller
     refuses when the other platform's tier root exists but the glob finds
-    nothing.
+    nothing. THAT REFUSAL STAYS. Narrowing this set must not quietly drop the
+    anti-no-op check that earned it.
+
+    WHAT LEFT THIS SET, AND WHY IT IS NOT A LOSS OF COVERAGE. Three paths moved
+    to `churning_files()` below: both graphs and the change feed. They are
+    written by ANY live base session, not only by this run, so an exact hash
+    over them cannot tell "this run contaminated the operator's knowledge" from
+    "another session was working while the harness ran". They are still watched,
+    by `fingerprint_hits()`, on a question a foreign session cannot answer for
+    them. Everything remaining here is written by nothing but a leak, so an
+    exact hash is still the right instrument for it and its row is unchanged.
     """
     home = Path.home()
-    files = [home / ".base" / "graph.nq",
-             home / ".base-gbl" / "base.toml",
-             home / ".base-gbl" / ".base" / "graph.nq",
-             home / ".base-gbl" / ".base" / "changes.jsonl",
+    files = [home / ".base-gbl" / "base.toml",
              home / ".base-gbl" / ".base" / "domains.toml",
              home / ".claude" / "CLAUDE.md"]
     # Installed extensions: a hand-install overwrote one of these tonight and
@@ -387,6 +397,109 @@ def operator_digest(files: list[Path] | None = None) -> str:
         except OSError:
             parts.append(str(f) + ":absent")
     return hashlib.md5("|".join(parts).encode()).hexdigest()
+
+
+def churning_files() -> list[Path]:
+    """The operator files that ANY live base session writes, not just this run.
+
+    MEASURED at 5d19e1b45f75 on a Windows host with 11 live relay sessions and
+    this harness NOT running. Every path in `operator_files()` and every path
+    here was polled every 5 seconds for 240 seconds, counting CONTENT changes
+    (md5) separately from mtime touches:
+
+        ~/.base-gbl/.base/graph.nq        13 content changes   +27,742 bytes
+        ~/.base-gbl/.base/changes.jsonl   13 content changes   +23,564 bytes
+        ~/.base/graph.nq                   9 content changes    +2,318 bytes
+        the other nine watched paths       0 content changes        +0 bytes
+
+    It is EVENT-driven, not clock-driven: a 10-second window inside one idle
+    turn moved nothing at all, on either platform tier. Over the minutes a real
+    run takes, with sessions live, it is hit every time.
+
+    The failure that caused was a FALSE RED on the row that outranks every
+    other row in this harness -- and a guard that fails on a correct run gets
+    edited to match the code, which is how it stops guarding.
+    """
+    home = Path.home()
+    return [home / ".base" / "graph.nq",
+            home / ".base-gbl" / ".base" / "graph.nq",
+            home / ".base-gbl" / ".base" / "changes.jsonl"]
+
+
+def churn_baseline(files: list[Path] | None = None) -> dict[str, tuple]:
+    """(size, md5 of the first 4 KiB) per churning file, taken before the run.
+
+    The head hash is what tells an APPEND from a REWRITE. base rotates these
+    files -- `graph.nq.bak-compact-*` sits beside them on disk -- and after a
+    compaction a byte offset into the new file points at unrelated content.
+
+    THE LENGTH OF THE HEAD IS STORED, not assumed to be 4096, and that is not
+    a detail. A file SHORTER than 4 KiB has a head that is the whole file, so
+    after an append `data[:4096]` is a different span of bytes than the one
+    that was hashed and the comparison fails on every small file -- which sends
+    every one of them down the compaction fallback, where only the run-unique
+    marker is matched. The scan would have been quietly narrower than it says
+    it is. Found by the test for it, not by reading.
+
+    `files` is injectable so the arms can prove the mechanism on a copy inside
+    the sandbox rather than on the operator's own file.
+    """
+    out: dict[str, tuple] = {}
+    for f in (churning_files() if files is None else files):
+        try:
+            with open(f, "rb") as fh:
+                head = fh.read(4096)
+            out[str(f)] = (f.stat().st_size, len(head),
+                           hashlib.md5(head).hexdigest())
+        except OSError:
+            out[str(f)] = (0, 0, "absent")
+    return out
+
+
+def fingerprint_hits(baseline: dict[str, tuple], run_marker: str,
+                     shared_markers: tuple[str, ...],
+                     files: list[Path] | None = None) -> list[str]:
+    """Anything in the churning files that carries THIS run's fingerprint.
+
+    Only the bytes appended past the recorded offset are read. Another session's
+    triples cannot contain this run's `mkdtemp` sandbox path, so foreign churn
+    is ignored BY CONSTRUCTION rather than by a threshold that would need
+    tuning.
+
+    THE FALLBACK, AND THE TRAP INSIDE IT. If the file shrank or its first 4 KiB
+    changed, base compacted or rotated it and the offset means nothing, so the
+    whole file is scanned instead. IN THAT BRANCH ONLY `run_marker` IS MATCHED,
+    never `shared_markers`. The sandbox BASE_HOME is a FIXED path -- it is
+    `<drive>/cadre-accept-base` on Windows and `<tmp>/cadre-accept-base`
+    elsewhere, identical on every run on this host. Inside the append window
+    those bytes are this run's by construction, so it is safe there. Over the
+    whole file it is not: a PREVIOUS run's leftover `cadre-accept-base` triples
+    would be read as today's contamination and the row would go red for
+    something that happened last week. Only the mkdtemp sandbox path is unique
+    to a run.
+    """
+    hits = []
+    for f in (churning_files() if files is None else files):
+        size0, head_len, head0 = baseline.get(str(f), (0, 0, "absent"))
+        try:
+            data = f.read_bytes()
+        except OSError:
+            continue
+        if head0 == "absent":
+            # It did not exist when the run started, so everything in it is
+            # this run's era and every marker is safe.
+            window, markers, how = data, (run_marker,) + shared_markers, "created"
+        elif len(data) >= size0 and hashlib.md5(
+                data[:head_len]).hexdigest() == head0:
+            window, markers, how = (data[size0:],
+                                    (run_marker,) + shared_markers, "appended")
+        else:
+            window, markers, how = data, (run_marker,), "whole file, compacted"
+        blob = window.decode("utf-8", errors="replace")
+        for m in markers:
+            if m and m in blob:
+                hits.append(f"{f} [{how}] carries {m}")
+    return hits
 
 
 def venv_bin(venv: Path, name: str) -> Path:
@@ -460,7 +573,11 @@ def main() -> int:
         return 3
 
     run_start_digest = operator_digest()
-    print(f"  watching    {len(operator_files())} operator file(s), "
+    # Taken in the same breath as the digest and for the same reason: a window
+    # that opens after the contamination measures nothing.
+    run_start_churn = churn_baseline()
+    print(f"  watching    {len(operator_files())} operator file(s) by exact "
+          f"hash, {len(churning_files())} by append scan, "
           f"{len(cross_tier_files())} on the other tier")
 
     sandbox = Path(tempfile.mkdtemp(prefix="cadre-accept-"))
@@ -990,6 +1107,7 @@ def main() -> int:
                 return e
 
             before_hash = run_start_digest
+            churn_before = run_start_churn
 
             # 1. Isolation. Nothing else in this section may run until base is
             #    demonstrably reading the FIRM's tier, because if it is reading
@@ -1256,13 +1374,84 @@ def main() -> int:
                       f"no tier under {cross_tier_root()} — nothing to "
                       "cross-check on this host")
 
+            # ARM 2 for the append-scan row below, on a COPY inside the
+            # sandbox and never on the operator's own file. A scan that has
+            # only ever printed CLEAN has not been shown to detect anything.
+            probe_nq = sandbox / "churn-probe.nq"
+            probe_nq.write_text("<a> <b> <c> .\n", encoding="utf-8")
+            probe_base = churn_baseline([probe_nq])
+            with open(probe_nq, "a", encoding="utf-8") as fh:
+                fh.write(f"<contaminated> <by> <{sandbox}> .\n")
+            planted = fingerprint_hits(probe_base, str(sandbox), (), [probe_nq])
+            b.add(PASS if planted else FAIL,
+                  "the append scan can actually detect a planted write",
+                  "; ".join(planted) if planted else
+                  "a line carrying this run's own sandbox path was appended to "
+                  "a probe file and the scan did not see it, so every clean "
+                  "verdict it reports below is meaningless")
+
+            # ARM 3, THE CONTROL, and it is the one that proves this fix fixed
+            # the thing it was written for. The defect being closed is that a
+            # FOREIGN session's writes were read as this run's contamination.
+            # So append bytes shaped like another session's triples, carrying
+            # no marker of this run, and require the scan to stay clean. Arm 2
+            # alone would pass just as happily if the scan reported EVERY
+            # append, which is the old behaviour wearing a new name.
+            ctl_nq = sandbox / "churn-control.nq"
+            ctl_nq.write_text("<a> <b> <c> .\n", encoding="utf-8")
+            ctl_base = churn_baseline([ctl_nq])
+            with open(ctl_nq, "a", encoding="utf-8") as fh:
+                fh.write(("<http://ops-sys.local/ontology#note/another-session> "
+                          "<http://ops-sys.local/ontology#body> "
+                          "\"a different session was working while this ran\" "
+                          "<http://ops-sys.local/ontology#graph/ws/base-gbl> .\n")
+                         * 25)
+            foreign = fingerprint_hits(ctl_base, str(sandbox), (), [ctl_nq])
+            b.add(PASS if not foreign else FAIL,
+                  "the append scan ignores another session's writes",
+                  f"{ctl_nq.stat().st_size} bytes of another session's triples "
+                  "appended, scan stayed clean" if not foreign else
+                  "the scan read a FOREIGN append as this run's contamination, "
+                  "which is the exact defect this row exists to close: "
+                  + "; ".join(foreign))
+
+            # ROW A -- the exact-hash paths. Wording UNCHANGED, because it
+            # still means precisely what it always meant, about precisely the
+            # files it can still say it about.
             after_hash = operator_digest()
             b.add(PASS if before_hash == after_hash else FAIL,
                   "the operator's own graph and registry were never written to",
-                  f"content hash {before_hash[:12]} unchanged"
+                  f"content hash {before_hash[:12]} unchanged across "
+                  f"{len(operator_files())} exact-hash path(s)"
                   if before_hash == after_hash else
                   f"OPERATOR GRAPH CHANGED {before_hash[:12]} -> {after_hash[:12]}"
                   " — this run contaminated real knowledge")
+
+            # ROW B -- the churning paths, and a SEPARATE row because it is a
+            # DIFFERENT CLAIM. Row A says those files were not written to at
+            # all. This one cannot say that and does not pretend to: it says
+            # nothing appended carries this run's fingerprint. A single row
+            # carrying both would report more than it verified, which is the
+            # defect issue #62 names, one directory away.
+            present = [f for f in churning_files() if f.exists()]
+            if not present:
+                # ABSENT IS A PASSING VALUE, so it is not allowed to read as a
+                # pass. No base knowledge store here means there was nothing
+                # this run could have contaminated -- true, and unmeasured.
+                b.add(SKIP, "no appended write carries this run's fingerprint",
+                      f"none of the {len(churning_files())} base knowledge "
+                      "files exist on this host, so there was nothing for this "
+                      "run to contaminate. Unmeasured, not passed.")
+            else:
+                hits = fingerprint_hits(churn_before, str(sandbox),
+                                        (str(base_home),))
+                b.add(PASS if not hits else FAIL,
+                      "no appended write carries this run's fingerprint",
+                      f"scanned {len(present)} churning path(s) for "
+                      f"{sandbox.name}; nothing of this run's is in them"
+                      if not hits else
+                      "THIS RUN'S FINGERPRINT IS IN THE OPERATOR'S KNOWLEDGE: "
+                      + "; ".join(hits))
         return end_base_section()
     finally:
         if a.json_out:
