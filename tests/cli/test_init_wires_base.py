@@ -376,7 +376,7 @@ def test_doctor_names_the_switch_rather_than_blaming_the_install(monkeypatch,
                                                                  tmp_path):
     """`doctor` is where an operator goes when something looks wrong.
 
-    `is_current` is the line it prints for the firm's base domain, and it used
+    `assess` is the line it prints for the firm's base domain, and it used
     to say "base absent" for three different situations: base missing, base
     suppressed, and base present but printing something unparseable. Someone
     who set CADRE_NO_BASE reads "absent" and goes debugging an install that is
@@ -390,7 +390,7 @@ def test_doctor_names_the_switch_rather_than_blaming_the_install(monkeypatch,
     ws = tmp_path / "firm"
     (ws / ".base").mkdir(parents=True)
 
-    # A block that is genuinely current, so `is_current` reaches the rule-count
+    # A block that is genuinely current, so `assess` reaches the rule-count
     # branch instead of returning "stale" earlier. `have` is rebuilt as
     # BEGIN + <between> + END, so an empty between and a render that returns
     # the same pair is the smallest input that gets past that check.
@@ -401,13 +401,13 @@ def test_doctor_names_the_switch_rather_than_blaming_the_install(monkeypatch,
 
     monkeypatch.setenv("CADRE_NO_BASE", "1")
     monkeypatch.setattr(sysconfig_service, "which_base", lambda: None)
-    _, suppressed = base_domain.is_current(ws, "demo", None)
+    _, suppressed = base_domain.assess(ws, "demo", None)
 
     monkeypatch.delenv("CADRE_NO_BASE", raising=False)
-    _, missing = base_domain.is_current(ws, "demo", None)
+    _, missing = base_domain.assess(ws, "demo", None)
 
     monkeypatch.setattr(sysconfig_service, "which_base", lambda: "/fake/base")
-    _, unparseable = base_domain.is_current(ws, "demo", None)
+    _, unparseable = base_domain.assess(ws, "demo", None)
 
     assert "CADRE_NO_BASE" in suppressed, suppressed
     assert "CADRE_NO_BASE" not in missing, missing
