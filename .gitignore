@@ -30,3 +30,9 @@ MEMBERS-DESIGN.md
 PLANNING.md
 
 # Tests (development only)
+
+# Written by scripts/acceptance-e2e.py --json and by the acceptance job in
+# tests.yml. Both land in the repo root, so running the harness locally the
+# way CI runs it would otherwise leave two untracked files behind each time.
+acceptance.json
+acceptance-rc.txt

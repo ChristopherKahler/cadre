@@ -17,6 +17,19 @@ Every status is one of:
     BLOCKED  a known open defect stops it; the reason names the defect
     SKIP     not applicable on this OS
 
+The --json summary carries a "completed" flag, and it is true only when the run
+reached the end of its own report. That summary is written from a finally: block,
+so a harness that dies at row 1 of 26 still leaves a file behind -- and until
+2026-09-10 that file said "fail": 0, which is the same value it carries when
+nothing failed. Measured: an exception injected after the first row produced exit
+1 and a summary reading 1 pass, 0 fail, 0 blocked, 0 skip, one row. Nothing in it
+said the run had stopped early. Reading the row count instead is not a fix, since
+that only tells you anything if you already know what the total should be.
+
+Anything consuming this file -- a dashboard, a later script, a person comparing
+two runs -- must check "completed" before believing a count.
+scripts/grade-acceptance.py does, and it is what CI grades.
+
 WHY THIS EXISTS, and why several steps look paranoid: on 2026-09-10 the CI
 board had been red on macOS and Windows for a month while every local check
 said green, because the Windows job ran a ``-k`` filter that deselected 1081 of
@@ -346,6 +359,12 @@ def main() -> int:
     ws = sandbox / "demo-firm"
     print(f"  sandbox     {sandbox}")
     print()
+
+    # Success path only. The finally: below writes the summary whatever
+    # happens, which is what makes the summary trustworthy about a run that
+    # finished and untrustworthy about one that did not. This is the bit that
+    # tells the two apart.
+    finished = False
 
     try:
         # ---- 1. wheel ---------------------------------------------------
@@ -1057,10 +1076,13 @@ def main() -> int:
                   " — this run contaminated real knowledge")
             shutil.rmtree(base_home, ignore_errors=True)
 
-        return b.report()
+        rc = b.report()
+        finished = True
+        return rc
     finally:
         if a.json_out:
             Path(a.json_out).write_text(json.dumps({
+                "completed": finished,
                 "platform": sys.platform,
                 "python": sys.version.split()[0],
                 "pythonioencoding": os.environ.get("PYTHONIOENCODING"),
