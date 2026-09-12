@@ -317,7 +317,7 @@ def test_pending_gates_groups_by_expiry_class() -> None:
             "context": "Standard case",
         })
 
-        out = render_pending_gates(conn, "chrisai", now=FIXED_NOW)
+        out = render_pending_gates(conn, "chrisai", now=FIXED_NOW, for_board=True)
         assert out is not None
         assert '<pending-gates count="3">' in out
         # Sections appear in order EXPIRED → URGENT → STANDARD
@@ -334,7 +334,7 @@ def test_pending_gates_groups_by_expiry_class() -> None:
         # Context line present
         assert "Context: Urgent case" in out
 
-        # BEHAVIOR + closing tag
+        # The Board's BEHAVIOR wording + closing tag
         assert "Use /gate:decide" in out
         assert out.rstrip().endswith("</pending-gates>")
     finally:

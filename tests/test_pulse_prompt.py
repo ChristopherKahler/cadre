@@ -423,6 +423,37 @@ class TestAssemblePrompt:
         # the _member dir is invisible to the firm-wide seam
         assert "Firm Protocols" not in mine
 
+    def test_a_keyless_member_is_never_shown_a_command_it_is_refused(self):
+        # #106: the run prompt reuses the SessionStart renders. Their Board
+        # wording names /gate:decide, which is Board-only, and `cadre goal
+        # update`, which needs the authority key no founded Member holds.
+        from firm.services.gate import request_gate
+        from firm.services.goal import create_goal
+
+        conn = _fresh_conn()
+        _add_member(conn, "MEM-001")
+        _add_project(conn, "PRJ-001")
+        _add_unit(conn, "UNT-001", "PRJ-001", claimed_by="MEM-001")
+        request_gate(conn, "chrisai", {
+            "requesting_member_id": "MEM-001", "action": "publish the post",
+            "target_entity_type": "unit", "target_entity_id": "UNT-001",
+        })
+        create_goal(conn, "chrisai", {
+            "target": "Publish 2 posts a week",
+            "parent_entity_type": "member", "parent_entity_id": "MEM-001",
+            "metric": {"type": "count", "value": 2, "unit": "posts_per_week"},
+        })
+
+        result = assemble_prompt(conn, "chrisai", "MEM-001", "UNT-001", cwd="/tmp")
+
+        assert "<pending-gates" in result and "<goal-health" in result
+        assert "/gate:decide" not in result
+        assert "goal update" not in result
+        assert "firm_update_goal_metric" not in result
+        # A newer metric value goes to the Board against the goal, so the
+        # pulse does not read it as the Member being blocked.
+        assert "--target-type goal --target-id <GOAL-id>" in result
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Utility: acceptance criteria formatting
