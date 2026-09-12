@@ -88,11 +88,18 @@ def base_absence_reason() -> str:
     reading. That is a fresh silent-success shape, which is the fault family
     this codebase keeps deleting.
 
-    BOTH sentences contain the words "not installed" on purpose. Callers branch
-    on that substring to mean "skip, do not fail" -- `firm extension install`
-    does it to keep rc 0 on a host without base -- and a suppressed base is
-    equally a skip rather than a failure. Changing the wording without keeping
-    that substring turns a skip into an error exit.
+    BOTH sentences contain the words "not installed" on purpose, so that an
+    operator meeting either state is told the same thing in the same words.
+
+    THEY ARE NO LONGER LOAD-BEARING FOR ANY EXIT CODE, and that is a deliberate
+    change. `firm extension install` used to branch on this substring to keep
+    rc 0 on a host without base. Issue #83 is what that cost: the refusal
+    sentences in `base_extension.install` interpolate the resolved binary's
+    path, so a base under a directory named "not installed" carried the phrase
+    into a genuine refusal and the refusal was reported through exit 0.
+    `run_install` now reads the `skipped` field that `install` sets, not this
+    prose. Reword these sentences when it helps an operator; just keep them
+    saying the same thing as each other.
     """
     if os.environ.get(DISABLE_ENV, "").strip():
         return (f"base is suppressed by {DISABLE_ENV}, so it is treated as not "

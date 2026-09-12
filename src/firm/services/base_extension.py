@@ -162,13 +162,22 @@ def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
     """
     from firm.sysconfig.service import which_base
 
+    # ``skipped`` is the ONE degraded-not-broken state, and it is a FIELD
+    # rather than a phrase in ``reason`` on purpose. Issue #83: run_install
+    # used to pick its exit code by looking for "not installed" in the reason
+    # text, and these refusal sentences interpolate the resolved binary's
+    # path -- so a base under a directory named "not installed" carried the
+    # phrase into a genuine refusal and it was reported as a success.
+    # Prose is for the operator. The field is for the caller.
     result: dict[str, Any] = {"ok": False, "validated": False, "installed": False,
                               "read_back": False, "handler_runs": False,
+                              "skipped": False,
                               "handler": "", "path": "", "reason": ""}
     base = which_base()
     if not base:
         from firm.sysconfig.service import base_absence_reason
 
+        result["skipped"] = True
         result["reason"] = (
             f"{base_absence_reason()} — the extension is skipped, not failed")
         return result
@@ -330,8 +339,19 @@ def run_install(framework_dir: Path | str | None = None) -> int:
             print(f"handler runs: {result['handler']}")
         return 0
     reason = result.get("reason", "unknown")
-    if "not installed" in reason:
+    if result.get("skipped"):
         # Absent, not broken. Say so on stdout and leave rc 0.
+        #
+        # This read `if "not installed" in reason` until issue #83. That
+        # decided an EXIT CODE by substring-matching a human-readable
+        # sentence, and install()'s refusal sentences interpolate the
+        # resolved binary's path. A base under a directory named
+        # "not installed" therefore carried the phrase into a refusal, and a
+        # genuine refusal printed "skipped:" and returned 0.
+        #
+        # What made it a reporting defect rather than a contamination path:
+        # the subprocess count in that hole was still ZERO, so the refusal
+        # did happen and the tier was protected. Only the exit code lied.
         print(f"skipped: {reason}")
         return 0
     print(f"Error: {reason}", file=sys.stderr)
