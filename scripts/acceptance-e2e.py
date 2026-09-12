@@ -99,6 +99,70 @@ BASE_SECTION_ROWS = [
     "no appended write carries this run's fingerprint",
 ]
 
+# Everything before the base section, in the order the executed path emits it.
+#
+# WHY THIS EXISTS. Two steps used to `return b.report()` outright -- the wheel
+# build and the pip install. Both emit a FAIL row first, so nothing read green,
+# but both dropped every row after them and returned with `finished` still
+# False. That is the shrinking scoreboard BASE_SECTION_ROWS was written to stop,
+# one level up from where it was being stopped.
+#
+# A LIST ALONE DOES NOT CLOSE THEM, and that is worth knowing before editing it.
+# `assert_section` compares the emitted names to the declared names AS A
+# SEQUENCE, and `skip_rest` appends what is missing at the END. So a declared
+# row that did not fire mid-run lands after the rows that came after it and the
+# order check fails even though every name is present. The base section gets
+# away with it because every one of its `skip_rest` calls happens AT the branch
+# point, before any later row exists. The arms below give this half the same
+# property: each branch fills in the rows its sibling would have emitted, right
+# where they belong.
+def console_script_row(exe: str) -> str:
+    """The one place this row's name is spelled.
+
+    It used to be spelled twice: once as a literal in the declared list and once
+    in an f-string at the emit site. Two spellings of a name that must match
+    exactly is a drift waiting to happen, and the only thing that would notice
+    is `assert_section` failing on somebody's CI leg with a name mismatch and no
+    clue which spelling moved.
+    """
+    return f"console script `{exe}` resolves"
+
+
+CONSOLE_SCRIPTS = ("cadre", "firm")
+
+PRE_BASE_ROWS = [
+    "wheel provided",
+    "build a wheel from source",
+    "create an empty virtual environment",
+    "pip install the wheel into it",
+    "the mcp dependency resolved under its upper bound",
+    *(console_script_row(e) for e in CONSOLE_SCRIPTS),
+    "every module imports from the installed package",
+    "CONTROL: firm resolves from the venv, not from the source tree",
+    "the MCP tool surface loads from the installed package",
+    "the wheel carries its data files, not only its code",
+    "CONTROL: no firm database exists before init",
+    "cadre init --demo creates a firm",
+    "the demo firm actually has a roster and work",
+    "cadre init --install-hooks wires the session hook",
+    "the session hook command can be read back out of settings.json",
+    "the session hook AS REGISTERED actually emits the roster",
+    "RED ARM: the recorded interpreter path exists to be removed",
+    "RED ARM: with the recorded path removed the hook goes quiet and says why",
+    "the registered hook emits the roster without a developer editable install "
+    "helping it",
+    "re-running init is idempotent, not destructive",
+    "a member exists to act as",
+    "a Member can ask the Board for approval (firm gate request)",
+    "a Member can escalate to the Board (firm escalation raise)",
+    "the host scheduler for this OS resolves and is available",
+    "NEGATIVE CONTROL: a nonexistent runtime is refused",
+    "a native executable is accepted as the Member runtime",
+]
+
+# The whole scoreboard, which is what `end_run` conserves.
+HARNESS_ROWS = PRE_BASE_ROWS + BASE_SECTION_ROWS
+
 
 class Board:
     def __init__(self) -> None:
@@ -202,12 +266,31 @@ class Board:
         #   1  at least one FAIL -- something that should work here does not
         #   2  no FAIL, but rows were SKIPPED, so this host did not establish
         #      the skipped ground. Not a failure; not a pass either.
+        #   4  no FAIL, but a known defect BLOCKED rows. Not a failure either,
+        #      and emphatically not a clean run.
         #
-        # 2 is distinct from 1 on purpose: scripts/grade-acceptance.py needs to
-        # tell "the harness died" from "the harness declined to measure", and a
-        # single non-zero cannot carry that.
+        # 2 and 4 are distinct from 1 on purpose: scripts/grade-acceptance.py
+        # needs to tell "the harness died" from "the harness declined to
+        # measure" from "a known defect stopped it", and a single non-zero
+        # cannot carry that. 3 is the isolation refusal, taken already.
+        #
+        # 4 EXISTS BECAUSE THIS RETURNED 0. The headline four lines above has
+        # always ranked BLOCKED between FAIL and SKIP and printed "Usable as far
+        # as it goes, with known defects blocking the BLOCKED rows" -- while the
+        # exit code said 0, which this same comment block defines as "every row
+        # measured, nothing skipped". That is not what happened, and the exit
+        # code is the half CI and grade-acceptance.py actually read. The
+        # ordering below follows the headline's own precedence rather than
+        # inventing a second one.
+        #
+        # This is NOT a red build. grade-acceptance.py stays green on 4, for
+        # the reason it is green on a BLOCKED row today: a BLOCKED row names an
+        # open defect that is already tracked, and failing the build here
+        # teaches the next person to delete the row instead of the defect.
         if self.count(FAIL):
             return 1
+        if self.count(BLOCKED):
+            return 4
         if self.count(SKIP):
             return 2
         return 0
@@ -672,13 +755,43 @@ def main() -> int:
     # tells the two apart.
     finished = False
 
+    def end_run(reason: str | None = None) -> int:
+        """The ONE way out of this harness, section or no section.
+
+        Does the four things a bare `return b.report()` did not: fills every
+        declared row this path never reached, checks the whole scoreboard
+        against the declared list, marks the run finished so the JSON summary
+        stops describing it as a run that died, and only then reports.
+
+        A note for whoever reads a double failure here: if the base section's
+        own conservation check has already added a FAIL row, that row is not in
+        HARNESS_ROWS, so the check below adds a second one. Two FAIL rows, both
+        true. The base one names which base row moved; this one names the
+        extra. Neither is noise.
+        """
+        nonlocal finished
+        if reason:
+            b.skip_rest(HARNESS_ROWS, reason)
+        b.assert_section(0, HARNESS_ROWS, "whole harness")
+        finished = True
+        return b.report()
+
     try:
         # ---- 1. wheel ---------------------------------------------------
+        # Two arms, two DIFFERENT row names, so whichever one runs the other
+        # name would simply be absent -- and an absent row says nothing at all.
+        # Each arm records the sibling it did not take.
         if a.wheel:
             wheel = Path(a.wheel)
             b.add(PASS if wheel.is_file() else FAIL, "wheel provided",
                   str(wheel))
+            b.skip_rest(["build a wheel from source"],
+                        "not measured: a wheel was supplied with --wheel, so "
+                        "this run never built one. Unmeasured, not passed.")
         else:
+            b.skip_rest(["wheel provided"],
+                        "not measured: no --wheel was given, so this run built "
+                        "its own. Unmeasured, not passed.")
             dist = sandbox / "dist"
             rc, out = run([sys.executable, "-m", "pip", "install", "--quiet",
                            "--upgrade", "build"])
@@ -690,7 +803,10 @@ def main() -> int:
                   f"rc={rc}\n" + ("\n".join(w.name for w in wheels)
                                   or out[-500:]))
             if not wheels:
-                return b.report()
+                return end_run(
+                    "not measured: no wheel was produced, so there was nothing "
+                    "to install and nothing below could run. Unmeasured, not "
+                    "passed.")
             wheel = wheels[0]
 
         # ---- 2. clean venv + install ------------------------------------
@@ -704,7 +820,9 @@ def main() -> int:
         b.add(PASS if rc == 0 else FAIL, "pip install the wheel into it",
               f"rc={rc}\n{out[-600:]}")
         if rc != 0:
-            return b.report()
+            return end_run(
+                "not measured: the wheel did not install, so every row below "
+                "is about a package that is not there. Unmeasured, not passed.")
 
         rc, freeze = run([str(vpy), "-m", "pip", "freeze"])
         mcp_line = next((l for l in freeze.splitlines()
@@ -715,9 +833,9 @@ def main() -> int:
                          "removed a module Cadre imports — issue #3)")
 
         # ---- 3. console scripts ----------------------------------------
-        for exe in ("cadre", "firm"):
+        for exe in CONSOLE_SCRIPTS:
             rc, out = run([str(venv_bin(venv, exe)), "--version"])
-            b.add(PASS if rc == 0 else FAIL, f"console script `{exe}` resolves",
+            b.add(PASS if rc == 0 else FAIL, console_script_row(exe),
                   f"rc={rc}  {out.strip()[:120]}")
 
         # ---- 4. imports, with a CONTROL that they come from the venv ----
@@ -811,6 +929,11 @@ def main() -> int:
             b.add(PASS if mem > 0 else FAIL,
                   "the demo firm actually has a roster and work",
                   f"members={mem} units={uni} migrations={mig}")
+        else:
+            b.skip_rest(["the demo firm actually has a roster and work"],
+                        f"not measured: no firm database at {db}, so there was "
+                        "no roster to count. The row above says whether init "
+                        "reported success. Unmeasured, not passed.")
 
         # ---- 7. hooks + idempotence ------------------------------------
         rc, out = run([str(venv_bin(venv, "cadre")), "init", str(ws),
@@ -839,7 +962,23 @@ def main() -> int:
             b.add(FAIL, "the session hook command can be read back out of "
                         "settings.json",
                   "no SessionStart command found; cannot test what was wired")
+            b.skip_rest(
+                ["the session hook AS REGISTERED actually emits the roster",
+                 "RED ARM: the recorded interpreter path exists to be removed",
+                 "RED ARM: with the recorded path removed the hook goes quiet "
+                 "and says why",
+                 "the registered hook emits the roster without a developer "
+                 "editable install helping it"],
+                "not measured: no SessionStart command could be read back, so "
+                "there was no registered command to run. Unmeasured, not "
+                "passed.")
         else:
+            # This row only ever existed on the FAILURE arm, so a healthy run
+            # left it off the scoreboard entirely and the run that could not
+            # read the command produced a LONGER report than the run that
+            # could. Recorded on both arms now.
+            b.add(PASS, "the session hook command can be read back out of "
+                        "settings.json", registered)
             payload = json.dumps({"cwd": str(ws)})
             argv = _expand_hook_command(registered, ws)
             rc_h, out_h = run(argv, cwd=ws, stdin_text=payload)
@@ -880,7 +1019,16 @@ def main() -> int:
                       f"{marker} is not a file, so the arm below would prove "
                       "nothing. cadre init --install-hooks is supposed to "
                       "record it.")
+                b.skip_rest(
+                    ["RED ARM: with the recorded path removed the hook goes "
+                     "quiet and says why"],
+                    "not measured: there was no recorded path to remove, so "
+                    "the arm had nothing to do. Unmeasured, not passed.")
             else:
+                # Same shape as the row above: this one was recorded only when
+                # it FAILED, so a healthy run never put it on the board.
+                b.add(PASS, "RED ARM: the recorded interpreter path exists to "
+                            "be removed", f"{marker} ({len(saved)} bytes)")
                 try:
                     marker.unlink()
                     rc_b, out_b = run(argv, cwd=ws, stdin_text=payload,
@@ -951,7 +1099,16 @@ def main() -> int:
 
         if not member:
             b.add(FAIL, "a member exists to act as", "no member row to drive")
+            b.skip_rest(
+                ["a Member can ask the Board for approval (firm gate request)",
+                 "a Member can escalate to the Board (firm escalation raise)"],
+                "not measured: there was no member to act as, so neither the "
+                "gate nor the escalation path could be driven. Unmeasured, not "
+                "passed.")
         else:
+            # Third one of these. Recorded only on the failure arm, so the
+            # broken run reported it and the healthy run did not.
+            b.add(PASS, "a member exists to act as", f"member={member}")
             env = {"CADRE_MEMBER_ID": member}
             rc, out = run([firm_exe, "gate", "request",
                            "--action", "acceptance harness: prove the gate path",
@@ -1079,13 +1236,14 @@ def main() -> int:
             landed -- returned without setting `finished`, so the summary said
             the harness had died when it had declined to measure on purpose.
             """
-            nonlocal finished
             b.assert_section(base_section_start, BASE_SECTION_ROWS,
                              "base as the engine")
             if base_home is not None:
                 shutil.rmtree(base_home, ignore_errors=True)
-            finished = True
-            return b.report()
+            # Routed through the one exit rather than reporting directly, so
+            # the WHOLE scoreboard is conserved and not only this section's
+            # part of it. `end_run` sets `finished`.
+            return end_run()
 
         rc, out = run(["base", "--version"])
         base_path = shutil.which("base")
