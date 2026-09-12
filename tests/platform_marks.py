@@ -20,6 +20,7 @@ when the defect is fixed instead of needing someone to remember.
 
 from __future__ import annotations
 
+import os
 import sys
 
 import pytest
@@ -46,5 +47,23 @@ spawn_layer_rejects_this_platforms_binaries = pytest.mark.skipif(
         "it rejects this platform's own interpreter and resolve_claude_bin "
         "returns nothing. Off-Linux spawn defect, owned separately; this skip "
         "clears itself once the format check is fixed."
+    ),
+)
+
+#: Issue #111's tests reproduce the defect as measured on Linux: an nvm CLI is
+#: a ``#!/usr/bin/env node`` script, symlinked into nvm's bin, that takes node
+#: from PATH, and a systemd user timer starts the pulse with the manager's PATH.
+#: The tests run that script. A Windows kernel does not read ``#!`` lines:
+#: running the script by path fails with WinError 193 (measured 2026-09-12 on
+#: Python 3.12.6 and 3.13.5). There npm installs a CLI as .cmd and .ps1 shims
+#: and pulses are Task Scheduler tasks, so the reproduction has no counterpart.
+#: No defect is waiting here; the mechanism does not exist on that host.
+host_cannot_exec_a_shebang_script = pytest.mark.skipif(
+    os.name != "posix",
+    reason=(
+        "runs a #!/usr/bin/env node script the way nvm installs a CLI, and "
+        "this host's kernel does not execute #! scripts (Windows: WinError "
+        "193; npm installs .cmd and .ps1 shims there and pulses are Task "
+        "Scheduler tasks)."
     ),
 )

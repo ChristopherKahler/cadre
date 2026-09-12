@@ -715,11 +715,13 @@ def commit(root: Path, firm_id: str, plan: dict[str, Any],
             cli = p.get("cli") or []
             # Where the hub finds each tool rides with the loadout, as Equip
             # records it: a timer pulse puts that directory on its own PATH (#111).
+            from firm.pulse.preflight import recordable_tool_path
             cli_paths: dict[str, str] = {}
             for tool in cli:
                 found = shutil.which(str(tool).split()[0]) if str(tool).strip() else None
-                if found:
-                    cli_paths[str(tool)] = os.path.abspath(found)
+                path = recordable_tool_path(found)
+                if path:
+                    cli_paths[str(tool)] = path
             updates: dict[str, Any] = {
                 "skill_loadout": {
                     "skills": p["skills"],

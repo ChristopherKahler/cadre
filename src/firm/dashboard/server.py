@@ -2333,9 +2333,12 @@ def equip_member(
             # Where the hub found it rides with the loadout. A timer pulse starts
             # from a PATH that may not reach this directory (nvm's bin, #111) and
             # puts it on its own PATH from here (firm.pulse.environment.pulse_path).
-            paths = loadout.get("cli_paths")
-            loadout["cli_paths"] = {**(paths if isinstance(paths, dict) else {}),
-                                    name: os.path.abspath(found)}
+            from firm.pulse.preflight import recordable_tool_path
+            path = recordable_tool_path(found)
+            if path:
+                paths = loadout.get("cli_paths")
+                loadout["cli_paths"] = {
+                    **(paths if isinstance(paths, dict) else {}), name: path}
 
     repo.update(conn, "contract", contract["id"], {"skill_loadout": loadout})
     log_event(

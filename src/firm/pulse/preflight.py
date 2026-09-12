@@ -18,11 +18,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sqlite3
 from typing import Any
 
 from firm.core import repo
+from firm.sysconfig.binaries import image_format, native_image_format
+
+# A Windows drive as WSL mounts it. A WSL login shell's PATH ends with the
+# Windows PATH, so railway can resolve to the Windows npm shim under /mnt/c.
+_WINDOWS_DRIVE_MOUNT = re.compile(r"^/mnt/[A-Za-z]/")
 
 
 def _absent_reason(name: str, recorded: str | None = None) -> str:
@@ -38,6 +44,29 @@ def _absent_reason(name: str, recorded: str | None = None) -> str:
         return (f"`{name}` is gone from {recorded}, where the hub found it when "
                 f"it was equipped — searched: {searched}")
     return f"`{name}` did not resolve on this process's PATH — searched: {searched}"
+
+
+def recordable_tool_path(found: str | None) -> str | None:
+    """The path to record for a tool this process resolved, or None.
+
+    Never a path on a Windows drive mount (/mnt/<letter>/, directly or through a
+    symlink), and never a binary built for another platform
+    (``firm.sysconfig.binaries``). A WSL login shell resolves railway to the
+    Windows npm shim under /mnt/c, and recording that would put a Windows
+    folder ahead of /usr/bin on every timer pulse (#111). A script, such as
+    nvm's ``#!/usr/bin/env node`` CLIs, is no image format and stays
+    recordable.
+    """
+    if not found:
+        return None
+    path = os.path.abspath(found)
+    real = os.path.realpath(found)
+    if any(_WINDOWS_DRIVE_MOUNT.match(p) for p in (found, path, real)):
+        return None
+    kind = image_format(real)
+    if kind in ("pe", "elf", "macho") and kind != native_image_format():
+        return None
+    return path
 
 
 def _loadout(contract: dict[str, Any] | None) -> dict[str, Any]:
@@ -91,6 +120,36 @@ def firm_cli_paths(conn: sqlite3.Connection, firm_id: str) -> dict[str, str]:
                 contracts.get(m.get("contract_id"))).items():
             out.setdefault(name, path)
     return out
+
+
+def record_cli_paths(conn: sqlite3.Connection, firm_id: str) -> dict[str, str]:
+    """Record where this process finds each loadout CLI that has no recorded
+    path yet, and return what it recorded as {tool: path}.
+
+    Equip and Train record a tool's path when the Board equips it. A loadout
+    equipped before they did has none, and a firm needs one only once a timer
+    pulses it, so ``firm heartbeat enable`` calls this with the enabling
+    process's PATH: the hub's when the Board switches the pulse on there (#111).
+    A tool this PATH cannot find, or finds only somewhere ``recordable_tool_path``
+    refuses, stays unrecorded, and preflight's escalation stands. A path already
+    recorded is left as it is.
+    """
+    recorded: dict[str, str] = {}
+    for contract in repo.find(conn, "contract", firm_id=firm_id):
+        lo = _loadout(contract)
+        paths = lo.get("cli_paths") if isinstance(lo.get("cli_paths"), dict) else {}
+        added: dict[str, str] = {}
+        for name in _loadout_clis(contract):
+            if name in paths or not name.strip():
+                continue
+            path = recordable_tool_path(shutil.which(name.split()[0]))
+            if path:
+                added[name] = path
+        if added:
+            repo.update(conn, "contract", contract["id"],
+                        {"skill_loadout": {**lo, "cli_paths": {**paths, **added}}})
+            recorded.update(added)
+    return recorded
 
 
 def dead_tools(conn: sqlite3.Connection, firm_id: str) -> dict[str, str]:
