@@ -27,7 +27,7 @@ from firm.secrets.provider import resolve_provider
 SYSTEMD_USER_PATH = ("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:"
                      "/sbin:/bin:/usr/games:/usr/local/games:/snap/bin")
 NOTIFY_TOKEN_NAMES = ("CADRE_SLACK_TOKEN", "CADRE_SLACK_BOT_TOKEN",
-                      "CADRE_TELEGRAM_TOKEN")
+                      "CADRE_TELEGRAM_TOKEN", "CADRE_NOTIFY_WEBHOOK")
 FIRM = "acme"
 
 # notify_config exactly as the founding Manifest writes it
@@ -37,6 +37,9 @@ SLACK_CONFIG = {"provider": "slack", "remind_hours": 24,
 TELEGRAM_CONFIG = {"provider": "telegram", "remind_hours": 24,
                    "telegram_chat_id": "42",
                    "telegram_token_env": "CADRE_TELEGRAM_TOKEN"}
+# The webhook shape firm.notify documents; founding does not write one.
+WEBHOOK_CONFIG = {"provider": "webhook", "remind_hours": 24,
+                  "webhook_url_env": "CADRE_NOTIFY_WEBHOOK"}
 
 
 def _firm(ws: Path, notify_config: dict | None = None) -> Path:
@@ -164,6 +167,58 @@ def test_timer_pulse_resolves_the_telegram_rail_from_the_vault(
 
     assert [c["url"] for c in calls] == [
         "https://api.telegram.org/bot123:from-vault/getMe"], \
+        out.get("error_details")
+    assert _escalations(ws, "preflight:notify-rail") == []
+    assert out["errors"] == 0, out.get("error_details")
+
+
+def test_timer_pulse_resolves_the_webhook_rail_from_the_vault(
+        tmp_path, monkeypatch, capsys):
+    ws = _firm(tmp_path, WEBHOOK_CONFIG)
+    resolve_provider().set(ws, "CADRE_NOTIFY_WEBHOOK",
+                           "https://hooks.example/from-vault", "firm")
+    _start_like_a_timer_unit(monkeypatch)
+    _record_rail_calls(monkeypatch)   # a webhook rail has no probe to send
+
+    out = _pulse(ws, monkeypatch, capsys)
+
+    assert _escalations(ws, "preflight:notify-rail") == []
+    assert out["errors"] == 0, out.get("error_details")
+
+
+def test_timer_unit_still_reaches_a_token_in_the_workspace_env(
+        tmp_path, monkeypatch, capsys):
+    """``firm heartbeat enable`` used to copy a token from the workspace .env
+    into the unit. It no longer copies any, so the pulse must read .env itself:
+    enable the timer, then start the pulse from exactly the unit's environment.
+    """
+    import firm.cli.heartbeat as hb
+    import firm.sched.systemd as sysd
+
+    ws = _firm(tmp_path, TELEGRAM_CONFIG)
+    (ws / ".env").write_text("CADRE_TELEGRAM_TOKEN=123:from-dotenv\n",
+                             encoding="utf-8")
+    _start_like_a_timer_unit(monkeypatch)
+    monkeypatch.setattr(sysd, "run_cmd", lambda argv, timeout=30: (0, ""))
+    # The unit bakes the suite's unusable claude path, so copying the unit's
+    # environment below leaves the no-claude fence exactly where it was.
+    monkeypatch.setattr(hb, "resolve_claude_bin",
+                        lambda: (os.environ["CADRE_CLAUDE_BIN"], "test"))
+    unit_dir = tmp_path / "units"
+    assert hb.run_enable(ws, FIRM, "15m", unit_dir=unit_dir) == 0
+    capsys.readouterr()
+    service = (unit_dir / f"cadre-heartbeat-{FIRM}.service").read_text(
+        encoding="utf-8")
+    for line in service.splitlines():
+        if line.startswith('Environment="') and line.endswith('"'):
+            key, _, value = line[len('Environment="'):-1].partition("=")
+            monkeypatch.setenv(key, value)
+    calls = _record_rail_calls(monkeypatch)
+
+    out = _pulse(ws, monkeypatch, capsys)
+
+    assert [c["url"] for c in calls] == [
+        "https://api.telegram.org/bot123:from-dotenv/getMe"], \
         out.get("error_details")
     assert _escalations(ws, "preflight:notify-rail") == []
     assert out["errors"] == 0, out.get("error_details")

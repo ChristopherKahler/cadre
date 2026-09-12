@@ -4,10 +4,10 @@ notify token.
 A pulse starts one of two ways, and neither handed it a whole environment:
 
 * A timer pulse is a systemd user unit. It inherits the user manager's bare
-  PATH, and its unit carries only what ``firm heartbeat enable`` captured from
-  the enabling process and the workspace .env
-  (``firm.cli.heartbeat.capture_env``): never a PATH, and the vault is never
-  consulted.
+  PATH, and its unit carries only what ``firm heartbeat enable`` captured
+  (``firm.cli.heartbeat.capture_env``): never a PATH, never the vault, and --
+  since #107 -- no notify credential either, because a baked copy sat in plain
+  text on disk and outlived a rotation in the vault.
   The live unit on the operator's machine held FIRM_ID and CADRE_CLAUDE_BIN
   and nothing else (measured 2026-09-12, issue #107).
 * Pulse now is dispatched by the hub, which carried a PATH but forwarded only
@@ -68,6 +68,24 @@ def pulse_path(workspace: Path) -> str:
     return os.pathsep.join(ordered)
 
 
+def read_env_file(workspace: Path) -> dict[str, str]:
+    """KEY=VALUE pairs from the workspace .env — for reading, not for
+    mutating this process (contrast dashboard._load_firm_env)."""
+    env_path = workspace / ".env"
+    out: dict[str, str] = {}
+    if not env_path.exists():
+        return out
+    try:
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                out[k.strip()] = v.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return out
+
+
 def _firm_vault(workspace: Path) -> dict[str, str]:
     """The firm's merged vault, read the same way a Member run copies it into
     its environment (``firm.pulse.spawn.spawn_member_run``)."""
@@ -112,9 +130,13 @@ def notify_token(
     The variable is the one the rail reads (``firm.notify.token_env_name``), so
     a firm configured with ``slack_token_env: CADRE_SLACK_BOT_TOKEN`` gets its
     token under that name rather than under a default the rail never looks at.
-    The token is the vault's value for that name. Slack also reaches every
-    source the hub's Pulse now dispatch used to forward from: both vault names,
-    then a token still inline in .mcp.json from before the vault. Never raises.
+    For a webhook the token is the URL.
+
+    The value comes from every source the old paths reached, vault first: the
+    vault's value for that name; for Slack, both vault names and then a token
+    still inline in .mcp.json, which is where the hub's Pulse now dispatch used
+    to forward from; last, the workspace .env, which is where ``firm heartbeat
+    enable`` used to capture a timer unit's token from. Never raises.
     """
     try:
         from firm.notify import token_env_name
@@ -126,6 +148,8 @@ def notify_token(
         token = vault.get(name)
         if not token and cfg.get("provider", "slack") == "slack":
             token = slack_token_from_workspace(workspace, vault)
+        if not token:
+            token = read_env_file(workspace).get(name)
         return (name, token) if token else None
     except Exception:
         return None
@@ -159,16 +183,20 @@ def pulse_environment(
     right after anyway; this is for a caller that runs a pulse in-process --
     the test suite -- which must not carry one pulse's PATH into the next test.
     """
-    saved: dict[str, str | None] = {"PATH": os.environ.get("PATH")}
-    os.environ["PATH"] = pulse_path(workspace)
+    replaced: dict[str, str | None] = {}
+
+    def put(name: str, value: str) -> None:
+        replaced.setdefault(name, os.environ.get(name))
+        os.environ[name] = value
+
+    put("PATH", pulse_path(workspace))
     try:
         found = notify_token(workspace, _notify_config(db_path, firm_id))
         if found and not os.environ.get(found[0]):
-            saved[found[0]] = os.environ.get(found[0])
-            os.environ[found[0]] = found[1]
+            put(*found)
         yield
     finally:
-        for name, value in saved.items():
+        for name, value in replaced.items():
             if value is None:
                 os.environ.pop(name, None)
             else:

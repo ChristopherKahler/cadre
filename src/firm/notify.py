@@ -60,11 +60,12 @@ def get_notify_config(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any] 
 
 
 def token_env_name(cfg: dict[str, Any]) -> str | None:
-    """The environment variable holding this firm's notify token, or None for
-    a provider that carries none (webhook) or an unknown one.
+    """The environment variable holding this firm's notify credential — the
+    bot token, or for a webhook the URL itself, since anyone holding it can
+    post — or None for an unknown provider.
 
     One answer for every reader: the rail check, delivery, and the pulse that
-    fills the variable from the firm vault when it starts
+    fills the variable from the firm's stores when it starts
     (``firm.pulse.environment``), so the token is put where the rail looks.
     """
     provider = cfg.get("provider", "slack")
@@ -74,6 +75,8 @@ def token_env_name(cfg: dict[str, Any]) -> str | None:
         return cfg.get("token_env") or cfg.get("slack_token_env") or DEFAULT_TOKEN_ENV
     if provider == "telegram":
         return cfg.get("telegram_token_env", DEFAULT_TELEGRAM_ENV)
+    if provider == "webhook":
+        return cfg.get("webhook_url_env", DEFAULT_WEBHOOK_ENV)
     return None
 
 
@@ -108,7 +111,7 @@ def rail_health(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
             return {"ok": False, "reason": f"slack auth.test error: {result.get('error', 'unknown')}"}
 
         if provider == "webhook":
-            url_env = cfg.get("webhook_url_env", DEFAULT_WEBHOOK_ENV)
+            url_env = token_env_name(cfg)
             if not os.environ.get(url_env):
                 return {"ok": False, "reason": f"webhook env {url_env} unset in this process"}
             return {"ok": True, "reason": "webhook url present (unverified — webhooks have no read-only probe)"}
@@ -191,7 +194,7 @@ def send_board_dm(
             return {"sent": False, "reason": f"slack error: {result.get('error', 'unknown')}"}
 
         if provider == "webhook":
-            url_env = cfg.get("webhook_url_env", DEFAULT_WEBHOOK_ENV)
+            url_env = token_env_name(cfg)
             url = os.environ.get(url_env)
             if not url:
                 return {"sent": False, "reason": f"webhook env {url_env} unset in this process"}

@@ -50,17 +50,15 @@ def test_validate_interval_rejects_garbage():
 def test_capture_env_process_wins_over_dotenv(tmp_path, monkeypatch):
     ws = _workspace_with_db(tmp_path)
     (ws / ".env").write_text(
-        'CADRE_TELEGRAM_TOKEN="file-token"\nCADRE_SLACK_TOKEN=file-slack\n'
+        'CADRE_DB_URL="file-url"\nCADRE_DB_TOKEN=file-db-token\n'
     )
-    monkeypatch.setenv("CADRE_TELEGRAM_TOKEN", "process-token")
-    monkeypatch.delenv("CADRE_SLACK_TOKEN", raising=False)
-    monkeypatch.delenv("CADRE_NOTIFY_WEBHOOK", raising=False)
+    monkeypatch.setenv("CADRE_DB_URL", "process-url")
+    monkeypatch.delenv("CADRE_DB_TOKEN", raising=False)
 
     env = hb.capture_env(ws, "lab", "/usr/bin/claude")
 
-    assert env["CADRE_TELEGRAM_TOKEN"] == "process-token"
-    assert env["CADRE_SLACK_TOKEN"] == "file-slack"
-    assert "CADRE_NOTIFY_WEBHOOK" not in env
+    assert env["CADRE_DB_URL"] == "process-url"
+    assert env["CADRE_DB_TOKEN"] == "file-db-token"
     assert env["FIRM_ID"] == "lab"
     assert env["CADRE_CLAUDE_BIN"] == "/usr/bin/claude"
 
@@ -89,6 +87,31 @@ def test_enable_writes_units_and_starts_timer(tmp_path, capsys, monkeypatch, ctl
     assert out["ok"] is True
     assert out["interval"] == "15m"
     assert out["scheduler"] == "systemd"
+
+
+def test_enable_writes_no_notify_token_into_the_unit(tmp_path, capsys,
+                                                     monkeypatch, ctl):
+    """A notify credential in the enabling process or the workspace .env stays
+    out of the unit file: it would sit there in plain text and outlive a
+    rotation in the vault. The pulse reads it itself when it starts (#107)."""
+    ws = _workspace_with_db(tmp_path)
+    unit_dir = tmp_path / "units"
+    (ws / ".env").write_text("CADRE_SLACK_TOKEN=xoxb-from-dotenv\n")
+    monkeypatch.delenv("CADRE_SLACK_TOKEN", raising=False)
+    monkeypatch.setenv("CADRE_TELEGRAM_TOKEN", "123:from-process")
+    monkeypatch.setenv("CADRE_NOTIFY_WEBHOOK", "https://hooks.example/from-process")
+    monkeypatch.setattr(
+        hb, "resolve_claude_bin", lambda: ("/usr/bin/claude", "test"),
+    )
+
+    rc = hb.run_enable(ws, "lab", "15m", unit_dir=unit_dir)
+
+    assert rc == 0
+    service = (unit_dir / "cadre-heartbeat-lab.service").read_text()
+    for value in ("xoxb-from-dotenv", "123:from-process",
+                  "https://hooks.example/from-process"):
+        assert value not in service
+    assert 'Environment="FIRM_ID=lab"' in service
 
 
 def test_enable_fails_without_db(tmp_path, capsys, ctl):
