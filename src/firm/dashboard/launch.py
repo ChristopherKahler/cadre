@@ -33,6 +33,28 @@ def _which_windows_terminal() -> str | None:
 
 
 def _which_claude() -> str | None:
+    """The claude this launcher will exec, or None if it has none to offer.
+
+    ``CADRE_CLAUDE_BIN`` FIRST, and short-circuiting -- because until #81 this
+    function did not consult it AT ALL. ``firm.pulse.spawn.resolve_claude_bin``
+    has honoured that variable since it shipped, so an operator who set it was
+    OBEYED by the Member spawn path and SILENTLY IGNORED by this one: the same
+    documented escape hatch working in one half of the product and not the
+    other, with nothing in either half to tell them which they were in. That is
+    a defect on its own terms, and #81 is what surfaced it.
+
+    A value that is SET BUT UNUSABLE returns None rather than falling through to
+    the PATH search. Falling through would make the variable advisory, which is
+    the same defect wearing a smaller hat: the caller named a specific binary
+    and would silently get a different one. ``resolve_claude_bin`` already
+    refuses that way -- it returns None and a reason -- and the whole point of
+    this change is that the two agree.
+    """
+    env_bin = os.environ.get("CADRE_CLAUDE_BIN")
+    if env_bin:
+        if os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
+            return env_bin
+        return None
     c = shutil.which("claude")
     if c:
         return c
