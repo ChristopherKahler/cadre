@@ -53,6 +53,35 @@ jobs:
           python-version: "3.12"
       - name: Install
         run: python -m pip install -e ".[dev]" || python -m pip install -e . pytest
+      # Issue #100. Two of the claude fence's four dynamic arms assert that all
+      # three resolvers return None, and A HOST WITH NO CLAUDE SATISFIES THAT
+      # WHETHER THE FENCE WORKS OR HAS BEEN DELETED OUTRIGHT. On every runner
+      # they ran, passed, and measured nothing -- including the one arm written
+      # for the exact #81 regression, consults-then-falls-through.
+      #
+      # Measured as a 2x2 before this step existed, reading what a CHILD
+      # interpreter resolves:
+      #
+      #   no claude anywhere            fence ON        arm passes
+      #   no claude anywhere            fence DELETED   arm passes  <- vacuous
+      #   decoy at ~/.local/bin/claude  fence ON        arm passes  <- the real one
+      #   decoy at ~/.local/bin/claude  fence DELETED   arm FAILS   <- now catches it
+      #
+      # The arms were never wrong. The runner was empty. So this gives the
+      # runner something the resolvers WOULD return, and the script then checks
+      # BOTH halves itself -- that the decoy is reachable unfenced, and that the
+      # fence still refuses it -- rather than trusting that writing a file
+      # worked. A setup step that silently does nothing is the same defect as
+      # the arms it repairs.
+      #
+      # It also makes the file's two honest skips stop skipping, so all four
+      # dynamic arms measure something here. The skips and assertions are
+      # untouched: the fix is to stop lying to the suite about the host, not to
+      # loosen what the suite checks.
+      - name: Give CI a claude to find, and prove the fence still hides it
+        run: python scripts/install-ci-claude-decoy.py
+        env:
+          PYTHONPATH: src
       # -o addopts=... overrides pyproject's own "-ra -q" rather than adding
       # to it. Passing -q here as well gives pytest two of them, and the second
       # suppresses the summary line. The count was never truly lost, since it
