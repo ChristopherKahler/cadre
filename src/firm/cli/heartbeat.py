@@ -9,7 +9,10 @@ The mechanism is the platform scheduler behind ``firm.sched`` — systemd user
 timers on Linux/WSL2, launchd LaunchAgents on macOS, Task Scheduler on
 Windows. Runtime environment (claude binary, notify tokens) is captured at
 enable time from the process env plus the workspace ``.env`` — re-run
-``enable`` after rotating tokens.
+``enable`` after rotating tokens. The pulse itself adds the rest when it
+starts (``firm.pulse.environment``): the full PATH, and the firm's notify
+token from the vault when the unit carries none — so no unit needs re-enabling
+for either.
 """
 
 from __future__ import annotations

@@ -13,6 +13,7 @@ holds the lock — a submitted turn never silently fizzles.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import signal
@@ -25,6 +26,7 @@ from typing import Any
 
 from firm.core.db import connect, db_is_remote, get_db_path, resolve_firm_id
 from firm.pulse import dblock
+from firm.pulse.environment import pulse_environment
 from firm.pulse.orchestrator import pulse
 from firm.pulse.runner import make_runner
 from firm.pulse.spawn import _active_pids
@@ -84,6 +86,23 @@ def run_pulse(
     finally:
         rconn.close()
 
+    # The pulse makes its own environment whole before anything below resolves
+    # a tool or a token: a timer unit starts it with systemd's bare PATH and
+    # without the firm vault, so the notify rail and the preflight both failed
+    # on every unattended pulse (#107). A dry run spawns nothing and probes
+    # nothing, so it keeps the environment it was given.
+    environment = (contextlib.nullcontext() if dry_run
+                   else pulse_environment(workspace, db_path, firm_id))
+    with environment:
+        return _run_resolved(workspace, db_path, firm_id, dry_run=dry_run,
+                             only=only, drain_queue=drain_queue)
+
+
+def _run_resolved(
+    workspace: Path, db_path: Path, firm_id: str, *,
+    dry_run: bool, only: str | None, drain_queue: bool,
+) -> int:
+    """The rest of ``run_pulse``, once the firm is known."""
     # Preflight: don't spawn N doomed subprocesses (and write N failed
     # member_run rows) when the Member runtime isn't wired at all.
     if not dry_run:
