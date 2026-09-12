@@ -69,3 +69,75 @@ def _no_ambient_base(monkeypatch):
 def _hermetic_secrets(tmp_path, monkeypatch):
     monkeypatch.setenv("CADRE_SECRETS_PROVIDER", "local")
     monkeypatch.setenv("CADRE_HOME", str(tmp_path / "cadre-home-default"))
+
+
+@pytest.fixture(autouse=True)
+def _no_test_can_spawn_a_claude_agent(tmp_path, monkeypatch):
+    """No test boots a real Claude agent -- in this process OR in a child.
+
+    THE DEFECT (issue #81). The suite spawned a real ``claude`` carrying
+    ``--dangerously-skip-permissions``, parented by pytest, running out of a
+    pytest temp directory. It took a relay title and answered a ping addressed
+    to another session. It also spends the operator's tokens on every run of
+    this suite.
+
+    WHY AN ENV VAR AND NOT A ``PATH`` SCRUB, and this is the half that is easy
+    to get wrong. Measured at a489230:
+
+        PATH=/nonexistent python -c "...resolve_claude_bin()"
+        -> ('/home/<user>/.local/bin/claude', 'PATH resolution: ...')
+
+    ``resolve_claude_bin`` appends ``~/.local/bin`` UNCONDITIONALLY, *after* the
+    PATH walk (spawn.py). So a fixture that sanitises PATH looks exactly like a
+    fence and is not one, and it fails SILENTLY -- which is the failure mode
+    this whole issue is about. Pointing ``CADRE_CLAUDE_BIN`` at a file that is
+    not executable short-circuits the resolver BEFORE the PATH walk and before
+    that append, and #81 made ``dashboard.launch._which_claude`` honour the same
+    variable so both resolvers stop at the same gate.
+
+    AND IT IS AN ENV VAR BECAUSE ENV REACHES CHILDREN. The agent that was caught
+    was a CHILD of pytest. ``_no_ambient_base`` above says it plainly: an
+    in-process monkeypatch does not exist in a child interpreter. An env var is
+    inherited, so this fence crosses the process boundary the breach crossed.
+
+    NOT AN EXECUTABLE STUB, deliberately. ``_is_execable`` accepts anything with
+    a shebang, so a "refusing" stub script would be RETURNED as the binary and
+    then actually spawned -- louder than silence, but still a spawn. Unfindable
+    beats loud.
+
+    HOME IS NOT TOUCHED, for the reason ``_base_home_is_never_the_operators``
+    gives above. That one already cost an afternoon.
+
+    A test that WANTS a resolvable claude sets ``CADRE_CLAUDE_BIN`` itself or
+    stubs the resolver, exactly as the base fence intends -- an autouse fixture
+    runs first, so the test's own monkeypatch still wins.
+    """
+    unusable = tmp_path / "no-claude-here"
+    unusable.write_text(
+        "Not an executable. CADRE_CLAUDE_BIN points here during the test suite\n"
+        "so that no test can resolve, and therefore spawn, a real Claude agent.\n"
+        "See tests/conftest.py and issue #81.\n",
+        encoding="utf-8")
+    unusable.chmod(0o644)
+    monkeypatch.setenv("CADRE_CLAUDE_BIN", str(unusable))
+
+
+# NO IN-PROCESS STUB OF `_which_claude`, AND THAT IS MEASURED, NOT PREFERRED.
+#
+# A second layer that monkeypatched `firm.dashboard.launch._which_claude` to
+# None was written, tried, and removed. It SHADOWS the function that
+# tests/test_launch.py stubs and asserts on, so those tests stop exercising the
+# real resolver and start exercising the fence. Bisected on tests/test_launch.py
+# at a489230, one file, four conditions:
+#
+#     product fix only, no fixture     9 passed
+#     this fixture only, no product fix    4 failed, 5 passed
+#     both                             4 failed, 5 passed
+#     pristine main                    9 passed
+#
+# The in-process stub alone accounted for all four failures and the product fix
+# alone accounted for none. It was also redundant: since #81 made
+# `_which_claude` honour CADRE_CLAUDE_BIN, the env var above closes BOTH
+# resolvers, in this process and in every child -- which the in-process stub
+# never could. A redundant lock that breaks the tests of the door it locks is
+# not belt and braces, it is a second failure mode.

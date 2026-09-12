@@ -32,6 +32,15 @@ _REAL_WINDOWS = sys.platform == "win32"
 @pytest.fixture
 def spawn(monkeypatch):
     calls = {}
+    # OPT OUT OF THE SUITE-WIDE CLAUDE FENCE. tests/conftest.py points
+    # CADRE_CLAUDE_BIN at a non-executable file so that no test can resolve, and
+    # therefore spawn, a real agent (issue #81). Since #81, `_which_claude`
+    # consults that variable FIRST and short-circuits, so a test that stubs
+    # `shutil.which` and expects the resolver to reach it must clear the fence
+    # deliberately. Exactly the contract the base fence already states: a test
+    # that wants the real thing asks for it, and an autouse fixture runs first
+    # so this still wins.
+    monkeypatch.delenv("CADRE_CLAUDE_BIN", raising=False)
     monkeypatch.setattr(launch.shutil, "which", lambda name: f"/fake/{name}")
     monkeypatch.setattr(launch.subprocess, "Popen",
                         lambda argv, **kw: calls.setdefault("argv", argv))
@@ -55,6 +64,9 @@ def test_no_claude_is_a_clean_refusal(monkeypatch, tmp_path):
 
 
 def test_no_terminal_is_a_clean_refusal(monkeypatch, tmp_path):
+    # See the `spawn` fixture: this stubs `shutil.which` too, so it opts out of
+    # the CADRE_CLAUDE_BIN fence for the same reason.
+    monkeypatch.delenv("CADRE_CLAUDE_BIN", raising=False)
     monkeypatch.setattr(launch.shutil, "which",
                         lambda name: "/fake/claude" if name == "claude" else None)
     monkeypatch.setattr(launch.glob, "glob", lambda pattern: [])
