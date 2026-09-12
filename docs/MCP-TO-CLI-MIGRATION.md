@@ -8,19 +8,17 @@ this document (ENGINEERING.md:259).
 | Phase | State | What is actually true |
 |---|---|---|
 | 1. Proof verb | **done** | `firm escalation raise` shipped and is in use. |
-| 2. Convert the remaining writes | **partial, 6 of 18** | `tools.py` carries 37 `@mcp.tool()` functions: 19 read, 18 write. Six write tools have a Member-facing CLI equivalent today — `firm_escalate`, `firm_create_unit`, `firm_complete_unit`, `firm_create_document`, `firm_request_gate`, `firm_update_goal_metric`. **Twelve remain MCP-only** (checkout/release unit, create comment/member/operation/project, propose goal, propose hire, resolve escalation, update document, update goal, update member). The old line here said "convert the remaining 20" and read as though it had run; it had not. |
+| 2. Convert the remaining writes | **partial, 7 of 18** | `tools.py` carries 37 `@mcp.tool()` functions: 19 read, 18 write. Seven write tools have a Member-facing CLI equivalent today — `firm_escalate`, `firm_create_unit`, `firm_complete_unit`, `firm_create_document`, `firm_request_gate`, `firm_update_goal_metric`, and `firm_propose_goal` (`firm goal propose`, added 2026-09-12 for issue #17). **Eleven remain MCP-only** (checkout/release unit, create comment/member/operation/project, propose hire, resolve escalation, update document, update goal, update member). The old line here said "convert the remaining 20" and read as though it had run; it had not. |
 | 3. Contract migration | **partial — the framework surface is done, firm databases are not** | Every Member-facing text the framework ships now names CLI verbs: the execution directive (`pulse/prompt.py`), the charter the wire step writes (`dashboard/wiring.py`), the boardroom template, and the `authority.py` / `gate.py` hint strings. Pinned by `tests/test_prompt_verbs_resolve.py` and `tests/test_member_facing_text_names_real_verbs.py`, which resolve every verb those surfaces name through `--help`. **Not done:** contracts already written into the twelve firm databases are untouched. |
 | 4. Retire MCP | **not started** | `firm/mcp/` is intact and six of twelve firms still declare a `firm` server. |
 | 5. Docs | **not started** | The ENGINEERING.md write-surface section still describes the MCP-era surface. |
 
-**The one gap that still bites a Member.** `firm_propose_goal`
-(`mcp/tools.py:378`) calls `gate.request_gate` with action `create-goal`, so
-proposing a Goal is a **second** member-facing route into the Gate service and
-it has no CLI verb. A Member in a firm without the firm MCP can now escalate,
-queue a Unit, register a deliverable and request a Gate, but still cannot
-propose a Goal. That verb (`firm goal propose`) is deliberately out of the
-member-write-surface lane and is named here so the next reader finds it without
-re-deriving it.
+**Goal proposal, closed 2026-09-12 (issue #17).** `firm_propose_goal` raises a
+`create-goal` Gate, a second member-facing route into the Gate service, and it
+had no CLI verb, so a Member in a firm without the firm MCP could not propose a
+Goal. `firm goal propose` now does, through `services.goal.propose_goal`, the
+same service the MCP tool calls. `firm goal create` refuses any identified
+Member and points it at `firm goal propose`.
 
 **Owner:** Board engineering seat.
 **Why now:** ESC-010 (dnd-table) — the firm MCP server launches via a `wsl.exe`

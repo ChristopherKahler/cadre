@@ -115,7 +115,7 @@ prompt_keywords = [
 file_keywords = [".firm/"]
 rules = [
     "This is a Cadre firm. The firm's own database is .firm/firm.db and it is reached through the `firm` CLI, never opened directly.",
-    "Queue follow-up work with `firm unit create`, register a deliverable with `firm doc register`, close your own work with `firm unit complete`, and raise anything above your authority with `firm escalation raise`. These verbs exist in every firm.",
+    "Queue follow-up work with `firm unit create`. A Member finishes a Unit by registering its deliverable with `firm doc register --unit <UNIT-id> --path <file>`, and the pulse marks the Unit done from that; `firm unit complete` is the Board's own close. Raise a blocker, or anything above your authority, with `firm escalation raise`. These verbs exist in every firm.",
     "Write what you learned back before you finish: `base learn --domain <project> --entity <member> --text \"...\"` for something the whole project needs, or `--domain <firm>` for something the firm needs.",
 ]
 

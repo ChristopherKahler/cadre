@@ -69,6 +69,18 @@ BLANKET = "*"
 #: the anchor the guard's extractor keys on.
 ESCALATE_HINT = 'escalate via: `firm escalation raise --title "<one line>"`'
 
+#: What a Member is told when it tries to close its own Unit. The pulse, not the
+#: Member, closes a Unit (pulse/runner.py, step 13), from the deliverable
+#: registered against it during the run, and registering is not gated. Sending
+#: the Member to the Board instead asked the Board for a close the pulse makes
+#: by itself once the Member does the one thing it can do (#106). Escalating
+#: stays in the line for the Member that is really blocked.
+UNIT_COMPLETE_HINT = (
+    "the pulse closes your Unit once its deliverable is registered: "
+    "`firm doc register --unit <UNIT-id> --path <file>` (blocked instead? "
+    '`firm escalation raise --title "<one line>"`)'
+)
+
 #: True while the harness is acting on its own behalf inside a Member run's
 #: process tree. See :func:`system_context`.
 _system_actor: contextvars.ContextVar[bool] = contextvars.ContextVar(
@@ -141,8 +153,13 @@ def has_authority(conn: sqlite3.Connection, member_id: str) -> bool:
     return _holds(sovereign_capabilities(conn, member_id))
 
 
-def require_authority(conn: sqlite3.Connection, action: str) -> str | None:
+def require_authority(
+    conn: sqlite3.Connection, action: str, *, hint: str = ESCALATE_HINT,
+) -> str | None:
     """Gate *action* on the caller's authority key.
+
+    *hint* is the next move a denied Member is handed. Escalating is the
+    default; an action with a better route of its own names that instead.
 
     Returns the acting Member's ID, or None when the caller has no identity
     (which always passes).
@@ -156,7 +173,7 @@ def require_authority(conn: sqlite3.Connection, action: str) -> str | None:
     if not has_authority(conn, member_id):
         raise AuthorityError({
             "error": "authority_required",
-            "hint": ESCALATE_HINT,
+            "hint": hint,
             "action": action,
         })
     return member_id

@@ -3,11 +3,12 @@
 Two things the unit tests cannot show on their own:
 
 1. The runner is the completion authority (seam-4). It must complete a
-   validated Unit even when the pulse process itself carries a Member
-   identity, which happens the moment a Member (which has a shell) fires a
-   pulse.
-2. The denial is actionable: a Member told to "escalate via: `firm escalation raise --title \"<one line>\"`"
-   must actually be able to escalate. If that path were gated too, the hint
+   Unit whose run registered its deliverable even when the pulse process
+   itself carries a Member identity, which happens the moment a Member
+   (which has a shell) fires a pulse.
+2. The denial is actionable: a Member refused `firm unit complete` is told to
+   register its deliverable, or to escalate if it is blocked, and must
+   actually be able to do both. If either path were gated too, the hint
    would be a dead end.
 """
 
@@ -25,6 +26,7 @@ from firm.pulse.runner import make_runner
 from firm.pulse.spawn import SpawnResult, spawn_member_run
 from firm.seed import seed_chrisai
 from firm.services.authority import AuthorityError, grant_authority
+from firm.services.document import register_deliverable
 from firm.services.escalation import raise_escalation
 from firm.services.unit import complete_unit
 
@@ -57,6 +59,17 @@ def _mock_spawn_result(text="Done. AC-1 satisfied.", cost=0.08):
     return SpawnResult(
         returncode=0, stdout="\n".join(lines), stderr="", pid=1, timed_out=False,
     )
+
+
+def _registers_its_deliverable(conn, tmp_path, *, member_id="MEM-001"):
+    """A run that does what the prompt teaches: register the deliverable
+    against its Unit. The harness closes the Unit from that registration."""
+    def _spawn(*_args, **_kwargs):
+        path = tmp_path / "post.md"
+        path.write_text("the post")
+        register_deliverable(conn, "chrisai", "UNT-001", str(path), member_id=member_id)
+        return _mock_spawn_result()
+    return _spawn
 
 
 # ---------------------------------------------------------------------------
@@ -106,37 +119,41 @@ def test_spawn_receives_the_running_members_id(mock_spawn) -> None:
 
 
 @mock.patch("firm.contracts.claude_code.spawn_member_run")
-def test_runner_completes_unit_for_member_without_the_key(mock_spawn) -> None:
-    # The member holds NO key, yet its validated run still completes: the
+def test_runner_completes_unit_for_member_without_the_key(
+    mock_spawn, tmp_path,
+) -> None:
+    # The member holds NO key, yet its run still completes its Unit: the
     # harness completes it, not the model. Gating complete_unit must not
     # break the normal pulse.
-    mock_spawn.return_value = _mock_spawn_result()
     conn = _fresh_conn()
     seed_chrisai(conn)
+    mock_spawn.side_effect = _registers_its_deliverable(conn, tmp_path)
 
     result = make_runner("chrisai", "/tmp")(conn, get(conn, "member", "MEM-001"))
 
     assert result["status"] == "completed"
     assert result["validation_passed"] is True
+    assert get(conn, "unit", "UNT-001")["status"] == "done"
 
 
 @mock.patch("firm.contracts.claude_code.spawn_member_run")
 def test_runner_completes_even_when_pulse_inherits_a_member_identity(
-    mock_spawn, monkeypatch: pytest.MonkeyPatch,
+    mock_spawn, tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # A Member has a shell and can fire `firm pulse`; that pulse process then
     # carries CADRE_MEMBER_ID. Without system_context() the harness would
     # deny its own completion and every future pulse would re-dispatch the
     # same finished work.
-    mock_spawn.return_value = _mock_spawn_result()
     conn = _fresh_conn()
     seed_chrisai(conn)
     monkeypatch.setenv("CADRE_MEMBER_ID", "MEM-002")  # a *different* member
+    mock_spawn.side_effect = _registers_its_deliverable(conn, tmp_path)
 
     result = make_runner("chrisai", "/tmp")(conn, get(conn, "member", "MEM-001"))
 
     assert result["status"] == "completed"
     assert result["validation_passed"] is True
+    assert get(conn, "unit", "UNT-001")["status"] == "done"
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +181,8 @@ def test_gm_with_key_drives_complete_unit(
     assert get(conn, "unit", unit)["status"] == "done"
 
 
-def test_sibling_without_key_is_denied_and_can_escalate(
-    monkeypatch: pytest.MonkeyPatch,
+def test_sibling_without_key_is_denied_and_can_take_the_route_it_is_told(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
 ) -> None:
     conn = _fresh_conn()
     _gm, sib, unit = _two_members(conn)
@@ -174,11 +191,21 @@ def test_sibling_without_key_is_denied_and_can_escalate(
     with pytest.raises(AuthorityError) as exc:
         complete_unit(conn, "chrisai", unit, sib)
 
-    assert exc.value.payload["hint"] == "escalate via: `firm escalation raise --title \"<one line>\"`"
+    hint = exc.value.payload["hint"]
+    assert "`firm doc register --unit <UNIT-id> --path <file>`" in hint
+    assert "`firm escalation raise --title \"<one line>\"`" in hint
     assert get(conn, "unit", unit)["status"] != "done"  # nothing happened
 
-    # The hint must be honest: escalating is NOT gated, so the denied member
-    # has a real next move rather than a dead end.
+    # The hint must be honest: registering is NOT gated, so the denied member
+    # can hand the harness the evidence it closes the Unit from.
+    deliverable = tmp_path / "post.md"
+    deliverable.write_text("the post")
+    registered = register_deliverable(
+        conn, "chrisai", unit, str(deliverable), member_id=sib,
+    )
+    assert registered["action"] == "created"
+
+    # Nor is escalating, for the member that is really blocked.
     raised = raise_escalation(conn, "chrisai", {
         "raised_by_member_id": sib,
         "title": "Cannot complete UNIT — no authority",

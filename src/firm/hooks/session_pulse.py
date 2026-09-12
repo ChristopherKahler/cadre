@@ -200,6 +200,16 @@ _GATES_BEHAVIOR = (
     "Use /gate:decide {id} approve|reject \"{comment}\" to act."
 )
 
+#: The block as a Member sees it: in its run prompt (pulse/prompt.py reuses this
+#: renderer), and from the SessionStart hook, which fires inside its run too.
+#: Deciding a Gate is Board-only, so /gate:decide refuses every Member (#106).
+_GATES_BEHAVIOR_FOR_MEMBERS = (
+    "BEHAVIOR: This context is PASSIVE AWARENESS ONLY.\n"
+    "Do NOT proactively mention pending gates unless the user asks about approvals\n"
+    "OR a gate is expired and unacknowledged this session.\n"
+    "Only the Board approves or rejects a Gate; a Member cannot decide one."
+)
+
 
 def _render_gate_line(
     conn: sqlite3.Connection, row: sqlite3.Row, now: datetime
@@ -233,8 +243,15 @@ def render_pending_gates(
     conn: sqlite3.Connection,
     firm_id: str,
     now: datetime | None = None,
+    *,
+    for_board: bool = False,
 ) -> str | None:
-    """Render the ``<pending-gates>`` block. Silent (None) when zero pending Gates."""
+    """Render the ``<pending-gates>`` block. Silent (None) when zero pending Gates.
+
+    *for_board* picks the Board's wording, which names a Board-only command.
+    The default is the wording a Member can follow, because a Member's run
+    prompt reuses this renderer.
+    """
     rows = conn.execute(_PENDING_GATES_SQL, (firm_id,)).fetchall()
     if not rows:
         return None
@@ -256,7 +273,7 @@ def render_pending_gates(
             lines.append(_render_gate_line(conn, r, now=ref))
 
     lines.append("")
-    lines.append(_GATES_BEHAVIOR)
+    lines.append(_GATES_BEHAVIOR if for_board else _GATES_BEHAVIOR_FOR_MEMBERS)
     lines.append("</pending-gates>")
     return "\n".join(lines)
 
@@ -295,6 +312,21 @@ _GOAL_BEHAVIOR = (
     "v1 metrics are manually refreshed (no auto-polling). Stale metric.current reflects\n"
     "last manual update; do not infer actual progress from injection alone. Refresh with\n"
     "`cadre goal update <id> --current <value>` (CLI) or firm_update_goal_metric (MCP)."
+)
+
+#: The block as a Member sees it, as above. Refreshing a metric needs the
+#: authority key (goal.update_metric), which no founded Member holds (#106), so a
+#: Member reports a newer value to the Board instead. The escalation names the
+#: goal as its target: the pulse reads an escalation with no target, raised
+#: during a run, as the Member saying it is blocked, and parks its Unit
+#: (pulse/runner.py, _judge_closeout).
+_GOAL_BEHAVIOR_FOR_MEMBERS = (
+    "BEHAVIOR: This context is PASSIVE AWARENESS ONLY.\n"
+    "v1 metrics are manually refreshed (no auto-polling). Stale metric.current reflects\n"
+    "last manual update; do not infer actual progress from injection alone. The Board\n"
+    "refreshes metrics. If you measured a newer value, report it against the goal:\n"
+    "`firm escalation raise --title \"<GOAL-id> is now <value>\" --target-type goal "
+    "--target-id <GOAL-id>`."
 )
 
 _LEVEL_HEADERS = {
@@ -370,8 +402,13 @@ def render_goal_health(
     conn: sqlite3.Connection,
     firm_id: str,
     now: datetime | None = None,
+    *,
+    for_board: bool = False,
 ) -> str | None:
-    """Render the ``<goal-health>`` block. Silent (None) when zero active Goals."""
+    """Render the ``<goal-health>`` block. Silent (None) when zero active Goals.
+
+    *for_board* picks the Board's wording, as in :func:`render_pending_gates`.
+    """
     rows = conn.execute(_GOAL_HEALTH_SQL, (firm_id,)).fetchall()
     if not rows:
         return None
@@ -390,7 +427,7 @@ def render_goal_health(
         lines.append(_render_goal_line(conn, r, now=ref))
 
     lines.append("")
-    lines.append(_GOAL_BEHAVIOR)
+    lines.append(_GOAL_BEHAVIOR if for_board else _GOAL_BEHAVIOR_FOR_MEMBERS)
     lines.append("</goal-health>")
     return "\n".join(lines)
 
@@ -493,10 +530,16 @@ def render(
     roster = render_active_roster(conn, firm_id)
     if roster:
         parts.append(roster)
-    gates = render_pending_gates(conn, firm_id, now=now)
+    # The hook fires in the Board's own sessions and inside every Member run,
+    # where the spawn stamps CADRE_MEMBER_ID. Only the Board gets the Board's
+    # wording; a Member gets the commands it can run (#106).
+    from firm.services.authority import caller_member_id
+
+    for_board = caller_member_id() is None
+    gates = render_pending_gates(conn, firm_id, now=now, for_board=for_board)
     if gates:
         parts.append(gates)
-    goals = render_goal_health(conn, firm_id, now=now)
+    goals = render_goal_health(conn, firm_id, now=now, for_board=for_board)
     if goals:
         parts.append(goals)
     budget = render_budget_health(conn, firm_id)
