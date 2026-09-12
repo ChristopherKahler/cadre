@@ -59,6 +59,27 @@ def get_notify_config(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any] 
     return cfg if isinstance(cfg, dict) else None
 
 
+def token_env_name(cfg: dict[str, Any]) -> str | None:
+    """The environment variable holding this firm's notify credential — the
+    bot token, or for a webhook the URL itself, since anyone holding it can
+    post — or None for an unknown provider.
+
+    One answer for every reader: the rail check, delivery, and the pulse that
+    fills the variable from the firm's stores when it starts
+    (``firm.pulse.environment``), so the token is put where the rail looks.
+    """
+    provider = cfg.get("provider", "slack")
+    if provider == "slack":
+        # `token_env` is the documented key; firms seeded with `slack_token_env`
+        # (chief-of-staff among them) had their override silently ignored — accept both.
+        return cfg.get("token_env") or cfg.get("slack_token_env") or DEFAULT_TOKEN_ENV
+    if provider == "telegram":
+        return cfg.get("telegram_token_env", DEFAULT_TELEGRAM_ENV)
+    if provider == "webhook":
+        return cfg.get("webhook_url_env", DEFAULT_WEBHOOK_ENV)
+    return None
+
+
 def rail_health(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
     """Cheap, side-effect-free-as-possible resolvability check for the rail.
 
@@ -78,7 +99,7 @@ def rail_health(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
         if provider == "slack":
             if not cfg.get("slack_user_id"):
                 return {"ok": False, "reason": "notify_config.slack_user_id missing"}
-            token_env = cfg.get("token_env") or cfg.get("slack_token_env") or DEFAULT_TOKEN_ENV
+            token_env = token_env_name(cfg)
             token = os.environ.get(token_env)
             if not token:
                 return {"ok": False, "reason": f"token env {token_env} unset in this process"}
@@ -90,7 +111,7 @@ def rail_health(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
             return {"ok": False, "reason": f"slack auth.test error: {result.get('error', 'unknown')}"}
 
         if provider == "webhook":
-            url_env = cfg.get("webhook_url_env", DEFAULT_WEBHOOK_ENV)
+            url_env = token_env_name(cfg)
             if not os.environ.get(url_env):
                 return {"ok": False, "reason": f"webhook env {url_env} unset in this process"}
             return {"ok": True, "reason": "webhook url present (unverified — webhooks have no read-only probe)"}
@@ -98,7 +119,7 @@ def rail_health(conn: sqlite3.Connection, firm_id: str) -> dict[str, Any]:
         if provider == "telegram":
             if not cfg.get("telegram_chat_id"):
                 return {"ok": False, "reason": "notify_config.telegram_chat_id missing"}
-            token_env = cfg.get("telegram_token_env", DEFAULT_TELEGRAM_ENV)
+            token_env = token_env_name(cfg)
             token = os.environ.get(token_env)
             if not token:
                 return {"ok": False, "reason": f"token env {token_env} unset in this process"}
@@ -159,9 +180,7 @@ def send_board_dm(
             user_id = cfg.get("slack_user_id")
             if not user_id:
                 return {"sent": False, "reason": "notify_config.slack_user_id missing"}
-            # `token_env` is the documented key; firms seeded with `slack_token_env`
-            # (chief-of-staff among them) had their override silently ignored — accept both.
-            token_env = cfg.get("token_env") or cfg.get("slack_token_env") or DEFAULT_TOKEN_ENV
+            token_env = token_env_name(cfg)
             token = os.environ.get(token_env)
             if not token:
                 return {"sent": False, "reason": f"token env {token_env} unset in this process"}
@@ -175,7 +194,7 @@ def send_board_dm(
             return {"sent": False, "reason": f"slack error: {result.get('error', 'unknown')}"}
 
         if provider == "webhook":
-            url_env = cfg.get("webhook_url_env", DEFAULT_WEBHOOK_ENV)
+            url_env = token_env_name(cfg)
             url = os.environ.get(url_env)
             if not url:
                 return {"sent": False, "reason": f"webhook env {url_env} unset in this process"}
@@ -188,7 +207,7 @@ def send_board_dm(
             chat_id = cfg.get("telegram_chat_id")
             if not chat_id:
                 return {"sent": False, "reason": "notify_config.telegram_chat_id missing"}
-            token_env = cfg.get("telegram_token_env", DEFAULT_TELEGRAM_ENV)
+            token_env = token_env_name(cfg)
             token = os.environ.get(token_env)
             if not token:
                 return {"sent": False, "reason": f"token env {token_env} unset in this process"}

@@ -2105,34 +2105,6 @@ def _firm_get(
     _http_send(h, 404, {"error": "not found"})
 
 
-def _slack_token_from_workspace(workspace: Path) -> str | None:
-    """Best-effort Slack bot token for Board notifications — the vault is the
-    home for it now; the .mcp.json regex remains as the legacy fallback for
-    firms that predate the vault and still carry the token inline.
-
-    The vault's canonical key is ``CADRE_SLACK_BOT_TOKEN`` (the ``xoxb`` bot
-    token ``chat.postMessage`` needs); ``CADRE_SLACK_TOKEN`` is the legacy
-    inline name. Resolving only the legacy key left chief-of-staff's Board
-    notify pipe dark across 20 escalations — the token was in the vault the
-    whole time, under the name this never looked for. Try both."""
-    try:
-        from firm.secrets.provider import resolve_provider
-        env = resolve_provider().resolve(workspace)
-        token = env.get("CADRE_SLACK_BOT_TOKEN") or env.get("CADRE_SLACK_TOKEN")
-        if token:
-            return token
-    except Exception:
-        pass
-    mcp = workspace / ".mcp.json"
-    if not mcp.exists():
-        return None
-    m = re.search(
-        r"CADRE_SLACK_(?:BOT_)?TOKEN=([^\s\"']+)",
-        mcp.read_text(encoding="utf-8", errors="replace"),
-    )
-    return m.group(1) if m else None
-
-
 def _venv_python(workspace: Path) -> str:
     """The firm's OWN venv interpreter, never the hub's — a hub started from
     one firm's venv must not run another firm's pulse with the wrong package
@@ -2145,34 +2117,6 @@ def _venv_python(workspace: Path) -> str:
     return sys.executable
 
 
-def _pulse_path(workspace: Path) -> str:
-    """A full PATH for the dispatched pulse.
-
-    systemd ``--user`` starts with a BARE PATH (no ``~/.local/bin``, no
-    ``.firm/bin``). After a host/WSL restart the detached pulse then can't
-    resolve firm tools and every member skips (ESC-008/009/010/015), with the
-    only unblock being a manual ``systemctl --user import-environment PATH``.
-    Carry a real PATH onto the dispatch so neither the preflight nor the member
-    spawns ever run bare — firm-local dirs first, then the inherited PATH, then a
-    system floor in case the hub's own PATH was thin.
-    """
-    home = Path.home()
-    lead = [str(home / ".local" / "bin"), str(workspace / ".firm" / "bin")]
-    base_bin = shutil.which("base")
-    if base_bin:
-        lead.insert(0, str(Path(base_bin).parent))
-    floor = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin",
-             "/sbin", "/bin"]
-    ordered: list[str] = []
-    seen: set[str] = set()
-    for chunk in lead + [os.environ.get("PATH") or ""] + floor:
-        for seg in chunk.split(os.pathsep):
-            if seg and seg not in seen:
-                seen.add(seg)
-                ordered.append(seg)
-    return os.pathsep.join(ordered)
-
-
 def _fire_pulse(
     workspace: Path, firm_id: str, only: str | None = None,
 ) -> dict[str, Any]:
@@ -2180,6 +2124,7 @@ def _fire_pulse(
     member runs survive this HTTP request (a pulse blocks until its slowest
     member finishes; never run it inside a request thread). With *only*, a
     Board-targeted pulse activating a single Member."""
+    from firm.pulse.environment import pulse_path
     from firm.sched import resolve_scheduler
 
     unit = f"pulse-{firm_id}-{int(time.time())}"
@@ -2190,13 +2135,17 @@ def _fire_pulse(
         claude_bin, _ = resolve_claude_bin()
     if claude_bin:
         env["CADRE_CLAUDE_BIN"] = claude_bin
-    token = _slack_token_from_workspace(workspace)
-    if token:
-        env["CADRE_SLACK_TOKEN"] = token
+    # No notify token rides on the dispatch. The pulse fills the one its rail
+    # reads from the firm's own stores when it starts, exactly as a timer pulse
+    # does (firm.pulse.environment), so a token never goes onto the systemd-run
+    # command line or into the transient unit. Forwarding only the Slack token
+    # from here is what left Telegram firms' rails dark on Pulse now (#107).
+    #
     # systemd --user starts with a bare PATH — carry a full one so the dispatched
     # pulse (preflight + member spawns) resolves firm tools without a manual
-    # `systemctl --user import-environment PATH` after a host restart.
-    env["PATH"] = _pulse_path(workspace)
+    # `systemctl --user import-environment PATH` after a host restart. The pulse
+    # applies the same PATH itself; this keeps the wrapper process whole too.
+    env["PATH"] = pulse_path(workspace)
 
     pulse_argv = [
         _venv_python(workspace), "-m", "firm", "pulse",

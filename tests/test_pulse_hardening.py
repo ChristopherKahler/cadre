@@ -12,13 +12,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from firm.dashboard.server import _pulse_path
+from firm.pulse.environment import pulse_path
 from firm.pulse.preflight import _fix_for
 
 
 def test_pulse_path_is_full_even_from_a_bare_env(monkeypatch, tmp_path):
     monkeypatch.setenv("PATH", "/bin")   # the bare systemd --user PATH
-    segs = _pulse_path(tmp_path).split(os.pathsep)
+    segs = pulse_path(tmp_path).split(os.pathsep)
     # the dirs a bare PATH drops are restored — this is the whole fix
     assert str(Path.home() / ".local" / "bin") in segs
     assert str(tmp_path / ".firm" / "bin") in segs

@@ -7,9 +7,12 @@ whether anything spawns — a tick that finds nothing due is a near-free no-op.
 
 The mechanism is the platform scheduler behind ``firm.sched`` — systemd user
 timers on Linux/WSL2, launchd LaunchAgents on macOS, Task Scheduler on
-Windows. Runtime environment (claude binary, notify tokens) is captured at
+Windows. The claude binary and the shared-database settings are captured at
 enable time from the process env plus the workspace ``.env`` — re-run
-``enable`` after rotating tokens.
+``enable`` after changing them. Notify credentials are never written into a
+unit: the pulse reads them itself when it starts (``firm.pulse.environment``),
+from the firm vault and then the workspace ``.env``, and adds the full PATH —
+so rotating a token needs no re-enable.
 """
 
 from __future__ import annotations
@@ -22,16 +25,21 @@ import sys
 from pathlib import Path
 
 from firm.core.db import connect, get_db_path, resolve_firm_id
+from firm.pulse.environment import read_env_file
 from firm.pulse.spawn import resolve_claude_bin
 from firm.sched import resolve_scheduler
 from firm.sched.base import SchedulerError, interval_to_seconds
 
 _UNIT_PREFIX = "cadre-heartbeat-"
 _INTERVAL_RE = re.compile(r"^\d+(s|m|min|h|d)$")
+# Notify credentials (CADRE_SLACK_TOKEN, CADRE_TELEGRAM_TOKEN,
+# CADRE_NOTIFY_WEBHOOK) are deliberately NOT captured (#107). A captured one
+# sat in plain text in the unit -- including a token the hub had loaded from a
+# firm vault into its own environment -- and, because a set variable wins over
+# the vault, it went on overriding a token the Board later rotated there. The
+# pulse reads them itself when it starts, from the vault and then this same
+# workspace .env (firm.pulse.environment.notify_token).
 _CAPTURED_ENV_KEYS = (
-    "CADRE_SLACK_TOKEN",
-    "CADRE_TELEGRAM_TOKEN",
-    "CADRE_NOTIFY_WEBHOOK",
     "CADRE_DB_URL",
     "CADRE_DB_TOKEN",
 )
@@ -56,31 +64,14 @@ def validate_interval(interval: str) -> str:
     return interval
 
 
-def _read_env_file(workspace: Path) -> dict[str, str]:
-    """KEY=VALUE pairs from the workspace .env — for embedding, not for
-    mutating this process (contrast dashboard._load_firm_env)."""
-    env_path = workspace / ".env"
-    out: dict[str, str] = {}
-    if not env_path.exists():
-        return out
-    try:
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                out[k.strip()] = v.strip().strip('"').strip("'")
-    except OSError:
-        pass
-    return out
-
-
 def capture_env(workspace: Path, firm_id: str, claude_bin: str) -> dict[str, str]:
     """Environment to bake into the service unit, captured at enable time.
 
     Process env wins over the workspace .env so an operator export can
-    override a stale file value.
+    override a stale file value. Never a notify credential — see
+    ``_CAPTURED_ENV_KEYS``.
     """
-    file_env = _read_env_file(workspace)
+    file_env = read_env_file(workspace)
     env = {"FIRM_ID": firm_id, "CADRE_CLAUDE_BIN": claude_bin}
     for key in _CAPTURED_ENV_KEYS:
         val = os.environ.get(key) or file_env.get(key)

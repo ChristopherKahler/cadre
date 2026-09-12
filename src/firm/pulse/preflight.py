@@ -125,11 +125,16 @@ def _fix_for(why: str) -> str:
                 "account is dead. Re-authenticate it (usually a re-login); no "
                 "PATH or install work is needed.")
     if "did not resolve" in w or "path" in w or "not installed" in w:
+        # Every pulse puts these directories in front of the PATH it was started
+        # with (firm.pulse.environment.pulse_path), whether a timer or Pulse now
+        # started it, so a miss means the tool is in none of them (#107).
         return ("Fix — ENVIRONMENT, not a credential (this is NOT a login "
-                "problem): the tool did not resolve on the pulse's PATH. Confirm "
-                "it is installed (commonly ~/.local/bin) and reachable on the "
-                "pulse PATH. The pulse dispatch now carries a full PATH, so a "
-                "stale systemd --user env after a host restart is the culprit.")
+                "problem): the tool did not resolve on the pulse's PATH. Every "
+                "pulse, from the timer or from Pulse now, puts ~/.local/bin and "
+                "the firm's .firm/bin in front of the PATH it started with, so "
+                "the tool is in none of the directories searched above. Install "
+                "it into ~/.local/bin or .firm/bin, or add its directory to the "
+                "PATH of whatever starts the pulse.")
     return "Fix: resolve the surface named above, then re-pulse."
 
 
