@@ -323,8 +323,20 @@ def test_the_export_follows_the_database_rather_than_reporting_a_fixed_answer(
 # ---------------------------------------------------------------------------
 
 def _tree(root: Path) -> dict[str, int]:
-    """Every file under *root*, by relative path and size. The probe."""
-    return {str(p.relative_to(root)): p.stat().st_size
+    """Every file under *root*, by relative POSIX path and size. The probe.
+
+    `as_posix()`, not `str()`. `str(PurePath)` uses the host separator, so on
+    Windows this returned "operator-tier\\escaped.json" while every comparison
+    below was written against "operator-tier/escaped.json". The product was
+    fine; the probe could not run.
+
+    Normalising HERE rather than at each call site means one place decides what
+    a path looks like. Three call sites each normalised for their `startswith`
+    test and then kept the raw separator in the value they collected, which is
+    how two of them passed on Windows only because the list they expected was
+    empty.
+    """
+    return {p.relative_to(root).as_posix(): p.stat().st_size
             for p in root.rglob("*") if p.is_file()}
 
 
@@ -357,7 +369,7 @@ def test_the_export_writes_nothing_outside_the_firms_own_workspace(tmp_path,
     changed = {p for p in set(before) | set(after)
                if before.get(p) != after.get(p)}
     inside = firm_workspace.relative_to(tmp_path).as_posix() + "/"
-    escaped = sorted(p for p in changed if not p.replace("\\", "/").startswith(inside))
+    escaped = sorted(p for p in changed if not p.startswith(inside))
     assert escaped == [], (
         f"the export changed {escaped} outside the firm's workspace "
         f"{firm_workspace}; a Cadre export must never reach the operator's own "
@@ -383,7 +395,7 @@ def test_control_the_containment_probe_detects_a_write_that_escapes(tmp_path,
     changed = {p for p in set(before) | set(after)
                if before.get(p) != after.get(p)}
     inside = firm_workspace.relative_to(tmp_path).as_posix() + "/"
-    escaped = sorted(p for p in changed if not p.replace("\\", "/").startswith(inside))
+    escaped = sorted(p for p in changed if not p.startswith(inside))
     assert escaped == ["operator-tier/escaped.json"], escaped
 
 
@@ -437,7 +449,7 @@ def test_the_export_refuses_a_manifest_path_outside_the_workspace(tmp_path,
     after = _tree(tmp_path)
     changed = {p for p in set(before) | set(after) if before.get(p) != after.get(p)}
     inside = firm_workspace.relative_to(tmp_path).as_posix() + "/"
-    escaped = sorted(p for p in changed if not p.replace("\\", "/").startswith(inside))
+    escaped = sorted(p for p in changed if not p.startswith(inside))
 
     assert escaped == [], (
         "a manifest declaring a parent-relative ingest path made the export "
