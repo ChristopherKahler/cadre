@@ -396,6 +396,71 @@ def binary_kind(path: str | None) -> str:
     return "unknown"
 
 
+# The verdict `brun` requires before it will spawn a child against a base tier.
+# Three states, and the UNSET one is the whole point: a row added ABOVE the
+# platform guard finds no verdict and is refused, rather than run against a
+# `base` nobody has classified.
+VERDICT_UNSET = None
+VERDICT_REFUSED = "refused"
+VERDICT_MAY_RUN = "may-run"
+
+
+class _Unset:
+    """Sentinel for `brun(member=...)`, because `None` is a REAL member value.
+
+    The Board-session control passes `member=None` ON PURPOSE -- it asserts that
+    a session belonging to nobody is briefed as nobody. So `None` cannot also
+    mean "no member was given" without collapsing that control into the default
+    and making it assert nothing.
+    """
+
+    def __repr__(self) -> str:
+        return "<unset>"
+
+
+_UNSET = _Unset()
+
+
+def brun_refusal(verdict, env, *, feeds_the_guard: bool = False) -> str | None:
+    """Why section 11 may NOT spawn a child right now, or None if it may.
+
+    Split out of `brun` for the same reason `skip_reason` was split out of
+    `section_may_run`: `brun` is a closure over that section's own locals and no
+    test can call it, and a refusal nobody can exercise is a refusal nobody has
+    seen work.
+
+    TWO INDEPENDENT CHECKS, and `feeds_the_guard` waives exactly one of them.
+
+    The VERDICT check asks whether the platform guard has classified the
+    resolved `base` and cleared this host. The probe that runs `base --version`
+    is what PRODUCES that verdict, so requiring it there is circular and the
+    section could never start. That call, and only that call, passes
+    `feeds_the_guard=True`.
+
+    The ENVIRONMENT check asks whether the sandbox BASE_HOME has been built, and
+    it is never waived. It does not depend on the verdict in either direction:
+    the guard classifies the BINARY, `benv` decides WHERE THAT BINARY WRITES.
+    Waiving both together would leave the earliest and least-classified `base`
+    call in this file holding the operator's ambient environment -- which is the
+    shape of the 2026-09-11 incident, a `base` invocation that reached the
+    operator's own tier while every assertion around it passed. A test asserts
+    that `feeds_the_guard` does not reach this check.
+    """
+    if not feeds_the_guard:
+        if verdict is VERDICT_UNSET:
+            return ("the platform guard has not recorded a verdict yet, so this "
+                    "child would run against a `base` nobody has classified. A "
+                    "row added above the guard is refused here, not admitted.")
+        if verdict != VERDICT_MAY_RUN:
+            return (f"the platform guard ruled {verdict!r} for this host, so "
+                    "this section may not spawn a child against its `base`.")
+    if env is None:
+        return ("the sandbox BASE_HOME environment has not been built, so this "
+                "child would inherit the operator's own base tier and write "
+                "their knowledge while every assertion here still passed.")
+    return None
+
+
 def operator_files() -> list[Path]:
     """Every operator file this run could contaminate, on BOTH platform tiers.
 
@@ -1068,7 +1133,82 @@ def main() -> int:
         # early exit did not reach, and `end_base_section` asserts the two
         # against each other on the way out.
         base_section_start = len(b.rows)
-        base_home: Path | None = None
+
+        # THE SANDBOX BASE_HOME, BUILT BEFORE THE FIRST `base` CALL RUNS.
+        #
+        # This used to be constructed a hundred lines lower, inside the branch
+        # the platform guard had already cleared -- which left `base --version`,
+        # the earliest and least-classified `base` invocation in the file,
+        # running against the operator's ambient environment. Supplying an
+        # isolated BASE_HOME does not depend on the guard's verdict in either
+        # direction: the guard classifies the BINARY, this decides WHERE THAT
+        # BINARY WRITES. Bundling the two meant the one call nobody had
+        # classified yet was also the one call with nothing underneath it.
+        #
+        # TWO TRAPS PAID FOR ALREADY, both live in these four lines.
+        #
+        # `sandbox` is tempfile.mkdtemp(), which on Windows lands under
+        # AppData\Local\Temp -- INSIDE the user profile. base's own write
+        # tripwire panics there, because `dirs` never consults $HOME on
+        # Windows and cannot tell a fake tier under the profile from the
+        # real one. So this section takes a drive-root BASE_HOME instead.
+        #
+        # And BASE_HOME is only half of it: it governs the GLOBAL tier. The
+        # WORKSPACE tier follows the CURRENT DIRECTORY. Set BASE_HOME, run from
+        # the wrong cwd, and base reads and writes the operator's own graph
+        # while every assertion here still passes. `brun` below supplies BOTH,
+        # so that no call site has to remember either.
+        base_home = (Path(Path(sys.executable).drive + "/cadre-accept-base")
+                     if IS_WIN else Path(tempfile.gettempdir()) / "cadre-accept-base")
+        shutil.rmtree(base_home, ignore_errors=True)
+        base_home.mkdir(parents=True, exist_ok=True)
+        benv = {"BASE_HOME": str(base_home), "PYTHONIOENCODING": "utf-8"}
+
+        def bmember(mid: str | None) -> dict:
+            e = dict(benv)
+            e["CADRE_MEMBER_ID"] = mid or ""
+            return e
+
+        # THE GUARD'S VERDICT, and it starts UNSET on purpose. Every `brun`
+        # above the guard is refused because this is still None.
+        base_verdict = VERDICT_UNSET
+
+        def brun(argv: list[str], *, member=_UNSET,
+                 feeds_the_guard: bool = False, **kw) -> tuple[int, str]:
+            """The ONLY way section 11 may run a child against a base tier.
+
+            Supplies `cwd` and `env` ITSELF, and refuses to accept either from
+            a caller. The issue's own constraint 5: nothing should depend on
+            sixteen call sites each remembering a convention. Isolate by making
+            the wrong thing unreachable, never by passing a root and trusting
+            the callee to use it -- a wrapper that ACCEPTED `cwd=` would be the
+            sixteen call sites again, wearing one name.
+
+            THE INVENTORY WAS NEVER SIXTEEN. Sixteen is what a grep for
+            `env=benv` and `env=bmember` finds. An AST walk of this section
+            finds nineteen child spawns, and the one the grep could not see is
+            `fire_gate`, which spelled the same convention out by hand as
+            `env={**os.environ, **bmember(mid)}`. A convention written out
+            longhand is invisible to a selector written for its usual spelling.
+
+            `member=` selects `bmember(...)`. The sentinel is load-bearing and
+            `None` cannot do its job: `member=None` is a REAL value here, the
+            Board-session control that must be briefed as nobody.
+
+            `run()` itself is untouched. This wraps it.
+            """
+            refusal = brun_refusal(base_verdict, benv,
+                                   feeds_the_guard=feeds_the_guard)
+            if refusal is not None:
+                raise RuntimeError(
+                    f"section 11 refused to spawn {argv[:2]}: {refusal}")
+            supplied = [k for k in ("cwd", "env") if k in kw]
+            if supplied:
+                raise TypeError(
+                    f"brun() supplies {' and '.join(supplied)} itself and will "
+                    "not take it from a caller; that is the whole point of it")
+            return run(argv, cwd=ws,
+                       env=benv if member is _UNSET else bmember(member), **kw)
 
         def end_base_section() -> int:
             """The ONE way out of this section.
@@ -1082,16 +1222,20 @@ def main() -> int:
             nonlocal finished
             b.assert_section(base_section_start, BASE_SECTION_ROWS,
                              "base as the engine")
-            if base_home is not None:
-                shutil.rmtree(base_home, ignore_errors=True)
+            shutil.rmtree(base_home, ignore_errors=True)
             finished = True
             return b.report()
 
-        rc, out = run(["base", "--version"])
+        # The probe whose result the guard classifies. It cannot wait for a
+        # verdict it is itself about to produce, so it waives the VERDICT
+        # check and nothing else -- `benv` is still supplied, because where
+        # this binary writes is a different question from what it is.
+        rc, out = brun(["base", "--version"], feeds_the_guard=True)
         base_path = shutil.which("base")
         base_kind = binary_kind(base_path)
         native_kind = "pe" if IS_WIN else ("macho" if sys.platform == "darwin" else "elf")
         if rc != 0:
+            base_verdict = VERDICT_REFUSED
             b.add(SKIP, "base is installed on this host",
                   "base not on PATH; the extension journey cannot be checked "
                   "here. This is a host setup fact, not a Cadre defect.")
@@ -1100,6 +1244,7 @@ def main() -> int:
                         "nothing in the base-engine section could run. "
                         "Unmeasured, not passed.")
         elif not section_may_run(base_kind, native_kind):
+            base_verdict = VERDICT_REFUSED
             # A base built for the OTHER platform still RUNS here -- WSL interop
             # executes the Windows binary quite happily -- and that is what makes
             # it dangerous rather than merely broken. It does not understand a
@@ -1125,6 +1270,9 @@ def main() -> int:
                         "operator's own tier instead of the sandbox. "
                         "Unmeasured, not passed.")
         else:
+            # THE VERDICT, recorded. Every `brun` above this line was refused;
+            # every one below it may run.
+            base_verdict = VERDICT_MAY_RUN
             b.add(PASS, "base is installed on this host", out.strip()[:80])
             b.add(PASS, "the resolved base matches this platform",
                   f"{base_path} ({base_kind})")
@@ -1143,38 +1291,19 @@ def main() -> int:
             # blind. Measured end to end on Windows first; the sequence is
             # .base-gbl/docs/2026-09-10-godwit-base-engine-journey.md.
             #
-            # TWO TRAPS PAID FOR ALREADY, both live in these four lines.
-            #
-            # `sandbox` is tempfile.mkdtemp(), which on Windows lands under
-            # AppData\Local\Temp — INSIDE the user profile. base's own write
-            # tripwire panics there, because `dirs` never consults $HOME on
-            # Windows and cannot tell a fake tier under the profile from the
-            # real one. So this section takes a drive-root BASE_HOME instead.
-            #
-            # And BASE_HOME is only half of it: it governs the GLOBAL tier.
-            # The WORKSPACE tier follows the CURRENT DIRECTORY. Set BASE_HOME,
-            # run from the wrong cwd, and base reads and writes the operator's
-            # own graph while every assertion here still passes. Every base
-            # call below therefore passes cwd=ws.
-            base_home = (Path(Path(sys.executable).drive + "/cadre-accept-base")
-                         if IS_WIN else Path(tempfile.gettempdir()) / "cadre-accept-base")
-            shutil.rmtree(base_home, ignore_errors=True)
-            base_home.mkdir(parents=True, exist_ok=True)
-            benv = {"BASE_HOME": str(base_home), "PYTHONIOENCODING": "utf-8"}
-
-            def bmember(mid: str | None) -> dict:
-                e = dict(benv)
-                e["CADRE_MEMBER_ID"] = mid or ""
-                return e
-
+            # The sandbox BASE_HOME and `benv` used to be built HERE, inside
+            # the branch the guard has already cleared. They now live at the
+            # top of the section, above the `base --version` probe, so that the
+            # earliest `base` call is isolated too. `brun` supplies both to
+            # every call below; no call site passes cwd or env any more.
             before_hash = run_start_digest
             churn_before = run_start_churn
 
             # 1. Isolation. Nothing else in this section may run until base is
             #    demonstrably reading the FIRM's tier, because if it is reading
             #    the operator's, every row below is writing their knowledge.
-            rc, out = run(["base", "scaffold", "."], cwd=ws, env=benv)
-            rc, out = run(["base", "doctor"], cwd=ws, env=benv)
+            rc, out = brun(["base", "scaffold", "."])
+            rc, out = brun(["base", "doctor"])
             reads_firm = str(ws) in out.replace("/", os.sep)
             b.add(PASS if reads_firm else FAIL,
                   "base reads the firm's own workspace tier, not the operator's",
@@ -1193,8 +1322,7 @@ def main() -> int:
             #    python -c. `read_back` is the claim that matters: install
             #    re-reads the landed file instead of trusting its own write,
             #    so "ok" alone would pass over a manifest that never landed.
-            rc, out = run([str(venv_bin(venv, "cadre")), "extension", "install"],
-                          cwd=ws, env=benv)
+            rc, out = brun([str(venv_bin(venv, "cadre")), "extension", "install"])
             landed = base_home / ".base-gbl" / "extensions" / "cadre.toml"
             wired = rc == 0 and "read back" in out and landed.exists()
             b.add(PASS if wired else FAIL,
@@ -1214,7 +1342,7 @@ def main() -> int:
             #     Every other cadre call in this section goes through the venv
             #     console script, which reaches the CLI without ever testing
             #     the manifest that is supposed to point at it.
-            rc, out = run(["base", "cadre", "--version"], cwd=ws, env=benv)
+            rc, out = brun(["base", "cadre", "--version"])
             runs = rc == 0 and "cadre" in out.lower()
             b.add(PASS if runs else FAIL,
                   "the extension's command RUNS through base, not merely installs",
@@ -1226,16 +1354,16 @@ def main() -> int:
             #    MATCHED domain carrying zero rules, silently and totally, so
             #    the block existing proves nothing. The rule count is the
             #    assertion; the block is not.
-            rc, out = run([str(vpy), "-c",
-                           "import sqlite3;"
-                           "from pathlib import Path;"
-                           "from firm.services import base_domain;"
-                           "c = sqlite3.connect('.firm/firm.db');"
-                           "c.row_factory = sqlite3.Row;"
-                           "r = base_domain.sync(Path('.').resolve(), "
-                           "__import__('firm.core.db', fromlist=['x'])"
-                           ".resolve_firm_id(c, None), conn=c);"
-                           "c.close(); print(r)"], cwd=ws, env=benv)
+            rc, out = brun([str(vpy), "-c",
+                            "import sqlite3;"
+                            "from pathlib import Path;"
+                            "from firm.services import base_domain;"
+                            "c = sqlite3.connect('.firm/firm.db');"
+                            "c.row_factory = sqlite3.Row;"
+                            "r = base_domain.sync(Path('.').resolve(), "
+                            "__import__('firm.core.db', fromlist=['x'])"
+                            ".resolve_firm_id(c, None), conn=c);"
+                            "c.close(); print(r)"])
             firm_id = None
             try:
                 with sqlite3.connect(f"file:{ws / '.firm' / 'firm.db'}?mode=ro",
@@ -1243,8 +1371,7 @@ def main() -> int:
                     firm_id = c.execute("select id from firm limit 1").fetchone()[0]
             except sqlite3.Error:
                 pass
-            rc2, out2 = run(["base", "rule", "list", "--domain", str(firm_id)],
-                            cwd=ws, env=benv)
+            rc2, out2 = brun(["base", "rule", "list", "--domain", str(firm_id)])
             live_rule = " 0 rules" not in out2 and "rules" in out2
             b.add(PASS if live_rule else FAIL,
                   "the firm's base domain carries a live rule",
@@ -1285,20 +1412,20 @@ def main() -> int:
                 # Read the first one, give it to Member one, and mint a second
                 # for Member two so the two briefings have different content
                 # to differ ABOUT — two empty briefings are also "different".
-                _, uout = run([str(vpy), "-c",
-                               "import sqlite3, sys;"
-                               "c = sqlite3.connect('.firm/firm.db');"
-                               "u = [r[0] for r in c.execute("
-                               "'select id from unit order by id')];"
-                               "c.execute('update unit set assignee_member_id=?"
-                               " where id=?', (sys.argv[1], u[0]));"
-                               "c.execute(\"insert into unit (id, firm_id, name,"
-                               " project_id, assignee_member_id, status) select"
-                               " 'ACC-U2', firm_id, 'second unit', project_id,"
-                               " ?, 'in_progress' from unit where id=?\","
-                               " (sys.argv[2], u[0]));"
-                               "c.commit(); c.close(); print(u[0])",
-                               one, two], cwd=ws, env=benv)
+                _, uout = brun([str(vpy), "-c",
+                                "import sqlite3, sys;"
+                                "c = sqlite3.connect('.firm/firm.db');"
+                                "u = [r[0] for r in c.execute("
+                                "'select id from unit order by id')];"
+                                "c.execute('update unit set assignee_member_id=?"
+                                " where id=?', (sys.argv[1], u[0]));"
+                                "c.execute(\"insert into unit (id, firm_id, name,"
+                                " project_id, assignee_member_id, status) select"
+                                " 'ACC-U2', firm_id, 'second unit', project_id,"
+                                " ?, 'in_progress' from unit where id=?\","
+                                " (sys.argv[2], u[0]));"
+                                "c.commit(); c.close(); print(u[0])",
+                                one, two])
                 unit_one = (uout.strip().splitlines() or [""])[-1].strip()
                 if not unit_one:
                     b.add(FAIL, "the demo firm has a Unit to close",
@@ -1310,18 +1437,15 @@ def main() -> int:
                                 "act on.")
                     return end_base_section()
                 b.add(PASS, "the demo firm has a Unit to close", unit_one)
-                _, b1 = run([str(venv_bin(venv, "cadre")), "brief"],
-                            cwd=ws, env=bmember(one))
-                _, b2 = run([str(venv_bin(venv, "cadre")), "brief"],
-                            cwd=ws, env=bmember(two))
+                _, b1 = brun([str(venv_bin(venv, "cadre")), "brief"], member=one)
+                _, b2 = brun([str(venv_bin(venv, "cadre")), "brief"], member=two)
                 differ = bool(b1.strip()) and bool(b2.strip()) and b1 != b2
                 b.add(PASS if differ else FAIL,
                       "two Members of one firm get different briefings",
                       f"{one}: {b1.strip().splitlines()[0][:60] if b1.strip() else '(empty)'} | "
                       f"{two}: {b2.strip().splitlines()[0][:60] if b2.strip() else '(empty)'}")
 
-                _, b0 = run([str(venv_bin(venv, "cadre")), "brief"],
-                            cwd=ws, env=bmember(None))
+                _, b0 = brun([str(venv_bin(venv, "cadre")), "brief"], member=None)
                 b.add(PASS if not b0.strip() else FAIL,
                       "a Board session is briefed as nobody (scope control)",
                       "silent, which is correct — the Board is not a Member"
@@ -1330,30 +1454,31 @@ def main() -> int:
                       + b0.strip()[:120])
 
                 # 6-8. The gate: armed, biting, and not biting the wrong person.
-                run([str(vpy), "-c",
-                     "from pathlib import Path;"
-                     "from firm.cli.install_hooks import install_writeback_hook;"
-                     "install_writeback_hook(Path('.').resolve())"],
-                    cwd=ws, env=benv)
+                brun([str(vpy), "-c",
+                      "from pathlib import Path;"
+                      "from firm.cli.install_hooks import install_writeback_hook;"
+                      "install_writeback_hook(Path('.').resolve())"])
                 gate = ws / ".claude" / "hooks" / "cadre-writeback-gate.py"
 
                 def fire_gate(mid: str) -> int:
                     payload = json.dumps({"cwd": str(ws), "stop_hook_active": False})
-                    p = subprocess.run([str(vpy), str(gate)], cwd=str(ws),
-                                       env={**os.environ, **bmember(mid)},
-                                       input=payload.encode(),
-                                       capture_output=True, timeout=120)
-                    return p.returncode
+                    # THE SEVENTEENTH CALL SITE, and the one a grep for
+                    # `env=bmember` could never see: it spelled the convention
+                    # out by hand as a dict merge. `run()` already merges
+                    # os.environ itself and already takes stdin, so folding it
+                    # into `brun` removes the hand-rolled copy rather than
+                    # relocating it.
+                    rc_g, _ = brun([str(vpy), str(gate)], member=mid,
+                                   stdin_text=payload, timeout=120)
+                    return rc_g
 
                 b.add(PASS if fire_gate(one) == 0 else FAIL,
                       "the write-back gate lets a Member with nothing owed finish",
                       "exit 0 with no debt")
 
-                run([str(venv_bin(venv, "cadre")), "member", "grant",
-                     "authority", one, "--comment", "acceptance"],
-                    cwd=ws, env=benv)
-                rc, out = run([str(venv_bin(venv, "cadre")), "complete", unit_one],
-                              cwd=ws, env=bmember(one))
+                brun([str(venv_bin(venv, "cadre")), "member", "grant",
+                      "authority", one, "--comment", "acceptance"])
+                rc, out = brun([str(venv_bin(venv, "cadre")), "complete", unit_one], member=one)
                 blocked = fire_gate(one)
                 b.add(PASS if blocked == 2 else FAIL,
                       "closing a Unit with nothing recorded blocks the session",
@@ -1367,8 +1492,8 @@ def main() -> int:
                 # 9/10. The graph, read empty BEFORE so a note found AFTER is
                 #       known to be this run's. Without the before-arm, a note
                 #       from any earlier run proves nothing.
-                _, empty = run(["base", "learn", "--list", "--domain",
-                                str(firm_id)], cwd=ws, env=benv)
+                _, empty = brun(["base", "learn", "--list", "--domain",
+                                 str(firm_id)])
                 was_empty = "No notes" in empty
                 b.add(PASS if was_empty else FAIL,
                       "the firm's graph starts empty (evidence control)",
@@ -1378,12 +1503,11 @@ def main() -> int:
 
                 lesson = ("The acceptance run taught that the gate and the "
                           "command are one piece.")
-                rc, out = run([str(venv_bin(venv, "cadre")), "learn", "--unit",
-                               unit_one, "--type", "insight", "--text", lesson],
-                              cwd=ws, env=bmember(one))
+                rc, out = brun([str(venv_bin(venv, "cadre")), "learn", "--unit",
+                                unit_one, "--type", "insight", "--text", lesson], member=one)
                 released = fire_gate(one)
-                _, recalled = run(["base", "recall", "--keyword",
-                                   "acceptance run"], cwd=ws, env=benv)
+                _, recalled = brun(["base", "recall", "--keyword",
+                                    "acceptance run"])
                 readable = "one piece" in recalled
                 b.add(PASS if (released == 0 and readable) else FAIL,
                       "a Member's lesson reaches the graph and is readable back out",
