@@ -140,7 +140,7 @@ def base_can_honour_tier(base_path: str | Path | None,
             f"platform still executes here and ignores BASE_HOME, so it would "
             f"write the operator's own tier instead of {expected_tier}. "
             f"Refused before anything ran. Put a base built for "
-            f"{native.upper()} first on PATH, or remove it from PATH and let "
-            f"the extension be skipped.")
+            f"{native.upper()} first on PATH, or take it off PATH and let this "
+            f"step be skipped.")
 
     return True, ""
