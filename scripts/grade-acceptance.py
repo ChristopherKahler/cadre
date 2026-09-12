@@ -61,6 +61,7 @@ RC_CLEAN = 0        # every row measured, nothing skipped
 RC_FAIL = 1         # at least one FAIL row
 RC_SKIPPED = 2      # no FAIL, but rows were SKIPPED: this host established less
 RC_REFUSED = 3      # the harness refused to start (its isolation check was blind)
+RC_BLOCKED = 4      # no FAIL, but a known defect BLOCKED rows
 
 
 def _make_output_utf8_safe() -> None:
@@ -199,18 +200,32 @@ def grade(data: dict, harness_rc: int, min_rows: int) -> tuple[list[str], list[s
             "summary comes from a finally: block and describes only the rows "
             "reached before it died. Read the harness log above for the "
             "traceback or the signal.")
+    elif harness_rc == RC_CLEAN and tally[BLOCKED]:
+        problems.append(
+            f"the harness exited 0 while recording {len(tally[BLOCKED])} "
+            f"BLOCKED row(s). report() returns 4 when a known defect stopped "
+            f"rows, because a run that was blocked is not a run that measured "
+            f"everything. Exit 0 here means the exit code has stopped matching "
+            f"the report -- and this is the one mismatch that reads GREEN in "
+            f"both instruments, which is why it went unnoticed.")
     elif harness_rc == RC_SKIPPED and not tally[SKIP]:
         problems.append(
             "the harness exited 2, which report() returns only when rows were "
             "SKIPPED, but the summary carries no SKIP row. The exit code and "
             "the scoreboard are describing different runs.")
+    elif harness_rc == RC_BLOCKED and not tally[BLOCKED]:
+        problems.append(
+            "the harness exited 4, which report() returns only when rows were "
+            "BLOCKED, but the summary carries no BLOCKED row. The exit code "
+            "and the scoreboard are describing different runs.")
     elif harness_rc == RC_REFUSED:
         problems.append(
             "the harness exited 3: it REFUSED to run. Its isolation check could "
             "not see a tier it expects to watch, so it stopped rather than "
             "record a placeholder that would pass forever. Nothing here was "
             "measured. The harness log says which path it could not resolve.")
-    elif harness_rc not in (RC_CLEAN, RC_FAIL, RC_SKIPPED, RC_REFUSED):
+    elif harness_rc not in (RC_CLEAN, RC_FAIL, RC_SKIPPED, RC_REFUSED,
+                            RC_BLOCKED):
         problems.append(
             f"the harness exited {harness_rc}, which report() never returns. It "
             f"was killed or it died before reporting, and the summary describes "
@@ -226,6 +241,18 @@ def grade(data: dict, harness_rc: int, min_rows: int) -> tuple[list[str], list[s
             f"NOTE     the harness exited 2: {len(tally[SKIP])} row(s) were "
             f"SKIPPED, so this OS established less than a full run would. Not a "
             f"regression, and not a pass over that ground either.")
+
+    # rc 4 with BLOCKED rows is the OTHER non-zero that is not a problem, and
+    # for the same reason. A BLOCKED row names an open defect that is already
+    # tracked; reding the build here would punish the harness for being honest
+    # about it and teach the next person to delete the row rather than fix the
+    # defect. The code exists so the scoreboard and the exit code agree, not so
+    # CI turns red.
+    if harness_rc == RC_BLOCKED and tally[BLOCKED]:
+        notices.append(
+            f"NOTE     the harness exited 4: {len(tally[BLOCKED])} row(s) were "
+            f"BLOCKED by a known defect, so this run is usable as far as it "
+            f"goes and no further. Each blocked row names its defect below.")
 
     # Printed, never swallowed. A BLOCKED row names an open defect and a SKIP
     # row names a fact about the host; a reader who cannot see them cannot tell

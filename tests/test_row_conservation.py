@@ -25,6 +25,7 @@ then breaks the guard to prove it can go red.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 from pathlib import Path
 
@@ -154,17 +155,28 @@ def test_assert_section_ignores_rows_recorded_before_the_section():
     ([("PASS",), ("SKIP",)], 2),
     ([("PASS",), ("FAIL",)], 1),
     ([("PASS",), ("FAIL",), ("SKIP",)], 1),
-    ([("PASS",), ("BLOCKED",)], 0),
+    # THIS CASE USED TO EXPECT 0, and that expectation was the defect rather
+    # than an oversight: it PINNED report() returning "every row measured,
+    # nothing skipped" for a run a known defect had stopped. Anyone fixing
+    # report() would have watched this line go red and could reasonably have
+    # concluded the fix was wrong. Changed on purpose, with the reason here.
+    ([("PASS",), ("BLOCKED",)], 4),
+    ([("PASS",), ("BLOCKED",), ("SKIP",)], 4),
+    ([("PASS",), ("FAIL",), ("BLOCKED",)], 1),
 ])
-def test_report_returns_the_three_way_answer(statuses, want, capsys):
-    """A run that skipped rows must not exit 0.
+def test_report_returns_the_four_way_answer(statuses, want, capsys):
+    """A run that skipped rows, or was blocked, must not exit 0.
 
     The headline already refused to say USABLE over a skipped section. The exit
     code is the half CI and the next verifier actually read, and it said 0 --
     so run B exited clean having measured eighteen fewer rows than run A.
 
-    FAIL outranks SKIP: 1 means something that should work here does not, and
-    that is the more urgent of the two.
+    The precedence is FAIL, then BLOCKED, then SKIP, and it is the headline's
+    own order rather than a second one invented here. FAIL outranks both: 1
+    means something that should work on this host does not, and that is the
+    most urgent of the three. BLOCKED outranks SKIP because a known defect
+    stopping a row is a fact about the product, while a skip is a fact about
+    the host.
     """
     b = h.Board()
     for (status,) in statuses:
@@ -253,3 +265,105 @@ def test_the_unrunnable_message_is_not_platform_specific():
     assert 'return 127, f"not found: {exc}"' not in src, (
         "the second, differently-worded arm is back; the same host condition "
         "will again read one way on Linux and another on Windows")
+# ---------------------------------------------------------------------------
+# the exit code carries BLOCKED too
+# ---------------------------------------------------------------------------
+
+def test_report_returns_4_when_a_row_is_blocked():
+    """It returned 0, which report()'s own comment defines as "every row
+    measured, nothing skipped". A run stopped by a known defect is not that."""
+    b = h.Board()
+    b.add(h.PASS, "one")
+    b.add(h.BLOCKED, "two", "a known defect")
+    assert b.report() == 4
+
+
+def test_a_fail_still_outranks_a_blocked():
+    b = h.Board()
+    b.add(h.FAIL, "one")
+    b.add(h.BLOCKED, "two", "a known defect")
+    assert b.report() == 1
+
+
+def test_a_blocked_outranks_a_skip():
+    """The headline has always ranked BLOCKED above SKIP. The exit code now
+    agrees with it instead of inventing a second precedence."""
+    b = h.Board()
+    b.add(h.BLOCKED, "one", "a known defect")
+    b.add(h.SKIP, "two", "not on this host")
+    assert b.report() == 4
+
+
+def test_a_clean_board_still_returns_0():
+    b = h.Board()
+    b.add(h.PASS, "one")
+    assert b.report() == 0
+# ---------------------------------------------------------------------------
+# the whole-harness list
+# ---------------------------------------------------------------------------
+
+def test_harness_rows_is_the_two_lists_and_nothing_else():
+    assert h.HARNESS_ROWS == h.PRE_BASE_ROWS + h.BASE_SECTION_ROWS
+
+
+def test_the_whole_harness_list_has_no_duplicates():
+    """A repeated name makes `skip_rest` emit one row where two are declared."""
+    names = h.HARNESS_ROWS
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    assert not dupes, f"HARNESS_ROWS repeats: {dupes}"
+
+
+def test_every_declared_name_is_a_string_the_harness_actually_contains():
+    """The list is a spec, not a wish -- checked by AST, not by grep.
+
+    A grep misses two whole classes of emit site, and both are in this file:
+    a name split across source lines, which the parser merges into one constant,
+    and a name BUILT by an f-string, which never appears as a literal at all.
+    The existing grep-based check passes over both, so it would have reported
+    every name present while two of them could drift freely.
+    """
+    tree = ast.parse(HARNESS.read_text(encoding="utf-8"))
+    literals = {n.value for n in ast.walk(tree)
+                if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+    # The two console-script rows are built by console_script_row(), so their
+    # value is never a literal anywhere. They are checked against the helper
+    # itself, which is the single spelling.
+    built = {h.console_script_row(e) for e in h.CONSOLE_SCRIPTS}
+    missing = [n for n in h.HARNESS_ROWS if n not in literals and n not in built]
+    assert not missing, (
+        "declared in HARNESS_ROWS but no such string exists in the harness, so "
+        f"no path can ever emit it: {missing}")
+
+
+def test_the_console_script_rows_come_from_one_spelling():
+    """Declared and emitted through the same helper, so they cannot drift."""
+    for exe in h.CONSOLE_SCRIPTS:
+        assert h.console_script_row(exe) in h.HARNESS_ROWS
+
+
+def test_end_run_is_the_only_thing_that_calls_report():
+    """One exit. The two bare `return b.report()` steps are what this closes.
+
+    Checked by AST because the phrase also appears in a docstring explaining the
+    defect, and a substring search cannot tell the prose from the code.
+    """
+    tree = ast.parse(HARNESS.read_text(encoding="utf-8"))
+    parents = {c: p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
+
+    def owner(node):
+        cur = parents.get(node)
+        while cur is not None:
+            if isinstance(cur, ast.FunctionDef):
+                return cur.name
+            cur = parents.get(cur)
+        return "<module>"
+
+    sites = [owner(n) for n in ast.walk(tree)
+             if isinstance(n, ast.Return) and isinstance(n.value, ast.Call)
+             and isinstance(n.value.func, ast.Attribute)
+             and n.value.func.attr == "report"
+             and isinstance(n.value.func.value, ast.Name)
+             and n.value.func.value.id == "b"]
+    assert sites == ["end_run"], (
+        f"`return b.report()` is called from {sites}, not from end_run alone. "
+        "Every other exit drops the rows it never reached.")
