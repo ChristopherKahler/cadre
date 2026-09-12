@@ -44,9 +44,41 @@ def ws(tmp_path):
     return w
 
 
+def _stub_base() -> str:
+    """A REAL file carrying this host's magic bytes, created once.
+
+    This file used the string "/fake/base". That is not a file, so every test
+    here proved the wiring works against something no host could execute. Since
+    #87, `base_domain.scaffold_tier` identifies the binary it resolved before
+    running it and refuses an unidentified one, so the stand-in has to be
+    identifiable.
+
+    Module-level and created once, so `which_base` keeps returning the same
+    path across calls within a test.
+    """
+    return _STUB
+
+
+def _make_stub() -> str:
+    import tempfile
+    from pathlib import Path
+
+    from firm.sysconfig.binaries import native_image_format
+
+    magic = {"pe": b"MZ\x90\x00", "macho": b"\xcf\xfa\xed\xfe"}.get(
+        native_image_format(), b"\x7fELF")
+    b = Path(tempfile.mkdtemp()) / "base"
+    b.write_bytes(magic + b"\x00" * 128)
+    b.chmod(0o755)
+    return str(b)
+
+
+_STUB = _make_stub()
+
+
 def _wire(monkeypatch, *, base_present=True, scaffold_rc=0, sync_result=None):
     monkeypatch.setattr("firm.sysconfig.service.which_base",
-                        lambda: "/fake/base" if base_present else None)
+                        lambda: _stub_base() if base_present else None)
     monkeypatch.setattr(subprocess, "run",
                         lambda cmd, **kw: _Proc(returncode=scaffold_rc))
     if sync_result is not None:
@@ -106,7 +138,8 @@ def test_a_failed_scaffold_carries_the_exit_code(monkeypatch, ws):
 
 
 def test_a_scaffold_that_cannot_run_is_not_a_silent_false(monkeypatch, ws):
-    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: "/fake/base")
+    monkeypatch.setattr("firm.sysconfig.service.which_base",
+                        lambda: _stub_base())
 
     def _boom(cmd, **kw):
         raise OSError("no such binary")
@@ -214,3 +247,126 @@ def test_doctor_fix_does_nothing_when_the_check_passed(monkeypatch, tmp_path):
     did = doctor_mod.fix(workspace, FIRM, passing, unit_dir=tmp_path / "units")
     assert called == [], "sync must not run for a check that passed"
     assert [d for d in did if d.startswith("base-domain:")] == []
+
+
+# ---------------------------------------------------------------------------
+# founding.commit — the sentence issue #5 actually leads with
+#
+# "`commit` does not claim a base graph it did not get."
+#
+# THAT SENTENCE HAD NO TEST ANYWHERE IN THE SUITE. Measured 2026-09-12 by
+# restoring the exact defect — `"base_graph": bool(base_wire.get("live"))`
+# replaced by `"base_graph": True` — and re-running this file, the `_seed_rule`
+# block and `tests/services/test_base_domain.py`. All three stayed green:
+# 11 passed, 7 passed, 27 passed, every one exit 0. `grep -rln base_graph tests/`
+# returned nothing at all.
+#
+# So the fix was present and undefended: correct today, and reintroducible in
+# silence tomorrow. The legs below are the guard that was missing, and the
+# mutation above is their proven red arm — it is already known to leave them the
+# only thing that fails.
+#
+# `wire_workspace` is stubbed rather than driven, on purpose. Its own three
+# states are covered above by tests that drive it for real. What is untested is
+# narrower and is the whole point here: whether `commit` REPORTS what it was
+# handed, or overwrites it with optimism.
+# ---------------------------------------------------------------------------
+
+def _proposal(fid: str) -> dict:
+    """The smallest org `founding._validate` will accept."""
+    return {
+        "firm_id": fid,
+        "name": "Zed Quarter",
+        "premise": "a firm for measuring the base wire with",
+        "north_star": {"target": "report the wire honestly"},
+        "operations": [{"name": "Running it", "purpose": "keep it running"}],
+        "members": [{"name": "Vantage", "role": "Chief of Staff",
+                     "owns": "everything", "operation": "Running it",
+                     "leads": True, "model": "sonnet",
+                     "skills": [], "gates": []}],
+    }
+
+
+def _commit_with_wire(monkeypatch, tmp_path, fid: str, wire: dict) -> dict:
+    """Found a firm for real, with `wire_workspace` answering *wire*."""
+    from firm.dashboard import founding
+
+    monkeypatch.setattr("firm.services.base_domain.wire_workspace",
+                        lambda *a, **k: wire)
+    return founding.commit(tmp_path, _proposal(fid))
+
+
+def test_commit_does_not_claim_a_base_graph_it_did_not_get(monkeypatch, tmp_path):
+    """The failure leg, and issue #5's headline.
+
+    A tier that scaffolded and a domain block that wrote are NOT a live wire:
+    base drops a matched domain carrying zero rules, so the firm reaches no
+    Member. `commit` must report that, not round it up.
+    """
+    result = _commit_with_wire(monkeypatch, tmp_path, "zqdead", {
+        "scaffolded": True, "domain_ok": True, "rule_seeded": False,
+        "live": False,
+        "detail": "the firm's domain block was written but carries no rules"})
+
+    assert result["ok"] is True, result          # the firm is founded either way
+    assert result["base_graph"] is False, result
+    # The reason survives to the caller. "It failed" and "it failed because the
+    # seed did not take" need different actions from whoever reads it.
+    assert result["base_wire"]["rule_seeded"] is False
+    assert result["base_wire"]["detail"]
+
+
+def test_commit_reports_a_live_base_graph_when_the_wire_is_live(monkeypatch,
+                                                                tmp_path):
+    """The healthy control, and it is what makes the leg above mean something.
+
+    Without it, `base_graph` hard-coded to False would pass that test. A leg
+    that only ever sees the broken input cannot show that it discriminates.
+    """
+    result = _commit_with_wire(monkeypatch, tmp_path, "zqlive", {
+        "scaffolded": True, "domain_ok": True, "rule_seeded": True,
+        "live": True, "detail": "the firm's graph reaches its Members"})
+
+    assert result["ok"] is True, result
+    assert result["base_graph"] is True, result
+    assert result["base_wire"]["live"] is True
+
+
+def test_commit_does_not_claim_a_graph_when_the_tier_never_scaffolded(monkeypatch,
+                                                                      tmp_path):
+    """The third input, because two answers cannot show three states apart.
+
+    base absent is degraded, never broken: the firm is still founded. But a firm
+    with no tier at all has no graph either, and saying otherwise is the same
+    lie in a different costume.
+    """
+    result = _commit_with_wire(monkeypatch, tmp_path, "zqnotier", {
+        "scaffolded": False, "domain_ok": False, "rule_seeded": False,
+        "live": False, "detail": "base is not installed"})
+
+    assert result["ok"] is True, result
+    assert result["base_graph"] is False, result
+    assert result["base_wire"]["scaffolded"] is False
+
+
+def test_the_three_wires_give_three_distinguishable_answers(monkeypatch, tmp_path):
+    """One assertion that the legs above are not all reading the same thing.
+
+    `base_graph` must follow `live` and nothing else. If it ever tracked
+    `scaffolded` or `domain_ok` instead, the individual legs could still pass
+    while the flag answered a different question than the one #5 asked.
+    """
+    from firm.dashboard import founding
+
+    seen = []
+    for i, wire in enumerate((
+        {"scaffolded": True, "domain_ok": True, "rule_seeded": True, "live": True},
+        {"scaffolded": True, "domain_ok": True, "rule_seeded": False, "live": False},
+        {"scaffolded": False, "domain_ok": False, "rule_seeded": False, "live": False},
+    )):
+        monkeypatch.setattr("firm.services.base_domain.wire_workspace",
+                            lambda *a, _w=wire, **k: dict(_w, detail=""))
+        out = founding.commit(tmp_path, _proposal(f"zqtri{i}"))
+        seen.append((wire["live"], out["base_graph"]))
+
+    assert seen == [(True, True), (False, False), (False, False)], seen

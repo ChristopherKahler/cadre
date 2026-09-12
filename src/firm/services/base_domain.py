@@ -406,6 +406,34 @@ def scaffold_tier(workspace: Path) -> dict[str, Any]:
         result["detail"] = (
             f"{base_absence_reason()} — the firm is degraded, not broken")
         return result
+
+    # REFUSE BEFORE ANYTHING RUNS. Issue #87.
+    #
+    # This is the same assertion `base_extension.install` makes, at its
+    # neighbour. Both resolve a binary with `which_base()`, which takes no
+    # parameter, so NEITHER can be directed at one by its caller. #75 taught
+    # install() to assert its own resolution and the fix did not reach here.
+    #
+    # The exposure is not the test suite: conftest's autouse `_no_ambient_base`
+    # makes `which_base` None under pytest, so the suite never spawns base at
+    # all. It is an operator running `cadre init` on WSL, where `which_base`
+    # resolves the WINDOWS base across /mnt/c. That binary executes happily
+    # under interop, ignores this POSIX workspace path, and scaffolds the
+    # operator's own global tier instead -- which is how a throwaway /tmp
+    # workspace reached the operator's real base.toml on 2026-09-12.
+    #
+    # NOT `BASE_HOME`. Measured 2026-09-11 and recorded at binaries.py:92-93
+    # and service.py:54-56: a POSIX BASE_HOME handed to a Windows base is
+    # IGNORED and does not redirect the write. Refusal is the only thing that
+    # reliably stops it, which is why #79 chose refusal over environment.
+    from firm.sysconfig.binaries import base_can_honour_tier
+
+    expected = workspace / ".base"
+    may_run, refusal = base_can_honour_tier(base, expected)
+    if not may_run:
+        result["detail"] = refusal
+        return result
+
     try:
         # Explicit env, never ambient — a systemd-spawned hub's PATH is bare.
         proc = subprocess.run(

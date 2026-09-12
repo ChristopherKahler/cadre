@@ -1162,12 +1162,24 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
     finally:
         conn.close()
 
+    # The firm's state, written where base's ingest is already looking. The
+    # manifest has always declared these three files; until `base_export`
+    # existed nothing wrote them, so a founded firm's roster never reached its
+    # own graph (issue #4). Never raises: a firm that cannot export is degraded,
+    # not un-founded.
+    from firm.services import base_export
+    exported = base_export.export(workspace, fid)
+
     return {
         "ok": True,
         "firm_id": fid,
         "name": proposal["name"],
         "workspace": str(workspace),
         "hired": hired,
+        # Reported separately from base_graph, because they fail separately:
+        # the domain wire is about rules reaching Members, this is about the
+        # roster reaching the graph. One flag covering both would hide either.
+        "base_export": exported,
         # base_graph is TRUE only when the wire is live end to end. It used
         # to be true whenever `base scaffold` exited 0, which is how a firm
         # whose domain injects nothing was reported as wired.
