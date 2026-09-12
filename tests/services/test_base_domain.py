@@ -65,10 +65,38 @@ class _Recorder:
         return [c[1] + " " + c[2] for c in self.calls if len(c) > 2]
 
 
+def _make_stub_base() -> str:
+    """A REAL file carrying this host's magic bytes, standing in for `base`.
+
+    These tests used the string "/fake/base". That is not a file, so they were
+    proving the code works against something no host could execute. Since #75
+    and #87, `base_extension.install` and `base_domain.scaffold_tier` identify
+    the binary they resolved BEFORE running it and refuse an unidentified one.
+    Nothing in THIS file reaches those guards today, which is why these stubs
+    still pass -- but a string stub is what makes the shape fail-open the moment
+    a guard arrives on the path under test, and that has now happened twice.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from firm.sysconfig.binaries import native_image_format
+
+    magic = {"pe": b"MZ\x90\x00", "macho": b"\xcf\xfa\xed\xfe"}.get(
+        native_image_format(), b"\x7fELF")
+    b = Path(tempfile.mkdtemp()) / "base"
+    b.write_bytes(magic + b"\x00" * 128)
+    b.chmod(0o755)
+    return str(b)
+
+
+STUB_BASE = _make_stub_base()
+
+
 @pytest.fixture
 def wired(monkeypatch, tmp_path):
     """A workspace with .base/domains.toml and base pretending to be installed."""
-    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: "/fake/base")
+    monkeypatch.setattr("firm.sysconfig.service.which_base",
+                        lambda: STUB_BASE)
     ws = tmp_path / "firm"
     (ws / ".base").mkdir(parents=True)
     (ws / ".base" / "domains.toml").write_text("# scaffolded\n", encoding="utf-8")
