@@ -62,9 +62,37 @@ class _FakeBase:
 def base_ok(monkeypatch):
     """base is installed and says yes."""
     fake = _FakeBase()
-    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: "/fake/base")
+    monkeypatch.setattr("firm.sysconfig.service.which_base",
+                        lambda: STUB_BASE)
     monkeypatch.setattr(subprocess, "run", fake)
     return fake
+
+
+def _make_stub_base() -> str:
+    """A REAL file carrying this host's magic bytes, standing in for `base`.
+
+    These tests used the string "/fake/base". That is not a file, so they were
+    proving the code works against something no host could execute. Since #75
+    and #87, `base_extension.install` and `base_domain.scaffold_tier` identify
+    the binary they resolved BEFORE running it and refuse an unidentified one.
+    Nothing in THIS file reaches those guards today, which is why these stubs
+    still pass -- but a string stub is what makes the shape fail-open the moment
+    a guard arrives on the path under test, and that has now happened twice.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from firm.sysconfig.binaries import native_image_format
+
+    magic = {"pe": b"MZ\x90\x00", "macho": b"\xcf\xfa\xed\xfe"}.get(
+        native_image_format(), b"\x7fELF")
+    b = Path(tempfile.mkdtemp()) / "base"
+    b.write_bytes(magic + b"\x00" * 128)
+    b.chmod(0o755)
+    return str(b)
+
+
+STUB_BASE = _make_stub_base()
 
 
 @pytest.fixture
@@ -122,7 +150,8 @@ def test_a_failed_base_learn_never_clears_the_debt(tmp_path, monkeypatch):
     was recorded anywhere. So the receipt is written only after base returns 0.
     """
     fake = _FakeBase(1)
-    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: "/fake/base")
+    monkeypatch.setattr("firm.sysconfig.service.which_base",
+                        lambda: STUB_BASE)
     monkeypatch.setattr(subprocess, "run", fake)
 
     writeback.record_closure(tmp_path, FIRM, ME, "U-1")
@@ -188,7 +217,7 @@ def test_the_lesson_reaches_base_with_the_firm_domain_and_the_member(tmp_path, b
                               unit_id="U-1", note_type="correction")
     assert len(base_ok.calls) == 1
     cmd = base_ok.calls[0]
-    assert cmd[:2] == ["/fake/base", "learn"]
+    assert cmd[:2] == [STUB_BASE, "learn"]
     assert cmd[cmd.index("--domain") + 1] == FIRM
     assert cmd[cmd.index("--entity") + 1] == ME
     assert cmd[cmd.index("--type") + 1] == "correction"
