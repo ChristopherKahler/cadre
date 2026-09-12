@@ -205,6 +205,63 @@ def _unreadable(tmp_path):
     return str(tmp_path / "base-does-not-exist")
 
 
+@pytest.mark.parametrize("make,label", [
+    (_foreign, "foreign platform"),
+    (_unknown, "unknown image format"),
+    (_unreadable, "unreadable"),
+])
+def test_every_refusal_branch_exits_1_and_avoids_the_skip_substring(
+        monkeypatch, home, tmp_path, make, label):
+    """FOLLOW-UP 2 from avocet's PR 79 verdict.
+
+    PR 79 added three refusal branches and guarded ONE, the foreign-platform
+    case. All four passed at the time, so there was no live defect -- but
+    UNKNOWN, UNREADABLE and ABSENT were unguarded against exactly the rewording
+    this test exists to catch, and Finding 1 proved that failure mode is live in
+    this file rather than theoretical.
+
+    The fourth branch, ABSENT, is unreachable through install() because install()
+    returns early when which_base() gives nothing. It is covered directly in
+    test_the_absent_branch_wording_is_guarded_too.
+
+    NOT A RED ARM, and avocet already said why: all four branches pass today.
+    This is pure coverage. It is green on the tree before this change and green
+    after it, so it proves nothing about the change and everything about the
+    next rewording. Recorded here rather than counted among the red arms.
+    """
+    _point_which_base_at(monkeypatch, make(tmp_path))
+    run = _CountingRun()
+    monkeypatch.setattr(subprocess, "run", run)
+
+    res = base_extension.install("/opt/cadre")
+
+    assert res["ok"] is False, "%s was admitted" % label
+    assert run.calls == [], "%s ran a subprocess" % label
+    assert "not installed" not in res["reason"], (
+        "the %s refusal carries the substring that run_install once read as "
+        "'skip, stay rc 0'. Reason: %s" % (label, res["reason"]))
+
+    monkeypatch.setattr(subprocess, "run", _CountingRun())
+    assert base_extension.run_install("/opt/cadre") == 1, (
+        "the %s refusal did not exit 1" % label)
+
+
+def test_the_absent_branch_wording_is_guarded_too():
+    """The fourth branch. Unreachable through install(), so called directly.
+
+    base_can_honour_tier still has to answer for its own wording: a caller that
+    reaches it with nothing resolved must not get a sentence that some other
+    caller reads as a skip.
+    """
+    from firm.sysconfig.binaries import base_can_honour_tier
+
+    ok, reason = base_can_honour_tier(None, "/somewhere/cadre.toml")
+    assert ok is False
+    assert reason
+    assert "not installed" not in reason, (
+        "the ABSENT branch carries the skip substring: %s" % reason)
+
+
 # ---------------------------------------------------------------------------
 # FOLLOW-UP 1 -- the inherited reporting defect
 # ---------------------------------------------------------------------------
