@@ -41,10 +41,24 @@ def find_claude() -> str | None:
     Same ladder as ``pulse.spawn.resolve_claude_bin`` + ``dashboard.launch``'s
     fallback, inlined because both live in mantis's in-flight working set
     (2026-07-13) — collapse into a shared helper once that set lands.
+
+    A value that is SET BUT UNUSABLE returns None rather than falling through to
+    the PATH search, matching the other two resolvers. Until this change it fell
+    through, and that made it the one resolver the #81 fence could not close:
+    with the variable pointed at an unusable path, ``resolve_claude_bin`` and
+    ``_which_claude`` both returned None while this function walked on and
+    resolved a real ``claude.EXE``. Measured on Windows, 2026-09-12.
+
+    The sweep in ``tests/test_the_suite_cannot_spawn_a_claude_agent.py`` did not
+    catch it because it asserted every resolver CONSULTS the variable, and this
+    one did consult it. Consulting is not refusing. A guard pinned to the wrong
+    property passes forever while the hole stays open.
     """
     env_bin = os.environ.get("CADRE_CLAUDE_BIN")
-    if env_bin and os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
-        return env_bin
+    if env_bin:
+        if os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
+            return env_bin
+        return None
     found = shutil.which("claude")
     if found:
         return found

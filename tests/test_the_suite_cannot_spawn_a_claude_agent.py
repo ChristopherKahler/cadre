@@ -67,7 +67,23 @@ LOCATE_CALLS = ("shutil.which", "os.access", "os.path.isfile", "exists", "glob")
 # Known resolvers, named so a sweep that silently stops finding them fails
 # rather than reporting a clean tree. An empty sweep reads exactly like a clean
 # one, which is the failure this whole issue is about.
-KNOWN_RESOLVERS = {"resolve_claude_bin", "_which_claude"}
+KNOWN_RESOLVERS = {"resolve_claude_bin", "_which_claude", "find_claude"}
+
+# How to CALL each known resolver, so the refusal invariant below can assert the
+# OUTCOME rather than a platform's mechanism. Keyed by the same names, and the
+# test asserts the two sets are equal -- adding a resolver to KNOWN_RESOLVERS
+# without wiring it in here fails rather than silently going unexercised.
+RESOLVER_CALLS = {
+    "resolve_claude_bin": ("firm.pulse.spawn", lambda f: f()[0]),
+    "_which_claude": ("firm.dashboard.launch", lambda f: f()),
+    "find_claude": ("firm.rail.turns", lambda f: f()),
+}
+
+# The order `_child_resolves` prints its three lines in, named rather than
+# assumed. It is NOT alphabetical, so zipping its results against
+# `sorted(RESOLVER_CALLS)` would report the wrong resolver as the open one, and
+# a guard that names the wrong call site is worse than one that says nothing.
+CHILD_ORDER = ("resolve_claude_bin", "_which_claude", "find_claude")
 
 
 def _funcs():
@@ -258,8 +274,10 @@ def _child_resolves():
     code = (
         "from firm.pulse.spawn import resolve_claude_bin\n"
         "from firm.dashboard.launch import _which_claude\n"
+        "from firm.rail.turns import find_claude\n"
         "print(resolve_claude_bin()[0])\n"
         "print(_which_claude())\n"
+        "print(find_claude())\n"
     )
     env = dict(os.environ)
     env["PYTHONPATH"] = str(REPO / "src") + os.pathsep + env.get("PYTHONPATH", "")
@@ -267,17 +285,24 @@ def _child_resolves():
                          text=True, timeout=120, env=env)
     assert out.returncode == 0, f"child failed: {out.stderr[-400:]}"
     lines = out.stdout.strip().splitlines()
-    assert len(lines) == 2, f"child printed {lines!r}"
+    assert len(lines) == 3, f"child printed {lines!r}"
     return [None if l == "None" else l for l in lines]
 
 
 def test_the_fence_reaches_a_child_interpreter():
-    """THE ARM THAT MATTERS. The agent that was caught was a child of pytest."""
-    spawn_bin, launch_bin = _child_resolves()
-    assert spawn_bin is None and launch_bin is None, (
+    """THE ARM THAT MATTERS. The agent that was caught was a child of pytest.
+
+    All THREE resolvers, not two. ``rail.turns.find_claude`` was outside the
+    guarded set until the Windows failure exposed it, and env is what reaches a
+    child, so a resolver left out here is a hole an in-process check cannot see.
+    """
+    spawn_bin, launch_bin, rail_bin = _child_resolves()
+    open_ones = {"spawn": spawn_bin, "launch": launch_bin, "rail": rail_bin}
+    still_open = {k: v for k, v in open_ones.items() if v is not None}
+    assert not still_open, (
         "a CHILD of the test suite resolved a real claude binary "
-        f"(spawn={spawn_bin!r}, launch={launch_bin!r}), so the suite can still "
-        "boot an agent with the operator's credentials and spend their tokens")
+        f"({still_open}), so the suite can still boot an agent with the "
+        "operator's credentials and spend their tokens")
 
 
 def test_CONTROL_this_host_would_resolve_a_claude_without_the_fence():
@@ -323,33 +348,59 @@ def test_the_conftest_fence_is_actually_installed():
             "fences the tests that remember to ask for it")
 
 
-def test_the_fence_points_at_something_that_cannot_be_executed():
-    """The env var must name a file that EXISTS and is NOT executable.
+def test_the_fence_points_at_a_path_that_does_not_exist():
+    """The env var must name a path that is ABSENT, on every platform.
 
-    A nonexistent path also returns None today, but an existing file cannot be
-    created underneath the run by something else, and the resolver's refusal
-    message then names the variable so a developer who trips it reads a sentence
-    instead of guessing.
+    This assertion used to be ``p.is_file() and not os.access(target, X_OK)``,
+    and THAT LINE IS WHAT LET THE WINDOWS HOLE THROUGH. ``os.access(X_OK)`` is
+    False for a plain file on Linux and TRUE on Windows, which has no execute
+    bit, so the sentinel read as executable there and every resolver returned
+    it. A directory is no better: ``X_OK`` is True for a directory on both
+    platforms. Absence is the only state ``os.access``, ``is_file`` and
+    ``shutil.which`` agree on everywhere.
 
-    It must NOT be an executable stub: `_is_execable` accepts anything with a
-    shebang, so a "refusing" script would be RETURNED as the binary and then
-    actually spawned. Louder than silence, still a spawn.
+    It must NOT be an executable stub either: `_is_execable` accepts anything
+    with a shebang, so a "refusing" script would be RETURNED as the binary and
+    then actually spawned. Louder than silence, still a spawn.
     """
     target = os.environ.get(ENV_VAR)
     assert target, f"{ENV_VAR} is not set inside the suite; the fence is off"
     p = Path(target)
-    assert p.is_file(), f"{ENV_VAR}={target} does not exist as a file"
-    assert not os.access(target, os.X_OK), (
-        f"{ENV_VAR}={target} IS executable, so the resolver will return it and "
-        "the suite will spawn it")
+    assert not p.exists(), (
+        f"{ENV_VAR}={target} EXISTS. On Windows os.access(X_OK) is True for "
+        "any readable file and True for any directory, so anything that exists "
+        "here is handed back by every resolver and the suite can spawn it.")
+    assert shutil.which(target) is None, (
+        f"shutil.which resolved {ENV_VAR}={target}, so a resolver reaching for "
+        "it through which() would still get a binary back")
 
 
-def test_the_in_process_resolvers_are_both_shut():
-    """Belt and braces, in this process, through the real functions."""
-    from firm.dashboard.launch import _which_claude
-    from firm.pulse.spawn import resolve_claude_bin
-    assert resolve_claude_bin()[0] is None, "pulse resolver is open in-process"
-    assert _which_claude() is None, "dashboard resolver is open in-process"
+def test_every_known_resolver_refuses_a_set_but_unusable_hatch():
+    """THE INVARIANT THE OLD SWEEP MISSED, asserted as an OUTCOME.
+
+    The static sweep asks whether each resolver CONSULTS ``CADRE_CLAUDE_BIN``.
+    ``rail.turns.find_claude`` did consult it and then fell through to
+    ``shutil.which`` on a miss, so the sweep passed it while it stayed open.
+    CONSULTING IS NOT REFUSING.
+
+    Asserting the outcome -- every resolver returns None under the live fence --
+    is platform-independent by construction. It cannot be satisfied by a
+    mechanism that happens to hold on one operating system, which is exactly how
+    the previous version of this file passed on Linux and failed on Windows.
+    """
+    assert set(RESOLVER_CALLS) == KNOWN_RESOLVERS, (
+        "RESOLVER_CALLS and KNOWN_RESOLVERS disagree: "
+        f"{sorted(set(KNOWN_RESOLVERS) ^ set(RESOLVER_CALLS))}. A resolver "
+        "named as guarded but never called here is not actually exercised.")
+    assert set(CHILD_ORDER) == KNOWN_RESOLVERS, (
+        f"CHILD_ORDER {CHILD_ORDER} does not name every guarded resolver")
+    results = dict(zip(CHILD_ORDER, _child_resolves()))
+    open_ones = [f"{RESOLVER_CALLS[n][0]}.{n} -> {v}"
+                 for n, v in sorted(results.items()) if v is not None]
+    assert not open_ones, (
+        f"{len(open_ones)} resolver(s) returned a binary while "
+        f"{ENV_VAR} points at an unusable path, so the suite can still spawn a "
+        "real agent through them:\n  " + "\n  ".join(open_ones))
 
 
 def test_shutil_which_alone_would_not_have_been_enough():

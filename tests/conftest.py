@@ -7,7 +7,64 @@ no probing the operator's installed ``base``, no touching the real
 
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+
 import pytest
+
+# ---------------------------------------------------------------------------
+# THE TREE UNDER TEST MUST BE THIS ONE. Checked once, at collection, because a
+# number measured against another checkout is worse than no number at all.
+#
+# The shared development venv carries an editable install whose `.pth` names ONE
+# checkout. Nothing about running pytest from a git worktree overrides that, and
+# `tests/` has an `__init__.py`, so pytest puts the worktree ROOT on `sys.path`
+# and the root holds no `firm` package. The `.pth` therefore wins and every
+# `import firm` resolves to the OTHER checkout, while tests that read files by
+# path -- or spawn a child with PYTHONPATH set -- keep reading this one. One run,
+# two trees under test.
+#
+# Measured 2026-09-12: bare `python -m pytest` in a worktree imported
+# `firm` from the main clone; the same file with PYTHONPATH pinned imported it
+# from the worktree, and the two runs disagreed about whether the claude fence
+# held. The fix is to pin PYTHONPATH to this repo's `src`. This block only makes
+# forgetting it loud.
+#
+# AN INSTALLED PACKAGE IS NOT THE HIJACK AND MUST NOT TRIP THIS. The
+# `clean-install` CI job runs the suite against a wheel in a throwaway venv with
+# no PYTHONPATH on purpose -- that job exists to catch a dependency that installs
+# but cannot import, and requiring `firm` to come from this repo would defeat it.
+# So the refusal is narrow: another checkout's `src/` tree, never site-packages.
+# ---------------------------------------------------------------------------
+
+_REPO = Path(__file__).resolve().parents[1]
+
+
+def _foreign_source_tree(used: Path, repo: Path) -> bool:
+    """True only when `firm` came from a DIFFERENT checkout's source tree."""
+    if repo in used.parents:
+        return False
+    return used.parents[1].name == "src"
+
+
+def _assert_the_tree_under_test_is_this_one() -> None:
+    spec = importlib.util.find_spec("firm")
+    if spec is None or not spec.origin:
+        return  # nothing imported it yet; the tests that need it will say so
+    used = Path(spec.origin).resolve()
+    if _foreign_source_tree(used, _REPO):
+        raise RuntimeError(
+            "REFUSING TO RUN: `firm` resolves to another checkout.\n"
+            f"  imported from : {used}\n"
+            f"  tests live in : {_REPO}\n"
+            "Every import-based assertion in this run would grade that tree "
+            "instead of this one, and file-based assertions would still read "
+            "this one -- one run, two trees, and the numbers cannot be "
+            "reconciled afterwards.\n"
+            f"Fix: run with PYTHONPATH={_REPO / 'src'}")
+
+
+_assert_the_tree_under_test_is_this_one()
 
 
 @pytest.fixture(autouse=True)
@@ -90,10 +147,25 @@ def _no_test_can_spawn_a_claude_agent(tmp_path, monkeypatch):
     ``resolve_claude_bin`` appends ``~/.local/bin`` UNCONDITIONALLY, *after* the
     PATH walk (spawn.py). So a fixture that sanitises PATH looks exactly like a
     fence and is not one, and it fails SILENTLY -- which is the failure mode
-    this whole issue is about. Pointing ``CADRE_CLAUDE_BIN`` at a file that is
-    not executable short-circuits the resolver BEFORE the PATH walk and before
-    that append, and #81 made ``dashboard.launch._which_claude`` honour the same
-    variable so both resolvers stop at the same gate.
+    this whole issue is about. Pointing ``CADRE_CLAUDE_BIN`` at a path the
+    resolvers refuse short-circuits them BEFORE the PATH walk and before that
+    append, and #81 made ``dashboard.launch._which_claude`` honour the same
+    variable so the resolvers stop at the same gate.
+
+    THE SENTINEL IS A PATH THAT DOES NOT EXIST, AND THAT IS MEASURED. It used
+    to be a real file with mode 0o644, which fences Linux and DOES NOT FENCE
+    WINDOWS::
+
+        linux    os.access(<plain file>, os.X_OK)  ->  False
+        windows  os.access(<plain file>, os.X_OK)  ->  True
+
+    Windows has no execute bit, so ``os.access(X_OK)`` is True for any readable
+    file and every resolver handed the sentinel back as a real claude binary.
+    Windows CI caught it: 3 failed, 1862 passed, all three in the fence's own
+    file. A directory is no better -- ``X_OK`` is True for a directory on BOTH
+    platforms. An absent path is the only target where ``os.access(X_OK)``,
+    ``Path.is_file()`` and ``shutil.which()`` all agree on both platforms, so it
+    is the only one that fences by the same mechanism everywhere.
 
     AND IT IS AN ENV VAR BECAUSE ENV REACHES CHILDREN. The agent that was caught
     was a CHILD of pytest. ``_no_ambient_base`` above says it plainly: an
@@ -112,13 +184,10 @@ def _no_test_can_spawn_a_claude_agent(tmp_path, monkeypatch):
     stubs the resolver, exactly as the base fence intends -- an autouse fixture
     runs first, so the test's own monkeypatch still wins.
     """
-    unusable = tmp_path / "no-claude-here"
-    unusable.write_text(
-        "Not an executable. CADRE_CLAUDE_BIN points here during the test suite\n"
-        "so that no test can resolve, and therefore spawn, a real Claude agent.\n"
-        "See tests/conftest.py and issue #81.\n",
-        encoding="utf-8")
-    unusable.chmod(0o644)
+    unusable = tmp_path / "no-claude-here-and-never-created"
+    assert not unusable.exists(), (
+        f"{unusable} exists, so the fence would be pointing at a real file and "
+        "on Windows every resolver would accept it -- see the docstring above")
     monkeypatch.setenv("CADRE_CLAUDE_BIN", str(unusable))
 
 
