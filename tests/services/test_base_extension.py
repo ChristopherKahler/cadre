@@ -581,7 +581,23 @@ class _Run:
 
 @pytest.fixture
 def fake_base(monkeypatch, tmp_path):
-    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: "/fake/base")
+    # A REAL file carrying this host's magic bytes.
+    #
+    # This used to be the string "/fake/base", which is not a file at all. Every
+    # control arm using this fixture therefore proved install() works against
+    # something that could never have executed on any host. Since issue #75
+    # install() identifies its binary before running it, and an unidentified
+    # binary is refused rather than admitted -- so the stand-in has to be
+    # identifiable, and the arms below got stronger for it.
+    from firm.sysconfig.binaries import native_image_format
+
+    _MAGIC = {"pe": b"MZ\x90\x00", "macho": b"\xcf\xfa\xed\xfe"}
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    stub = bindir / "base"
+    stub.write_bytes(_MAGIC.get(native_image_format(), b"\x7fELF") + b"\x00" * 128)
+    stub.chmod(0o755)
+    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: str(stub))
     monkeypatch.setenv("BASE_HOME", str(tmp_path))
     (tmp_path / ".base-gbl" / "extensions").mkdir(parents=True)
     return tmp_path
