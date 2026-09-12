@@ -18,10 +18,11 @@ safe direction and is not: a guard that fails on a correct run gets edited to
 match the code, and that is how it stops guarding.
 
 THE FIX IS TWO TIERS AND TWO ROWS. The nine stable paths keep the exact hash
-and keep their row, wording unchanged. The three churning paths are scanned
-for THIS RUN'S fingerprint instead, and get a row of their own that says only
-what it checked. One row carrying both claims would report more than it
-verified.
+and keep their row, with the wording narrowed to name them: it used to say
+"graph and registry" while the graphs were leaving this tier. The three
+churning paths are scanned for THIS RUN'S fingerprint instead, and get a row
+of their own that says only what it checked. One row carrying both claims
+would report more than it verified.
 
 The expensive half of the proof is CI's `acceptance (windows-latest)`, which
 runs the harness end to end. This file is the cheap half, and it is the half
@@ -228,16 +229,16 @@ def test_an_unreadable_path_is_not_silently_a_pass_for_the_exact_tier():
 
 def test_both_verdict_rows_are_declared_and_distinct():
     """Two claims, two rows. One row carrying both would overstate itself."""
-    exact = "the operator's own graph and registry were never written to"
+    exact = "the operator's registry, config and extensions were never written to"
     scanned = "no appended write carries this run's fingerprint"
     assert exact in h.BASE_SECTION_ROWS
     assert scanned in h.BASE_SECTION_ROWS
     assert exact != scanned
 
 
-def test_the_exact_hash_row_kept_its_wording():
-    """It still means what it always meant, about the files it can still mean it about."""
-    assert ("the operator's own graph and registry were never written to"
+def test_the_exact_hash_row_names_the_set_it_watches():
+    """It names the files it can still mean it about, not the ones that left."""
+    assert ("the operator's registry, config and extensions were never written to"
             in h.BASE_SECTION_ROWS)
 
 
