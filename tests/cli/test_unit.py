@@ -180,6 +180,25 @@ def test_unit_not_found_exits_nonzero(tmp_path: Path) -> None:
     assert "unit-not-found" in result.stderr
 
 
+def test_a_keyless_member_is_told_in_one_line_how_its_unit_gets_closed(
+    tmp_path: Path,
+) -> None:
+    # #106: a founded Member holds no authority key, so this refusal is what
+    # every one of them met. It names the close that works instead.
+    _seed_workspace(tmp_path, project_ac=[])
+    result = _run_cli(
+        "unit", "complete", "UNIT-100",
+        "--member", "MEM-001",
+        "--workspace", str(tmp_path),
+        env={"CADRE_MEMBER_ID": "MEM-001"},
+    )
+    assert result.returncode == 1
+    lines = result.stderr.strip().splitlines()
+    assert len(lines) == 1, result.stderr
+    assert "authority_required" in lines[0]
+    assert "firm doc register --unit" in lines[0]
+
+
 def test_db_missing_exits_nonzero(tmp_path: Path) -> None:
     # No seed — no .firm/firm.db at all.
     result = _run_cli(

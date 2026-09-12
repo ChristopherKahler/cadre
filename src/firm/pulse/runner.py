@@ -7,6 +7,7 @@ Contract invoke → parse → validate → retry → budget update → finalize.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import sqlite3
@@ -23,10 +24,18 @@ from firm.pulse.budget import (
 )
 from firm.pulse.parser import parse_stream
 from firm.pulse.spawn import expected_mcp_servers, spawn_member_run
-from firm.pulse.validate import retry_on_failure, validate_output
+from firm.pulse.validate import (
+    ValidationResult,
+    _artifact_failures,
+    _declared_outputs,
+    retry_on_failure,
+    validate_output,
+)
 from firm.services._id import next_id
+from firm.services._records import log_event
 from firm.services.authority import system_context
 from firm.services.document import register_deliverable
+from firm.services.escalation import raise_escalation, resolve_escalation
 from firm.services.unit import complete_unit
 
 
@@ -126,6 +135,245 @@ def _persist_final_text(
     repo.update(conn, "member_run", run_id, {
         "outputs": json.dumps([{"type": "final_text", "text": text}]),
     })
+
+
+# ---------------------------------------------------------------------------
+# Close-out: a Unit is done only on evidence from the run that served it
+# ---------------------------------------------------------------------------
+#
+# Founded contracts carry gates and no validators, and validate_output passes a
+# config with no validators once the empty-run floor clears. So any run that
+# printed a sentence closed its Unit, including "blocked, need X", and released
+# every Unit that depended on it (#105). For those contracts the harness now
+# asks for evidence the run itself produced before it closes anything.
+#
+# Evidence is judged against what the run DID, read off the Records it wrote
+# and the declared outputs it touched, never against what the Unit already
+# carried. A Document registered by an earlier run that timed out is still on
+# the Unit; counting it would close a Unit whose latest run said it was stuck.
+#
+# It is judged BEFORE _register_deliverables runs, because that step registers
+# whatever the run wrote. A blocked Member's scratch note would otherwise count
+# as the deliverable and the hole would stay open.
+
+#: Records a Member's registration writes: a new Document, or a new version of
+#: one. ``register_deliverable`` writes them for ``firm doc register`` and for
+#: the ``--outputs`` of ``firm unit complete`` alike.
+_REGISTERED_EVENTS = ("document.created", "document.updated")
+
+#: Records a Member's escalation writes. A re-raise the service folded into an
+#: open escalation is still the Member saying it again.
+_ESCALATED_EVENTS = (
+    "escalation.raised", "escalation.deduped", "escalation.reminded",
+)
+
+#: Where a Unit ends up when its run did not earn it a close. The pulse picks
+#: only pending and in_progress Units, so it never runs this one again, and the
+#: dashboard's Retry on the failed run still accepts it (in_review it refuses).
+PARKED_STATUS = "blocked"
+
+_FINISHED_UNIT_STATUSES = ("done", "cancelled")
+
+#: How much of the Member's last words the Board's escalation carries.
+_FINAL_WORDS_CHARS = 600
+
+
+def _validators_in_force(validation_config: dict[str, Any] | None) -> bool:
+    """True when validate_output will actually run a configured validator.
+
+    Mirrors its early returns: no config, a disabled config and an empty list
+    all run nothing, and nothing cannot vouch for a Unit.
+    """
+    if not isinstance(validation_config, dict):
+        return False
+    if not validation_config.get("enabled", True):
+        return False
+    entries = validation_config.get("validators")
+    return isinstance(entries, list) and bool(entries)
+
+
+def _output_signature(path: str, cwd: str) -> Any:
+    """What a declared output looks like on disk, so a later look can tell
+    whether a run wrote it. Size and mtime of the file, or of every file under
+    a directory. None when it is not there."""
+    full = path if os.path.isabs(path) else os.path.join(cwd, path)
+    try:
+        if not os.path.isdir(full):
+            st = os.stat(full)
+            return (st.st_size, st.st_mtime_ns)
+        entries = []
+        for root, _dirs, files in os.walk(full):
+            for name in files:
+                fp = os.path.join(root, name)
+                st = os.stat(fp)
+                entries.append((os.path.relpath(fp, full), st.st_size, st.st_mtime_ns))
+        return tuple(sorted(entries))
+    except OSError:
+        return None
+
+
+@dataclasses.dataclass
+class _RunWindow:
+    """The firm as it stood just before the Member was invoked."""
+
+    records_mark: int
+    outputs: dict[str, Any]
+
+
+def _open_run_window(
+    conn: sqlite3.Connection, unit: dict[str, Any], cwd: str,
+) -> _RunWindow:
+    # Records is append-only (its triggers refuse UPDATE and DELETE), so every
+    # row the run causes lands above the highest rowid there is now.
+    row = conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM records").fetchone()
+    return _RunWindow(
+        records_mark=int(row[0] or 0),
+        outputs={p: _output_signature(p, cwd) for p in _declared_outputs(unit)},
+    )
+
+
+def _judge_closeout(
+    conn: sqlite3.Connection,
+    firm_id: str,
+    unit: dict[str, Any],
+    member_id: str,
+    window: _RunWindow,
+    cwd: str,
+) -> tuple[bool, str]:
+    """Whether the run that just ended earned its Unit a close, and why.
+
+    Not when the Member raised an escalation during the run, or asked the Board
+    to approve something on this Unit and has no approval yet: both say the
+    work is waiting on the Board. Otherwise yes when the Member registered a
+    deliverable against this Unit during the run, or wrote the Unit's declared
+    outputs and all of them are there.
+    """
+    unit_id = unit["id"]
+    rows = conn.execute(
+        "SELECT event_type, target_entity_id FROM records "
+        "WHERE rowid > ? AND firm_id = ? AND actor_type = 'member' "
+        "AND actor_id = ? ORDER BY rowid",
+        (window.records_mark, firm_id, member_id),
+    ).fetchall()
+
+    escalated: list[str] = []
+    gated: list[str] = []
+    registered: list[str] = []
+    for event_type, target_id in ((r[0], r[1]) for r in rows):
+        if event_type in _ESCALATED_EVENTS:
+            esc = repo.get(conn, "escalation", target_id) or {}
+            on_this_unit = esc.get("target_entity_type") == "unit" \
+                and esc.get("target_entity_id") == unit_id
+            # One with no target is the CLI default and may be about anything,
+            # this Unit included. One about some other entity is not about it.
+            if esc and (on_this_unit or not esc.get("target_entity_type")):
+                escalated.append(target_id)
+        elif event_type == "gate.requested":
+            gate = repo.get(conn, "gate", target_id)
+            if gate and gate.get("target_entity_type") == "unit" \
+                    and gate.get("target_entity_id") == unit_id \
+                    and gate.get("status") != "approved":
+                gated.append(target_id)
+        elif event_type in _REGISTERED_EVENTS:
+            doc = repo.get(conn, "document", target_id)
+            if doc and doc.get("parent_entity_type") == "unit" \
+                    and doc.get("parent_entity_id") == unit_id:
+                registered.append(target_id)
+
+    def _names(ids: list[str]) -> str:
+        return ", ".join(dict.fromkeys(ids))
+
+    if escalated:
+        return False, f"the Member raised {_names(escalated)} during the run"
+    if gated:
+        return False, (
+            f"the Member asked the Board to approve {_names(gated)} on "
+            f"{unit_id}, and it is not approved"
+        )
+    if registered:
+        return True, f"{_names(registered)} registered against {unit_id} during the run"
+
+    declared = list(window.outputs)
+    missing = _artifact_failures(declared, cwd)
+    written = [p for p in declared if _output_signature(p, cwd) != window.outputs[p]]
+    if declared and not missing and written:
+        return True, f"the run wrote {unit_id}'s declared outputs: {', '.join(written)}"
+    why = f"no deliverable was registered against {unit_id} during the run"
+    if declared and missing:
+        why += ", and its declared outputs are not all on disk"
+    elif declared:
+        why += ", and the run did not write its declared outputs"
+    return False, why
+
+
+def _parked_key(unit_id: str) -> str:
+    """One open parked-Unit escalation per Unit, however often it parks."""
+    return f"unit-parked:{unit_id}"
+
+
+def _final_words(text: str | None) -> str:
+    words = " ".join((text or "").split())
+    if not words:
+        return "(nothing)"
+    if len(words) <= _FINAL_WORDS_CHARS:
+        return words
+    return "…" + words[-_FINAL_WORDS_CHARS:]
+
+
+def _park_unit(
+    conn: sqlite3.Connection,
+    firm_id: str,
+    unit: dict[str, Any],
+    member: dict[str, Any],
+    run_id: str,
+    parsed: dict[str, Any],
+    reason: str,
+) -> None:
+    """Stop a Unit whose run did not earn a close, and tell the Board why."""
+    unit_id = unit["id"]
+    prior = (repo.get(conn, "unit", unit_id) or unit).get("status")
+    repo.update(conn, "unit", unit_id, {"status": PARKED_STATUS})
+    log_event(
+        conn,
+        firm_id=firm_id,
+        event_type="unit.status_transition",
+        actor={"type": "system", "id": None},
+        target_ref={"type": "unit", "id": unit_id},
+        details={"from": prior, "to": PARKED_STATUS, "reason": reason},
+        run_id=run_id,
+    )
+    raise_escalation(conn, firm_id, {
+        "raised_by_member_id": member["id"],
+        "title": f"{unit_id} parked, not done",
+        "body": (
+            f"The pulse did not mark {unit_id} done after {run_id}: {reason}. "
+            f"It is {PARKED_STATUS} now, so no pulse runs it again and the "
+            "Units that depend on it stay unstarted.\n"
+            f"{member.get('name') or member['id']} ({member['id']}) ended with: "
+            f"{_final_words(parsed.get('text'))}\n"
+            f"If the work is there, close it: firm unit complete {unit_id} "
+            f"--member {member['id']} --outputs <file>. Otherwise answer on "
+            "the Unit and retry the run."
+        ),
+        "target_entity_type": "unit",
+        "target_entity_id": unit_id,
+        "dedupe_key": _parked_key(unit_id),
+    })
+
+
+def _resolve_parked_escalation(
+    conn: sqlite3.Connection, firm_id: str, unit_id: str, resolution: str,
+) -> None:
+    """A Unit that closes takes its parked escalation with it. Call it under
+    system_context(): resolving is gated, and the harness is not a Member."""
+    for esc in repo.find(
+        conn, "escalation", firm_id=firm_id, dedupe_key=_parked_key(unit_id),
+    ):
+        if esc.get("status") in ("open", "acknowledged"):
+            resolve_escalation(
+                conn, esc["id"], status="resolved", resolution=resolution,
+                actor={"type": "system", "id": None},
+            )
 
 
 _MCP_LOG_ROOT = os.path.expanduser("~/.cache/claude-cli-nodejs")
@@ -465,6 +713,10 @@ def _execute_run(
     """Steps 5–13: invoke, parse, validate, finalize, persist completion."""
     member_id = member["id"]
 
+    # 4b. Mark where the firm stands, so the close-out can tell what THIS run
+    # did from what the Unit already carried.
+    window = _open_run_window(conn, unit, cwd)
+
     # 5. Invoke via Contract interface
     result = runtime.invoke(conn, contract or {}, member, unit, cwd=cwd, run_id=run_id)
 
@@ -579,6 +831,29 @@ def _execute_run(
             mcp_missing = _mcp_startup_guard(conn, run_id, parsed, cwd)
             validation_result = validate_output(parsed, validation_config, cwd, unit=unit)
 
+    # 9b. Close-out evidence. Configured validators keep deciding on their own;
+    # with none in force, a passing run still has to show the harness evidence
+    # before its Unit closes, and a run that does not parks the Unit.
+    park_reason: str | None = None
+    closed_during_run: str | None = None
+    if not _validators_in_force(validation_config):
+        current = repo.get(conn, "unit", unit["id"]) or unit
+        if current.get("status") in _FINISHED_UNIT_STATUSES:
+            # Someone who may close it (the Board, or a Member holding the
+            # authority key) already did. Neither park it nor close it twice.
+            closed_during_run = current["status"]
+        elif validation_result.passed:
+            done, why = _judge_closeout(conn, firm_id, unit, member_id, window, cwd)
+            validation_result = ValidationResult(
+                passed=done,
+                details=[*validation_result.details,
+                         {"name": "unit_evidence", "passed": done, "message": why}],
+            )
+            if not done:
+                park_reason = why
+        else:
+            park_reason = "the run produced no text and no tool actions"
+
     # 10. Rate limit awareness
     rate_warning = check_rate_limit(
         parsed.get("rate_limit_events", []),
@@ -596,14 +871,20 @@ def _execute_run(
     # 12. Finalize member_run
     final_status = "completed" if validation_result.passed else "failed"
     _persist_final_text(conn, run_id, parsed)
-    repo.update(conn, "member_run", run_id, {
+    finalize: dict[str, Any] = {
         "status": final_status,
         "ended_at": datetime.now(tz=timezone.utc).isoformat(),
         "validation_result": json.dumps({
             "passed": validation_result.passed,
             "details": validation_result.details,
         }),
-    })
+    }
+    if park_reason is not None:
+        finalize["error"] = json.dumps({
+            "type": "unit_not_done", "unit_status": PARKED_STATUS,
+            "reason": park_reason,
+        })
+    repo.update(conn, "member_run", run_id, finalize)
 
     # 13. Completion persistence — a validated run MUST flip its Unit to
     # done (audit record + AC rollup via the service), or every future
@@ -612,12 +893,23 @@ def _execute_run(
     # not the model, is the completion authority — hence system_context():
     # the authority gate must read this as the harness acting, even when the
     # pulse itself was fired from inside a Member run's process tree.
-    if validation_result.passed:
+    if closed_during_run:
+        with system_context():
+            _resolve_parked_escalation(
+                conn, firm_id, unit["id"],
+                f"{unit['id']} was {closed_during_run} when {run_id} ended",
+            )
+    elif validation_result.passed:
         _register_deliverables(
             conn, firm_id, unit, member_id, parsed, validation_config, cwd,
         )
         with system_context():
             complete_unit(conn, firm_id, unit["id"], member_id, run_id=run_id)
+            _resolve_parked_escalation(
+                conn, firm_id, unit["id"], f"{unit['id']} completed by {run_id}",
+            )
+    elif park_reason is not None:
+        _park_unit(conn, firm_id, unit, member, run_id, parsed, park_reason)
 
     out: dict[str, Any] = {
         "run_id": run_id,

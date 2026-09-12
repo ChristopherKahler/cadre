@@ -144,14 +144,17 @@ def _mock_spawn_result(text="Done. AC-1 satisfied.", cost=0.05,
 class TestSuccessfulRun:
 
     @mock.patch("firm.contracts.claude_code.spawn_member_run")
-    def test_creates_and_finalizes_member_run(self, mock_spawn):
-        mock_spawn.return_value = _mock_spawn_result()
-
+    def test_creates_and_finalizes_member_run(self, mock_spawn, tmp_path):
         conn = _fresh_conn()
         _add_contract(conn, "CON-001")
         _add_member(conn, "MEM-001", contract_id="CON-001")
         _add_project(conn, "PRJ-001")
         _add_unit(conn, "UNT-001", "PRJ-001", claimed_by="MEM-001")
+        # A run completes by registering its deliverable (see
+        # TestUnitClosesOnlyOnEvidence), so this one does.
+        mock_spawn.side_effect = _member_does(
+            conn, _mock_spawn_result(), _registers(tmp_path / "out.md"),
+        )
 
         runner = make_runner("chrisai", "/tmp")
         member = get(conn, "member", "MEM-001")
@@ -538,12 +541,15 @@ class TestFinalTextPersistence:
         return get(conn, "member", "MEM-001")
 
     @mock.patch("firm.contracts.claude_code.spawn_member_run")
-    def test_completed_run_persists_final_text(self, mock_spawn):
+    def test_completed_run_persists_final_text(self, mock_spawn, tmp_path):
         deliverable = "Canon check verdict: chapter 18 is consistent."
-        mock_spawn.return_value = _mock_spawn_result(text=deliverable)
 
         conn = _fresh_conn()
         member = self._seed(conn)
+        mock_spawn.side_effect = _member_does(
+            conn, _mock_spawn_result(text=deliverable),
+            _registers(tmp_path / "canon-check.md"),
+        )
         result = make_runner("chrisai", "/tmp")(conn, member)
 
         assert result["status"] == "completed"
@@ -620,6 +626,13 @@ class TestMcpStartupGuard:
         _add_unit(conn, "UNT-001", "PRJ-001", claimed_by="MEM-001")
         return get(conn, "member", "MEM-001")
 
+    def _registers_its_deliverable(self, conn, mock_spawn, tmp_path):
+        """Keep the run about the guard: it registers its deliverable, so its
+        Unit closes and a status other than completed is the guard's doing."""
+        mock_spawn.side_effect = _member_does(
+            conn, mock_spawn.return_value, _registers(tmp_path / "deliverable.md"),
+        )
+
     @mock.patch("firm.contracts.claude_code.spawn_member_run")
     def test_missing_firm_mcp_flags_run_degraded(self, mock_spawn, tmp_path):
         mock_spawn.return_value = _mock_spawn_result(
@@ -629,6 +642,7 @@ class TestMcpStartupGuard:
 
         conn = _fresh_conn()
         member = self._seed(conn)
+        self._registers_its_deliverable(conn, mock_spawn, tmp_path)
         result = make_runner("chrisai", self._firm_workspace(tmp_path))(conn, member)
 
         assert result["status"] == "completed"  # degraded, not dead
@@ -648,6 +662,7 @@ class TestMcpStartupGuard:
 
         conn = _fresh_conn()
         member = self._seed(conn)
+        self._registers_its_deliverable(conn, mock_spawn, tmp_path)
         result = make_runner("chrisai", self._firm_workspace(tmp_path))(conn, member)
 
         assert result["status"] == "completed"
@@ -663,6 +678,7 @@ class TestMcpStartupGuard:
 
         conn = _fresh_conn()
         member = self._seed(conn)
+        self._registers_its_deliverable(conn, mock_spawn, tmp_path)
         result = make_runner("chrisai", self._firm_workspace(tmp_path))(conn, member)
 
         assert result["status"] == "completed"
@@ -678,6 +694,7 @@ class TestMcpStartupGuard:
 
         conn = _fresh_conn()
         member = self._seed(conn)
+        self._registers_its_deliverable(conn, mock_spawn, tmp_path)
         result = make_runner("chrisai", str(tmp_path))(conn, member)
 
         assert result["status"] == "completed"
@@ -696,6 +713,7 @@ class TestMcpStartupGuard:
 
         conn = _fresh_conn()
         member = self._seed(conn)
+        self._registers_its_deliverable(conn, mock_spawn, tmp_path)
         result = make_runner("chrisai", self._firm_workspace(tmp_path))(conn, member)
 
         assert result["status"] == "completed"
@@ -992,3 +1010,306 @@ class TestFailureBilling:
         events = find(conn, "usage_event", member_id="MEM-001")
         assert len(events) == 1
         assert events[0]["tokens_in"] == 20000
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Close-out — a Unit is done only on evidence from the run that served it
+# (#105), and that evidence is one a keyless Member can produce (#106)
+# ═══════════════════════════════════════════════════════════════════════════
+
+from firm.pulse.orchestrator import compute_load  # noqa: E402
+from firm.pulse.runner import _find_member_unit  # noqa: E402
+from firm.services.authority import grant_authority  # noqa: E402
+from firm.services.document import register_deliverable  # noqa: E402
+from firm.services.escalation import raise_escalation  # noqa: E402
+from firm.services.gate import request_gate  # noqa: E402
+from firm.services.unit import complete_unit, release_unit, update_unit  # noqa: E402
+
+#: What founding writes on every contract (gates, no validators) plus the deny
+#: list Train adds. Every founded contract on the operator's machine has this
+#: shape, so the close-out is tested against it rather than a test-only one.
+FOUNDED_VALIDATION_CONFIG = {"gates_required": ["spend", "publish"], "deny": []}
+
+
+def _founded_firm(conn, *, outputs=None):
+    """MEM-001 on a founded contract holding UNT-001, and MEM-002 whose UNT-002
+    depends on UNT-001."""
+    _add_contract(conn, "CON-001", validation_config=FOUNDED_VALIDATION_CONFIG)
+    _add_member(conn, "MEM-001", contract_id="CON-001")
+    _add_member(conn, "MEM-002", contract_id="CON-001")
+    _add_project(conn, "PRJ-001")
+    create(conn, "unit", {
+        "id": "UNT-001", "firm_id": "chrisai", "project_id": "PRJ-001",
+        "name": "Build checkout", "status": "pending",
+        "assignee_member_id": "MEM-001", "claimed_by": "MEM-001",
+        "depends_on": [], "outputs": outputs,
+    })
+    create(conn, "unit", {
+        "id": "UNT-002", "firm_id": "chrisai", "project_id": "PRJ-001",
+        "name": "Launch checkout", "status": "pending",
+        "assignee_member_id": "MEM-002", "depends_on": ["UNT-001"],
+    })
+    return get(conn, "member", "MEM-001")
+
+
+def _member_does(conn, spawn_result, *acts):
+    """A spawn whose Member runs *acts* against the firm before it answers, the
+    way its Bash calls to the firm CLI do in a real run."""
+    def _spawn(*_args, **_kwargs):
+        for act in acts:
+            act(conn)
+        return spawn_result
+    return _spawn
+
+
+def _registers(path, unit_id="UNT-001", member_id="MEM-001"):
+    """``firm doc register --unit <unit> --path <path>``, as the prompt teaches."""
+    def act(conn):
+        path.write_text("the deliverable")
+        register_deliverable(conn, "chrisai", unit_id, str(path), member_id=member_id)
+    return act
+
+
+def _escalates(title, member_id="MEM-001"):
+    """``firm escalation raise --title <title>`` with no target, the CLI default."""
+    def act(conn):
+        raise_escalation(conn, "chrisai", {
+            "raised_by_member_id": member_id, "title": title,
+        })
+    return act
+
+
+def _evidence_detail(run):
+    vr = run["validation_result"]
+    details = (json.loads(vr) if isinstance(vr, str) else vr)["details"]
+    [detail] = [d for d in details if d["name"] == "unit_evidence"]
+    return detail
+
+
+def _escalations_on(conn, unit_id="UNT-001"):
+    return [
+        e for e in find(conn, "escalation", firm_id="chrisai")
+        if e.get("target_entity_type") == "unit"
+        and e.get("target_entity_id") == unit_id
+    ]
+
+
+class TestUnitClosesOnlyOnEvidence:
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_a_run_that_only_talks_parks_its_unit_and_tells_the_board(self, mock_spawn):
+        words = "Blocked: I need the Stripe API key before I can build checkout."
+        mock_spawn.return_value = _mock_spawn_result(text=words)
+        conn = _fresh_conn()
+        member = _founded_firm(conn)
+
+        result = make_runner("chrisai", "/tmp")(conn, member)
+
+        assert result["status"] == "failed"
+        assert get(conn, "unit", "UNT-001")["status"] == "blocked"
+        run = get(conn, "member_run", result["run_id"])
+        assert run["status"] == "failed"
+        why = _evidence_detail(run)
+        assert why["passed"] is False
+        assert "no deliverable was registered" in why["message"]
+        [escalation] = _escalations_on(conn)
+        assert escalation["status"] == "open"
+        assert "Stripe API key" in escalation["body"]
+        # UNT-002 waits on UNT-001, which is not done, so MEM-002 starts nothing.
+        assert _find_member_unit(conn, "MEM-002") is None
+        assert get(conn, "unit", "UNT-002")["claimed_by"] is None
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_a_parked_unit_is_not_dispatched_again(self, mock_spawn):
+        mock_spawn.return_value = _mock_spawn_result(text="Blocked, need the API key.")
+        conn = _fresh_conn()
+        runner = make_runner("chrisai", "/tmp")
+        runner(conn, _founded_firm(conn))
+        assert get(conn, "unit", "UNT-001")["status"] == "blocked"
+
+        again = runner(conn, get(conn, "member", "MEM-001"))
+
+        assert again["skipped"] is True
+        assert mock_spawn.call_count == 1
+        assert compute_load(conn, "MEM-001") == 0
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_a_deliverable_registered_during_the_run_completes_the_unit(
+        self, mock_spawn, tmp_path,
+    ):
+        conn = _fresh_conn()
+        member = _founded_firm(conn)
+        mock_spawn.side_effect = _member_does(
+            conn, _mock_spawn_result(text="Checkout is built."),
+            _registers(tmp_path / "checkout.md"),
+        )
+
+        result = make_runner("chrisai", "/tmp")(conn, member)
+
+        assert result["status"] == "completed"
+        assert get(conn, "unit", "UNT-001")["status"] == "done"
+        why = _evidence_detail(get(conn, "member_run", result["run_id"]))
+        assert why["passed"] is True
+        assert "DOC-001" in why["message"]
+        assert _escalations_on(conn) == []
+        assert _find_member_unit(conn, "MEM-002")["id"] == "UNT-002"
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_after_the_boards_retry_a_registration_closes_the_unit_and_its_escalation(
+        self, mock_spawn, tmp_path,
+    ):
+        conn = _fresh_conn()
+        runner = make_runner("chrisai", "/tmp")
+        mock_spawn.return_value = _mock_spawn_result(text="Blocked, need the API key.")
+        runner(conn, _founded_firm(conn))
+        [escalation] = _escalations_on(conn)
+
+        # What the dashboard's Retry on the failed run does to the Unit.
+        release_unit(conn, "UNT-001")
+        update_unit(conn, "UNT-001", {"status": "pending"})
+        mock_spawn.side_effect = _member_does(
+            conn, _mock_spawn_result(text="Got the key. Checkout is built."),
+            _registers(tmp_path / "checkout.md"),
+        )
+
+        result = runner(conn, get(conn, "member", "MEM-001"))
+
+        assert result["status"] == "completed"
+        assert get(conn, "unit", "UNT-001")["status"] == "done"
+        assert get(conn, "escalation", escalation["id"])["status"] == "resolved"
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_an_escalation_raised_during_the_run_keeps_the_unit_open(
+        self, mock_spawn, tmp_path,
+    ):
+        conn = _fresh_conn()
+        member = _founded_firm(conn)
+        mock_spawn.side_effect = _member_does(
+            conn, _mock_spawn_result(text="Half drafted. BLOCKED on pricing."),
+            _registers(tmp_path / "draft.md"),
+            _escalates("BLOCKED: need the pricing table"),
+        )
+
+        result = make_runner("chrisai", "/tmp")(conn, member)
+
+        assert result["status"] == "failed"
+        assert get(conn, "unit", "UNT-001")["status"] == "blocked"
+        [raised] = [
+            e for e in find(conn, "escalation", firm_id="chrisai")
+            if e["title"].startswith("BLOCKED")
+        ]
+        why = _evidence_detail(get(conn, "member_run", result["run_id"]))
+        assert raised["id"] in why["message"]
+        assert _find_member_unit(conn, "MEM-002") is None
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_a_gate_requested_on_the_unit_keeps_it_open(self, mock_spawn, tmp_path):
+        conn = _fresh_conn()
+        member = _founded_firm(conn)
+        mock_spawn.side_effect = _member_does(
+            conn, _mock_spawn_result(text="Post is ready. Asked to publish it."),
+            _registers(tmp_path / "post.md"),
+            lambda c: request_gate(c, "chrisai", {
+                "requesting_member_id": "MEM-001", "action": "publish the post",
+                "target_entity_type": "unit", "target_entity_id": "UNT-001",
+            }),
+        )
+
+        result = make_runner("chrisai", "/tmp")(conn, member)
+
+        assert result["status"] == "failed"
+        assert get(conn, "unit", "UNT-001")["status"] == "blocked"
+        [gate] = find(conn, "gate", firm_id="chrisai")
+        why = _evidence_detail(get(conn, "member_run", result["run_id"]))
+        assert gate["id"] in why["message"]
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_a_deliverable_registered_before_the_run_is_not_evidence(
+        self, mock_spawn, tmp_path,
+    ):
+        # An earlier run registered a draft and then timed out, so the Unit is
+        # still open and already carries that Document. This run adds nothing.
+        conn = _fresh_conn()
+        member = _founded_firm(conn)
+        _registers(tmp_path / "draft.md")(conn)
+        mock_spawn.return_value = _mock_spawn_result(
+            text="Blocked: I still need the final numbers.",
+        )
+
+        result = make_runner("chrisai", "/tmp")(conn, member)
+
+        assert result["status"] == "failed"
+        assert get(conn, "unit", "UNT-001")["status"] == "blocked"
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_declared_outputs_the_run_writes_complete_the_unit(
+        self, mock_spawn, tmp_path,
+    ):
+        conn = _fresh_conn()
+        member = _founded_firm(conn, outputs=["report.md"])
+        mock_spawn.side_effect = _member_does(
+            conn, _mock_spawn_result(text="Report written."),
+            lambda _c: (tmp_path / "report.md").write_text("the numbers"),
+        )
+
+        result = make_runner("chrisai", str(tmp_path))(conn, member)
+
+        assert result["status"] == "completed"
+        assert get(conn, "unit", "UNT-001")["status"] == "done"
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_a_run_with_no_output_at_all_parks_the_unit(self, mock_spawn):
+        # The empty-run floor already failed this run. The Unit used to stay
+        # open, so every pulse paid for the same no-op again.
+        mock_spawn.return_value = _mock_spawn_result(text="")
+        conn = _fresh_conn()
+
+        result = make_runner("chrisai", "/tmp")(conn, _founded_firm(conn))
+
+        assert result["status"] == "failed"
+        assert get(conn, "unit", "UNT-001")["status"] == "blocked"
+        assert compute_load(conn, "MEM-001") == 0
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_configured_validators_still_decide_on_their_own(self, mock_spawn):
+        mock_spawn.return_value = _mock_spawn_result(text="five words of real output")
+        conn = _fresh_conn()
+        _add_contract(conn, "CON-001", validation_config={
+            "validators": [{"name": "min_word_count", "threshold": 3}],
+        })
+        _add_member(conn, "MEM-001", contract_id="CON-001")
+        _add_project(conn, "PRJ-001")
+        _add_unit(conn, "UNT-001", "PRJ-001", claimed_by="MEM-001")
+
+        result = make_runner("chrisai", "/tmp")(conn, get(conn, "member", "MEM-001"))
+
+        assert result["status"] == "completed"
+        assert get(conn, "unit", "UNT-001")["status"] == "done"
+
+    @mock.patch("firm.contracts.claude_code.spawn_member_run")
+    def test_a_unit_an_authority_holder_closed_during_the_run_is_left_alone(
+        self, mock_spawn,
+    ):
+        import os
+
+        conn = _fresh_conn()
+        member = _founded_firm(conn)
+        grant_authority(conn, "MEM-001")
+
+        def closes_it_itself(c):
+            with mock.patch.dict(os.environ, {"CADRE_MEMBER_ID": "MEM-001"}):
+                complete_unit(c, "chrisai", "UNT-001", "MEM-001")
+
+        mock_spawn.side_effect = _member_does(
+            conn, _mock_spawn_result(text="Closed it myself."), closes_it_itself,
+        )
+
+        result = make_runner("chrisai", "/tmp")(conn, member)
+
+        assert result["status"] == "completed"
+        assert get(conn, "unit", "UNT-001")["status"] == "done"
+        assert _escalations_on(conn) == []
+        completions = conn.execute(
+            "SELECT COUNT(*) FROM records WHERE event_type = 'unit.completed'"
+        ).fetchone()[0]
+        assert completions == 1

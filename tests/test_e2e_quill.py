@@ -130,11 +130,21 @@ class TestDispatchChain:
 
 class TestE2ERunnerLifecycle:
     @mock.patch("firm.contracts.claude_code.spawn_member_run")
-    def test_seeded_quill_runs_to_completion(self, mock_spawn):
-        mock_spawn.return_value = _mock_spawn_result()
+    def test_seeded_quill_runs_to_completion(self, mock_spawn, tmp_path):
+        from firm.services.document import register_deliverable
 
         conn = _fresh_conn()
         seed_chrisai(conn)
+
+        def quill_registers_the_post(*_args, **_kwargs):
+            # The run closes its Unit the way the prompt teaches: by
+            # registering the deliverable, which is what the harness closes from.
+            post = tmp_path / "claude-code-workflow-automation.md"
+            post.write_text("the post")
+            register_deliverable(conn, "chrisai", "UNT-001", str(post), member_id="MEM-001")
+            return _mock_spawn_result()
+
+        mock_spawn.side_effect = quill_registers_the_post
 
         # Run Quill through the PULSE runner
         runner = make_runner("chrisai", "/tmp")
