@@ -55,11 +55,42 @@ a function-local string constant -- a value shape, inside a recognised call
 -- came back OK_EXPR. Measured by avocet as arm E: 143 passed, unchanged,
 not caught, because the constant collector walked module level only.
 
-Two shapes this guard does not SEE at all, as opposed to classifying wrongly:
-a plain attribute assignment (`m.which_base = lambda: ...`, not an ast.Call)
-and a name imported from another module. Both are issue #93's door, and
-#93's own note holds: widen the recognised SURFACE, never widen what counts
-as an acceptable value.
+ONE shape this guard does not SEE at all, as opposed to classifying
+wrongly: a plain attribute assignment (`m.which_base = lambda: ...`),
+which is not an ast.Call and so yields no verdict rather than UNKNOWN.
+An imported name was listed here too and that was WRONG -- it is seen,
+and it now lands as UNKNOWN because nothing in the file binds it.
+
+THE BIGGEST REMAINING HOLE IS AN INDIRECTION, named here rather than
+left to look covered. A helper that takes the path as a PARAMETER and
+passes it on --
+
+    def _point_which_base_at(monkeypatch, path):
+        monkeypatch.setattr("...which_base", lambda: path)
+
+-- is correctly OK_EXPR, because `path` arrives at call time. But a
+caller one hop away writing _point_which_base_at(monkeypatch,
+"/usr/bin/base") passes a bare string this guard never sees, and every
+foreign-base test in this tree routes through two such helpers. That is
+the highest-leverage blind spot in the file.
+
+EVERY OTHER SHAPE THAT STAYS ACCEPTABLE, NAMED. An unnamed blessing is
+what made block 3, so these are listed rather than left to be discovered:
+
+  - An iterable this guard cannot see into -- a call, a name, a
+    generator -- binds its loop variable at run time and is OK_EXPR.
+    That is a MISS, not a blessing: the text genuinely does not show the
+    value. `for p in ["/usr/bin/base"]` IS caught, because it does.
+  - A dict METHOD call is one of those. `for label, path in
+    {"foreign": "/usr/bin/base"}.items()` reads as a call, so the bare
+    path is not seen. Iterating the dict DIRECTLY is caught, because
+    that hands out keys this guard can read.
+  - A name imported from another module is UNKNOWN, not acceptable, and
+    that is deliberate: its value cannot be checked here.
+
+All of these and the plain attribute assignment are issue #93's door,
+and #93's own note holds: widen the recognised SURFACE, never widen what
+counts as an acceptable value.
 
 KNOWN LIMIT, stated here rather than discovered later. This keys on the NAME
 `which_base`. A fixture that patches `shutil.which` to hand back a stand-in base
@@ -195,6 +226,134 @@ _NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
                   ast.ClassDef)
 
 
+# A name BOUND AT RUN TIME, meaning the text CANNOT show what value it
+# takes. Marked distinctly from "bound to a non-literal expression"
+# because it is a different FACT even though the two share a verdict.
+# Block 3 was two different facts sharing one token, so this file does
+# not do that again.
+#
+# THE WORD "CANNOT" IS DOING REAL WORK AND IT WAS WRONG ONCE. A first
+# draft called every parameter and every loop variable runtime, which
+# would have BLESSED both of these by design:
+#
+#     def _helper(monkeypatch, path="/usr/bin/base")
+#     for path in ["/usr/bin/base"]:
+#
+# Both are bare string literals written right here. avocet measured it
+# before it shipped. A blessing is far harder to take back than an
+# omission, so runtime is asserted ONLY where the text genuinely cannot
+# show the value: look at a parameter's DEFAULT and a loop's ITERABLE
+# first, and fall back to runtime only when neither yields a literal.
+_RUNTIME = object()
+
+_PARAM_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+
+
+def _iter_elements(node: ast.AST):
+    """The element expressions iterating `node` would hand out, or None.
+
+    None means this guard cannot SEE what it yields, which is a different
+    answer from "it yields nothing" -- the distinction block 3 was about.
+
+    A DICT HANDS OUT ITS KEYS, NOT ITS VALUES. Reading .values would be
+    wrong in both directions at once: it would miss
+    {"/usr/bin/base": True}, whose key is the bare path, and it would
+    reach past the key in {"k": "/usr/bin/base"} to a value no loop
+    variable ever receives.
+
+    yields_literals is deliberately NOT changed. It answers what an
+    EXPRESSION evaluates to, which is the right question for the direct
+    value and the wrong one for an iterable; widening it would
+    reclassify every arm in this file.
+    """
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return list(node.elts)
+    if isinstance(node, ast.Dict):
+        return [k for k in node.keys if k is not None]
+    return None
+
+
+def _bind_value(target: ast.AST, value: ast.AST, binds: dict) -> None:
+    """Bind `target` to `value`, matching tuple shape POSITIONALLY.
+
+        for label, path in [("foreign", "/usr/bin/base")]
+
+    must give `path` the path and `label` the label. An earlier draft
+    opened the list, got a Tuple back, asked the EXPRESSION question of
+    it, got nothing, and blessed the bare path. Handing every literal to
+    every name is not a fix either -- it pairs "foreign" with `path`.
+
+    When the shapes do not line up -- a starred target, a length
+    mismatch -- every literal the value could hand out goes to every name
+    in the target. Conservative on purpose: reporting a name that MIGHT
+    receive a bare string is the safe error here, and blessing one that
+    might is not.
+    """
+    if (isinstance(target, (ast.Tuple, ast.List))
+            and isinstance(value, (ast.Tuple, ast.List))
+            and len(target.elts) == len(value.elts)
+            and not any(isinstance(t, ast.Starred) for t in target.elts)):
+        for t, v in zip(target.elts, value.elts):
+            _bind_value(t, v, binds)
+        return
+
+    lits = list(yields_literals(value))
+    inner = _iter_elements(value)
+    if inner is not None:
+        for e in inner:
+            lits.extend(yields_literals(e))
+    for name in _target_names(target):
+        if lits:
+            binds.setdefault(name, set()).update(lits)
+        else:
+            binds.setdefault(name, set()).add(_RUNTIME)
+
+
+def _bind_loop_target(target: ast.AST, iterable: ast.AST,
+                      binds: dict) -> None:
+    """One binding per element the iterable would hand out."""
+    elements = _iter_elements(iterable)
+    if elements is None:
+        for name in _target_names(target):
+            binds.setdefault(name, set()).add(_RUNTIME)
+        return
+    for el in elements:
+        _bind_value(target, el, binds)
+
+
+def _param_binds(scope: ast.AST) -> dict[str, set]:
+    """Each parameter name -> the literal it defaults to, else _RUNTIME.
+
+    A bare-string DEFAULT is a literal written in this file, so it is
+    recorded as one and classifies through the ordinary machinery. Only a
+    parameter with no default, or a non-literal default, is runtime.
+    """
+    if not isinstance(scope, _PARAM_SCOPES):
+        return {}
+    a = scope.args
+    positional = list(a.posonlyargs) + list(a.args)
+    # Defaults align to the LAST len(defaults) positional parameters.
+    pad = len(positional) - len(a.defaults)
+    pairs = [(p.arg, a.defaults[i - pad] if i >= pad else None)
+             for i, p in enumerate(positional)]
+    pairs += list(zip([p.arg for p in a.kwonlyargs], a.kw_defaults))
+    pairs += [(x.arg, None) for x in (a.vararg, a.kwarg) if x is not None]
+
+    out: dict[str, set] = {}
+    for name, default in pairs:
+        lits = yields_literals(default) if default is not None else []
+        if lits:
+            out.setdefault(name, set()).update(lits)
+        else:
+            out.setdefault(name, set()).add(_RUNTIME)
+    return out
+
+
+def _target_names(target: ast.AST) -> list:
+    """Every Name a binding target introduces, tuple unpacking included."""
+    return [n.id for n in ast.walk(target) if isinstance(n, ast.Name)]
+
+
 def _own_scope_binds(scope: ast.AST) -> dict[str, set]:
     """Names bound in THIS scope's own body, to the string literals they take.
 
@@ -208,8 +367,26 @@ def _own_scope_binds(scope: ast.AST) -> dict[str, set]:
     constant was therefore never collected, so the WEAK_CONST branch --
     which exists for exactly that shape -- could only ever fire on a
     module-level name, and a local fell through to OK_EXPR.
+
+    PARAMETERS ARE BOUND HERE, and that is block 3. They were not, so
+    the live helper
+
+        def _point_which_base_at(monkeypatch, path):
+            monkeypatch.setattr("...which_base", lambda: path)
+
+    resolved to "nothing binds this name". Once unbound started failing
+    as UNKNOWN that would have turned the guard RED on the two files
+    every foreign-base test in this tree routes through. A parameter is
+    not an unresolvable name; it is a value that arrives at call time.
+    For targets, with-as names, comprehension variables and except-as
+    names are the same fact and are bound the same way.
+
+    IMPORTS ARE DELIBERATELY NOT BOUND. An imported name has no value
+    this file can read, so it stays unresolvable and fails as UNKNOWN.
     """
-    binds: dict[str, set] = {}
+    binds: dict[str, set] = {k: set(v) for k, v in
+                             _param_binds(scope).items()}
+
     stack = list(ast.iter_child_nodes(scope))
     while stack:
         n = stack.pop()
@@ -221,6 +398,18 @@ def _own_scope_binds(scope: ast.AST) -> dict[str, set]:
             targets, value = list(n.targets), n.value
         elif isinstance(n, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
             targets, value = [n.target], n.value
+        elif isinstance(n, (ast.For, ast.AsyncFor, ast.comprehension)):
+            # The ITERABLE decides, element by element, matched to the
+            # target positionally. Iterating a literal container binds a
+            # bare string, and calling that runtime would bless it.
+            _bind_loop_target(n.target, n.iter, binds)
+        elif isinstance(n, (ast.With, ast.AsyncWith)):
+            for item in n.items:
+                if item.optional_vars is not None:
+                    for name in _target_names(item.optional_vars):
+                        binds.setdefault(name, set()).add(_RUNTIME)
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            binds.setdefault(n.name, set()).add(_RUNTIME)
         if value is not None:
             lit = (value.value if isinstance(value, ast.Constant)
                    and isinstance(value.value, str) else None)
@@ -265,34 +454,35 @@ def _scope_chains(tree: ast.Module) -> dict[int, list]:
     return chains
 
 
-def _lambda_params(lam: ast.Lambda) -> set:
-    a = lam.args
-    names = {x.arg for x in a.posonlyargs + a.args + a.kwonlyargs}
-    for extra in (a.vararg, a.kwarg):
-        if extra is not None:
-            names.add(extra.arg)
-    return names
-
-
 def _resolve_string_name(chain: list, name: str) -> tuple:
     """Look `name` up the way Python does: the innermost binding wins.
 
       ("literal", s)    every binding in the winning scope is that string
       ("mixed", None)   bound to a string AND to something else, so which
                         value reaches which_base is not decidable here
+      ("runtime", None) bound at run time -- a parameter, a for target, a
+                        with-as name -- so the value arrives at call time
+                        and cannot be a bare literal written here
       ("expr", None)    bound, but never to a string literal
-      ("unbound", None) nothing in this file binds it
+      ("unbound", None) NOTHING in this file binds it, an imported name
+                        included, so its value cannot be checked here
+
+    "runtime", "expr" and "unbound" are three different facts. The first
+    two are acceptable and the third is not, and block 3 was the last two
+    of them sharing one verdict.
     """
     for scope in reversed(chain):
         if name not in scope:
             continue
         vals = scope[name]
-        lits = {v for v in vals if v is not None}
-        if not lits:
-            return "expr", None
-        if len(lits) == 1 and None not in vals:
-            return "literal", next(iter(lits))
-        return "mixed", None
+        lits = {v for v in vals if isinstance(v, str)}
+        if lits:
+            if len(lits) == 1 and all(isinstance(v, str) for v in vals):
+                return "literal", next(iter(lits))
+            return "mixed", None
+        if _RUNTIME in vals:
+            return "runtime", None
+        return "expr", None
     return "unbound", None
 
 
@@ -302,7 +492,7 @@ def _resolve_string_name(chain: list, name: str) -> tuple:
 # green, which is the trap tests/test_no_hardcoded_roots.py records for its
 # Windows arm.
 WEAK = "WEAK"                   # value is, or can be, a bare string literal
-WEAK_CONST = "WEAK_CONST"       # value is a name bound to a module string literal
+WEAK_CONST = "WEAK_CONST"       # a name bound to a string literal, in any scope the chain can see
 UNKNOWN = "UNKNOWN"             # a stub this guard cannot classify: NOT acceptable
 OK_EXPR = "OK_EXPR"             # value is an expression, so it can be a real file
 OK_ABSENT = "OK_ABSENT"         # value is None, and absence is a supported state
@@ -378,13 +568,15 @@ def classify_stubs(text: str) -> list[tuple[str, int, str]]:
         elif isinstance(body, ast.Constant) and body.value is None:
             found.append((OK_ABSENT, node.lineno, f"{how} -> None"))
         elif isinstance(body, ast.Name):
-            # A lambda PARAMETER of the same name shadows any outer
-            # binding, so the outer value never reaches which_base.
-            shadowed = (isinstance(val, ast.Lambda)
-                        and body.id in _lambda_params(val))
-            kind, lit = (("unbound", None) if shadowed else
-                         _resolve_string_name(chains.get(id(node), []),
-                                              body.id))
+            # A lambda's OWN parameters are a real scope, pushed here as
+            # one. The previous version FORCED the string "unbound" for a
+            # shadowing parameter purely because that reached OK_EXPR --
+            # one token carrying two opposite meanings, which is the
+            # defect block 3 named. The scope says it instead.
+            chain = list(chains.get(id(node), []))
+            if isinstance(val, ast.Lambda):
+                chain.append(_param_binds(val))
+            kind, lit = _resolve_string_name(chain, body.id)
             if kind == "literal":
                 found.append((WEAK_CONST, node.lineno,
                               f"{how} -> {body.id} = {lit!r}"))
@@ -394,6 +586,17 @@ def classify_stubs(text: str) -> list[tuple[str, int, str]]:
                               "string literal and to something else, so "
                               "which value reaches which_base is not "
                               "decidable from the text"))
+            elif kind == "unbound":
+                found.append((UNKNOWN, node.lineno,
+                              f"{how} -> nothing in this file binds "
+                              f"{body.id}, so its value cannot be "
+                              "checked here. An imported constant lands "
+                              "here, and NOTHING IS FINE BY DEFAULT"))
+            elif kind == "runtime":
+                found.append((OK_EXPR, node.lineno,
+                              f"{how} -> {body.id} is bound at run time "
+                              "(a parameter or loop target), so the "
+                              "value arrives at call time"))
             else:
                 found.append((OK_EXPR, node.lineno,
                               f"{how} -> {ast.unparse(body)[:60]}"))
@@ -566,7 +769,12 @@ _ARMS = [
     # correct fixtures broken. An arm set that omits the shape under test reads
     # exactly as green as one that covers it.
     (WEAK, 'monkeypatch.setattr("p.mod.which_base", lambda: "/fake/base")'),
-    (OK_EXPR, 'monkeypatch.setattr("p.mod.which_base", lambda: STUB_BASE_FROM_A_CALL)'),
+    # FLIPPED FROM OK_EXPR TO UNKNOWN BY BLOCK 3, and called out rather
+    # than left looking untouched. Nothing in this snippet binds the
+    # name, so the guard cannot check its value -- the case the module
+    # docstring says fails as UNKNOWN. It used to share the catch-all
+    # else with a genuine expression and came back acceptable.
+    (UNKNOWN, 'monkeypatch.setattr("p.mod.which_base", lambda: STUB_BASE_FROM_A_CALL)'),
     (OK_ABSENT, 'monkeypatch.setattr("p.mod.which_base", lambda: None)'),
 
     # NAMED CONSTANTS. WEAK_CONST existed for exactly this shape and had
@@ -607,6 +815,120 @@ _ARMS = [
      '    if flag:\n'
      '        p = str(tmp_path / "base")\n'
      '    monkeypatch.setattr(m, "which_base", lambda: p)\n'),
+
+    # BOUND AT RUN TIME. This is the shape the REAL tree uses, at
+    # tests/services/test_install_refuses_a_foreign_base.py and
+    # tests/services/test_scaffold_tier_refuses_a_foreign_base.py. A
+    # naive unbound-to-UNKNOWN turned the guard RED on both, which is
+    # every foreign-base test in the tree. avocet measured it before it
+    # shipped. A parameter is not an unresolvable name.
+    (OK_EXPR,
+     'def _point_which_base_at(monkeypatch, path):\n'
+     '    monkeypatch.setattr("p.mod.which_base", lambda: path)\n'),
+    # A lambda's own parameter, shadowing a module constant. This used to
+    # reach OK_EXPR through a special case that returned the string
+    # "unbound" -- right answer, wrong reason, and the overload that
+    # made block 3 possible.
+    (OK_EXPR,
+     'STUB = "/fake/base"\n'
+     'monkeypatch.setattr(m, "which_base", lambda STUB=1: STUB)\n'),
+    # A for target is the same fact as a parameter.
+    (OK_EXPR,
+     'def _probe(monkeypatch, m, paths):\n'
+     '    for p in paths:\n'
+     '        monkeypatch.setattr(m, "which_base", lambda: p)\n'),
+    # AN IMPORTED NAME. Seen, not invisible, and no longer acceptable:
+    # nothing in this file binds it, so its value cannot be checked here.
+    # The module docstring used to call this shape unseen, which was a
+    # second false sentence in the same paragraph as the first.
+    (UNKNOWN,
+     'from helpers import STUB_BASE\n'
+     'monkeypatch.setattr(m, "which_base", lambda: STUB_BASE)\n'),
+
+    # THE FOUR SHAPES A BLANKET 'BOUND AT RUN TIME' WOULD HAVE BLESSED.
+    # avocet measured these against a draft that called every parameter
+    # and every loop variable runtime, and they are the reason the rule
+    # asks the DEFAULT and the ITERABLE first. A blessing written into
+    # the design is much harder to take back than an omission.
+    #
+    # A bare-string DEFAULT is a literal written right here.
+    (WEAK_CONST,
+     'def _probe(monkeypatch, m, path="/usr/bin/base"):\n'
+     '    monkeypatch.setattr(m, "which_base", lambda: path)\n'),
+    # So is iterating a literal container. yields_literals answers the
+    # EXPRESSION question and returns nothing for a List, so the
+    # container is opened for the iterable case.
+    (WEAK_CONST,
+     'def _probe(monkeypatch, m):\n'
+     '    for path in ["/usr/bin/base"]:\n'
+     '        monkeypatch.setattr(m, "which_base", lambda: path)\n'),
+    # And a comprehension over one.
+    (WEAK_CONST,
+     'def _probe(monkeypatch, m):\n'
+     '    [monkeypatch.setattr(m, "which_base", lambda: p)\n'
+     '     for p in ["/usr/bin/base"]]\n'),
+    # A NON-string default stays runtime, so the rule did not swing into
+    # flagging every defaulted parameter.
+    (OK_EXPR,
+     'def _probe(monkeypatch, m, path=None):\n'
+     '    monkeypatch.setattr(m, "which_base", lambda: path)\n'),
+    # with-as binds an __enter__ result, which the binding itself can
+    # never make a bare literal. Unconditional runtime is correct here.
+    (OK_EXPR,
+     'def _probe(monkeypatch, m, ctx):\n'
+     '    with ctx as path:\n'
+     '        monkeypatch.setattr(m, "which_base", lambda: path)\n'),
+
+    # DESTRUCTURING. This is the shape of the parametrize tables this
+    # repo already uses everywhere, so a future (label, path) table
+    # feeding a helper is a realistic edit rather than a contrived one.
+    # The element is a Tuple and so is the target, and asking the
+    # EXPRESSION question of a Tuple comes back empty -- which is how
+    # this was blessed before the positional match.
+    (WEAK_CONST,
+     'def _probe(monkeypatch, m):\n'
+     '    for label, path in [("foreign", "/usr/bin/base")]:\n'
+     '        monkeypatch.setattr(m, "which_base", lambda: path)\n'),
+    # Nested, to prove the match recurses rather than handling one level.
+    (WEAK_CONST,
+     'def _probe(monkeypatch, m):\n'
+     '    for (label, path), n in [(("foreign", "/usr/bin/base"), 1)]:\n'
+     '        monkeypatch.setattr(m, "which_base", lambda: path)\n'),
+    # A STARRED target cannot be matched positionally, so the
+    # conservative fallback hands every literal to every name. Reporting
+    # a name that MIGHT receive a bare string is the safe error.
+    (WEAK_CONST,
+     'def _probe(monkeypatch, m):\n'
+     '    for path, *rest in [("/usr/bin/base", 1, 2)]:\n'
+     '        monkeypatch.setattr(m, "which_base", lambda: path)\n'),
+    # ITERATING A DICT HANDS OUT ITS KEYS. Keyed by the base path, the
+    # loop variable IS the bare path.
+    (WEAK_CONST,
+     'def _probe(monkeypatch, m):\n'
+     '    for path in {"/usr/bin/base": True}:\n'
+     '        monkeypatch.setattr(m, "which_base", lambda: path)\n'),
+    # Keyed by something else, the guard must NOT reach past the key to
+    # the value. It reports the KEY -- still a bare string literal bound
+    # to which_base, and "k" is no more a file than "/fake/base" is --
+    # but it reports it for the key's own sake, never the value's.
+    (WEAK_CONST,
+     'def _probe(monkeypatch, m):\n'
+     '    for path in {"k": "/usr/bin/base"}:\n'
+     '        monkeypatch.setattr(m, "which_base", lambda: path)\n'),
+    # THE CASE THAT DISCRIMINATES KEYS FROM VALUES, and the one to check
+    # this implementation against. The KEY is an expression and the VALUE
+    # is a bare path, so reading keys is OK_EXPR and reading values is a
+    # false positive. A dict whose key and value are BOTH bare strings
+    # cannot tell the two readings apart -- it comes back bad either way.
+    (OK_EXPR,
+     'def _probe(monkeypatch, m, tmp_path):\n'
+     '    for path in {tmp_path / "base": "/usr/bin/base"}:\n'
+     '        monkeypatch.setattr(m, "which_base", lambda: path)\n'),
+    # An iterable this guard cannot see into stays runtime.
+    (OK_EXPR,
+     'def _probe(monkeypatch, m, paths):\n'
+     '    for path in sorted(paths):\n'
+     '        monkeypatch.setattr(m, "which_base", lambda: path)\n'),
 ]
 
 
