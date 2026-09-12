@@ -191,6 +191,90 @@ def test_base_absent_is_still_a_skip_and_not_a_refusal(monkeypatch, home):
 # THE WORDING IS LOAD-BEARING
 # ---------------------------------------------------------------------------
 
+def _foreign(tmp_path):
+    return _write_binary(tmp_path / "base-foreign", _foreign_magic())
+
+
+def _unknown(tmp_path):
+    """Four bytes that are no image format at all."""
+    return _write_binary(tmp_path / "base-unknown", b"\x01\x02\x03\x04")
+
+
+def _unreadable(tmp_path):
+    """A path that cannot be opened. Nothing is created."""
+    return str(tmp_path / "base-does-not-exist")
+
+
+# ---------------------------------------------------------------------------
+# FOLLOW-UP 1 -- the inherited reporting defect
+# ---------------------------------------------------------------------------
+
+def test_a_refusal_from_a_path_containing_the_skip_phrase_still_exits_1(
+        monkeypatch, home, tmp_path):
+    """FOLLOW-UP 1 from avocet's PR 79 verdict. Inherited, from 764d0d5.
+
+    run_install used to pick its exit code by substring-matching the reason.
+    The refusal sentences interpolate the resolved binary's path, so a base
+    living under a directory literally named "not installed" carried the phrase
+    into the reason, run_install read it as "skip, do not fail", and printed
+    skipped: and returned 0 -- a genuine refusal reported as success.
+
+    The severity is set by one measured fact, not by argument: in that hole the
+    subprocess count is STILL ZERO. The refusal happens and the tier is
+    protected. Only the exit code lied. This arm pins both halves.
+    """
+    odd = tmp_path / "not installed" / "bin"
+    odd.mkdir(parents=True)
+    _point_which_base_at(monkeypatch, _write_binary(odd / "base", _foreign_magic()))
+    run = _CountingRun()
+    monkeypatch.setattr(subprocess, "run", run)
+
+    res = base_extension.install("/opt/cadre")
+    assert res["ok"] is False
+    assert run.calls == [], "the tier was NOT protected -- a subprocess ran"
+    assert "not installed" in res["reason"], (
+        "this arm is pointless unless the path really does carry the phrase")
+
+    monkeypatch.setattr(subprocess, "run", _CountingRun())
+    assert base_extension.run_install("/opt/cadre") == 1, (
+        "a refusal was reported through exit 0 because its interpolated PATH "
+        "contained the phrase run_install branched on")
+
+
+def test_absence_is_still_a_skip_at_rc_0_after_the_exit_code_stopped_reading_prose(
+        monkeypatch, home, capsys):
+    """The control for follow-up 1, and the one that must not regress.
+
+    Removing the substring branch must not turn "this machine has no base" into
+    a failing exit code. Absence is degraded, never broken.
+    """
+    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: None)
+    monkeypatch.setattr(subprocess, "run", _CountingRun())
+
+    assert base_extension.run_install("/opt/cadre") == 0
+    assert "skipped" in capsys.readouterr().out
+
+
+def test_install_marks_the_absent_case_as_skipped_in_the_result(
+        monkeypatch, home):
+    """The exit code now reads a field, so the field is what must be right."""
+    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: None)
+    res = base_extension.install("/opt/cadre")
+    # .get, not [] -- on a tree without the field a KeyError would RAISE rather
+    # than measure, and an arm that raises carries no before-and-after.
+    assert res.get("skipped") is True, (
+        "absence is not marked as a skip; got %r" % res.get("skipped"))
+
+
+def test_a_refusal_is_not_marked_skipped(monkeypatch, home, tmp_path):
+    """Control: the field must discriminate, not just exist."""
+    _point_which_base_at(monkeypatch, _foreign(tmp_path))
+    monkeypatch.setattr(subprocess, "run", _CountingRun())
+    res = base_extension.install("/opt/cadre")
+    assert res.get("skipped") is False, (
+        "a refusal was marked as a skip; got %r" % res.get("skipped"))
+
+
 def test_the_refusal_wording_is_load_bearing_because_run_install_exits_on_it(
         monkeypatch, home, tmp_path, capsys):
     """`run_install` returns 0 for ANY reason containing "not installed".

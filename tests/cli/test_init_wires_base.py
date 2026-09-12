@@ -338,12 +338,19 @@ def test_a_suppressed_base_does_not_read_as_a_missing_one(monkeypatch):
 
 
 def test_both_absence_messages_keep_the_skip_substring():
-    """The substring is load-bearing, not phrasing.
+    """Both absence states describe themselves in the same words.
 
-    `firm extension install` branches on "not installed" in the reason to mean
-    "skip, do not fail", and keeps rc 0 there. A suppressed base is equally a
-    skip. Reword either sentence without that substring and a host-setup fact
-    turns into a failing exit code.
+    CORRECTED BY ISSUE #83. This docstring used to say the substring was
+    load-bearing because `firm extension install` branched on it for its exit
+    code. It did, and that was the defect: `install`'s refusal sentences
+    interpolate the resolved binary's path, so a base under a directory named
+    "not installed" carried the phrase into a genuine refusal and the refusal
+    reported success. `run_install` now switches on the `skipped` field.
+
+    The assertion below is kept because the operator-facing property is still
+    worth having -- a machine with no base and a machine told to leave base
+    alone should not describe themselves in different vocabulary -- but no exit
+    code depends on it any more, and this test must not be read as if one does.
     """
     import os as _os
 
