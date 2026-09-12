@@ -559,6 +559,9 @@ def test_the_write_is_atomic_and_leaves_no_temp_files_behind(firm_workspace):
 #
 # So every test below fences the spawn off twice, and the second fence is the
 # one that matters:
+#   0. The fence is AUTOUSE, so no test in this module can opt out of it by
+#      forgetting a parameter. It began as opt-in; that version protected
+#      every test that remembered to ask and nothing else.
 #   1. `make_runner` is replaced with a stub that returns a result dict.
 #   2. `spawn_member_run` is replaced with something that RAISES. If any route
 #      reaches a real spawn — now or after somebody refactors the runner — the
@@ -566,9 +569,28 @@ def test_the_write_is_atomic_and_leaves_no_temp_files_behind(firm_workspace):
 # A test that needs a live agent to prove a file was written is the wrong test.
 # ---------------------------------------------------------------------------
 
-@pytest.fixture()
+@pytest.fixture(autouse=True)
 def no_spawn(monkeypatch):
-    """Nothing in this file may start a real Member. Returns the call log."""
+    """Nothing in this file may start a real Member. Returns the call log.
+
+    **AUTOUSE, and that is the whole point.** The first version was a plain
+    opt-in fixture. Every pulse test below did declare it, and the control at
+    the end of this file proved the fence bites when it is declared — but those
+    are two different claims, and only the first one was ever true. Nothing
+    failed when a pulse test simply omitted the parameter, so a test added later
+    would spawn for real and every existing check would stay green.
+
+    A guard that detects a missing parameter would only be a detector, and this
+    commit argues elsewhere that a guard running second is a detector. Autouse
+    removes the failure mode instead of reporting it: there is no parameter to
+    forget. osprey's ruling, after avocet traced the stray `zqfirm-MEM-001`
+    session to `test_a_pulse_still_reports_its_own_result_when_the_export_fails`
+    in this file — it matched the `pytest-30/test_a_pulse_still_reports_its0/ws`
+    trace directory exactly.
+
+    Tests that want the activation log still name it as a parameter; autouse and
+    an explicit parameter coexist.
+    """
     ran: list[str] = []
 
     def _stub_runner(firm_id, cwd):
