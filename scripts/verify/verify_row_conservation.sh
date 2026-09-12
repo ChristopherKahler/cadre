@@ -30,6 +30,18 @@ OUT=${OUT:-/tmp/cadre-row-conservation}
 rm -rf "$OUT"; mkdir -p "$OUT"
 fails=0
 
+# Issue #89. CPython validates a `.pyc` on the source's mtime SECOND and its
+# SIZE, never its content, and the cache is keyed on the SOURCE PATH rather than
+# the module name -- so the by-path load below (which imports the harness as
+# `h`) and every pytest test that imports it as `acceptance_e2e` share ONE cache
+# file. A plant that keeps the byte count and lands in the same whole second is
+# invisible, and the stale bytecode is then served to a different test entirely.
+# Both mutants below change the size today, which is luck rather than a
+# safeguard: any same-size edit is a zero delta, and an operator swap or `True`
+# for `None` is same-size every time. Called after EVERY write to the harness,
+# restores included.
+purge_bytecode() { rm -f scripts/__pycache__/acceptance-e2e.*.pyc; }
+
 B=$(command -v base || true)
 [ -n "$B" ] || { echo "ABORT: no base on PATH; run A cannot be measured"; exit 9; }
 case "$(head -c 4 "$B" | od -An -c | tr -d ' ')" in
@@ -96,13 +108,15 @@ if rcB != 2:
 sys.exit(1 if bad else 0)
 PYEOF
 [ $? -ne 0 ] && fails=$((fails + 1))
+purge_bytecode   # the by-path load above cached the pristine harness
 
 echo
 echo "=== MUTANTS — the conservation check must go red in BOTH directions ==="
 cp scripts/acceptance-e2e.py "$OUT/orig.py"
-trap 'cp "$OUT/orig.py" scripts/acceptance-e2e.py 2>/dev/null' EXIT
+trap 'cp "$OUT/orig.py" scripts/acceptance-e2e.py 2>/dev/null; purge_bytecode' EXIT
 
 run_mutant() {  # $1 = label; mutation already applied
+  purge_bytecode
   timeout 2400 "$PY" scripts/acceptance-e2e.py --json "$OUT/m.json" > "$OUT/m.log" 2>&1
   rc=$?
   if grep -q "recorded every row it declares" "$OUT/m.log" && [ "$rc" -ne 0 ]; then
@@ -113,6 +127,7 @@ run_mutant() {  # $1 = label; mutation already applied
     fails=$((fails + 1))
   fi
   cp "$OUT/orig.py" scripts/acceptance-e2e.py
+  purge_bytecode
 }
 
 # 1. A name leaves the declared list. The code then emits a row the list does
@@ -140,6 +155,7 @@ PYEOF
 run_mutant "a b.add site stops emitting its declared row"
 
 cp "$OUT/orig.py" scripts/acceptance-e2e.py
+purge_bytecode
 if cmp -s "$OUT/orig.py" scripts/acceptance-e2e.py; then
   echo "  restored byte for byte"
 else

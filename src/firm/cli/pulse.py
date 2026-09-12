@@ -160,6 +160,25 @@ def _pulse_once(
     runner = make_runner(firm_id, str(workspace))
     summary = pulse(conn, firm_id, runner, dry_run=dry_run, only_member_id=only)
 
+    # A pulse is exactly what moves the roster and the unit board, so it is
+    # where the firm's exports have to be refreshed — the manifest's post_tool
+    # handlers re-ingest these three files on write, and its session_start
+    # ingest reads them at every Member's next session. Skipped on a dry run,
+    # which is read-only by contract and must leave no trace. Never raises: an
+    # export failure must not turn a pulse that ran into a pulse that errored.
+    if not dry_run:
+        from firm.services import base_export
+        exported = base_export.export(workspace, firm_id, conn=conn)
+        if not exported.get("ok"):
+            # Said out loud rather than swallowed. A firm whose exports stopped
+            # updating looks identical to one whose graph is simply quiet, and
+            # those need different fixes.
+            output_export_note = exported.get("reason", "")
+        else:
+            output_export_note = ""
+    else:
+        exported, output_export_note = {"ok": None}, ""
+
     output: dict[str, Any] = {
         "ok": not (summary.errors and not summary.ran),
         "dry_run": summary.dry_run,
@@ -169,6 +188,11 @@ def _pulse_once(
     }
     if denied:
         output["policy_denials_ingested"] = denied
+
+    if exported.get("ok") is not None:
+        output["base_export"] = bool(exported.get("ok"))
+        if output_export_note:
+            output["base_export_reason"] = output_export_note
 
     if summary.skipped:
         # Aggregate skip reasons so a 0-ran pulse explains itself

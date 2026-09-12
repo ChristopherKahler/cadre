@@ -102,12 +102,21 @@ def base_can_honour_tier(base_path: str | Path | None,
     applied one level down from the acceptance harness to the call site that
     does the writing.
 
-    THE WORDING OF EVERY REASON BELOW IS LOAD-BEARING. ``run_install`` returns
-    exit code 0 for any reason containing the substring "not installed" --
-    that is how a host without base stays a skip rather than a failure. A
-    refusal that happened to contain those two words would be reported through
-    a success exit code, which is a silent success and the very fault family
-    this guard exists to remove. None of these sentences may contain them.
+    THE WORDING OF EVERY REASON BELOW IS STILL GUARDED, THOUGH NO EXIT CODE
+    READS IT. This paragraph used to say ``run_install`` returned exit code 0
+    for any reason containing the substring "not installed", and that the
+    wording was load-bearing because of it. It did, and that was the
+    defect: the refusal sentences below interpolate the resolved binary's
+    path, so a base under a directory named "not installed" carried the
+    phrase into a genuine refusal and the refusal was reported through
+    exit 0. ``run_install`` now switches on the ``skipped`` field that
+    ``install`` sets, not on this prose.
+
+    None of these sentences may contain those two words even so. A host
+    with no base and a base this host cannot honour are different answers
+    and must not describe themselves in the same vocabulary -- but no exit
+    code depends on that any more, and this docstring must not be read as
+    if one does.
     """
     kind = image_format(base_path)
     native = native_image_format()
@@ -140,7 +149,7 @@ def base_can_honour_tier(base_path: str | Path | None,
             f"platform still executes here and ignores BASE_HOME, so it would "
             f"write the operator's own tier instead of {expected_tier}. "
             f"Refused before anything ran. Put a base built for "
-            f"{native.upper()} first on PATH, or remove it from PATH and let "
-            f"the extension be skipped.")
+            f"{native.upper()} first on PATH, or take it off PATH and let this "
+            f"step be skipped.")
 
     return True, ""

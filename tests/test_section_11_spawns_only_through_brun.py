@@ -80,6 +80,31 @@ SPAWNERS = ("run", "subprocess.run")
 WRAPPER = "brun"
 
 
+def _purge_bytecode() -> None:
+    """Drop the harness's cached bytecode. Issue #89.
+
+    CPython validates a `.pyc` on the source's mtime SECOND and its SIZE, never
+    its content, and `cache_from_source` keys the cache on the SOURCE PATH
+    rather than the module name -- so every by-path importer of this harness,
+    under whatever name it passes, shares ONE cache file. A plant that keeps the
+    byte count and lands inside the same whole second is therefore invisible:
+    the source is never read, the old bytecode runs, and the guard agrees with
+    its own unmodified file.
+
+    The restore needs this every bit as much as the plant. An unpurged restore
+    can leave the MUTATED bytecode in place and turn the after-column green into
+    a lie in the other direction.
+
+    This arm's plant is +56 bytes today, so size alone would invalidate the
+    cache. That is luck and not a safeguard: it becomes a zero delta the moment
+    the violation is reworded to the length of the line it displaces, and
+    nothing about that edit would look dangerous.
+    """
+    cache = Path(importlib.util.cache_from_source(str(HARNESS)))
+    for stale in cache.parent.glob(f"{HARNESS.stem}.*.pyc"):
+        stale.unlink()
+
+
 def _source() -> str:
     return HARNESS.read_text(encoding="utf-8")
 
@@ -286,6 +311,7 @@ def test_a_base_tier_spawn_planted_in_the_real_section_is_caught():
     assert violation in planted_src, "the plant did not land in the source"
     try:
         HARNESS.write_text(planted_src, encoding="utf-8")
+        _purge_bytecode()
         assert _source() == planted_src, "the planted file did not reach disk"
         spawns, _ = _section_spawns()
         bad = [s for s in spawns if not s["compliant"]]
@@ -298,6 +324,7 @@ def test_a_base_tier_spawn_planted_in_the_real_section_is_caught():
             f"this arm names: {[s['why'] for s in bad]}")
     finally:
         HARNESS.write_text(original, encoding="utf-8")
+        _purge_bytecode()
     assert _source() == original, "the arm did not restore the harness"
 
 

@@ -76,10 +76,39 @@ def ws(tmp_path):
     return w
 
 
+def _stub_base(tmp_path):
+    """A REAL file carrying this host's magic bytes.
+
+    This was the string "/fake/base", which is not a file at all. Since #75 and
+    #87 both `base_extension.install` and `base_domain.scaffold_tier` identify
+    the binary they resolved before running it, and an unidentified one is
+    refused rather than admitted. A stub that is only a path is refused, which
+    is correct behaviour meeting a weak fixture -- the same thing fixed in
+    tests/services/test_base_extension.py for #79.
+    """
+    from firm.sysconfig.binaries import native_image_format
+
+    magic = {"pe": b"MZ\x90\x00", "macho": b"\xcf\xfa\xed\xfe"}.get(
+        native_image_format(), b"\x7fELF")
+    d = tmp_path / "stub-bin"
+    d.mkdir(exist_ok=True)
+    b = d / "base"
+    b.write_bytes(magic + b"\x00" * 128)
+    b.chmod(0o755)
+    return str(b)
+
+
 @pytest.fixture
-def fake_base(monkeypatch):
-    """base is present. The autouse fixture in conftest says absent by default."""
-    monkeypatch.setattr(sysconfig_service, "which_base", lambda: "/fake/base")
+def fake_base(monkeypatch, tmp_path):
+    """base is present, as a REAL file this host could actually execute.
+
+    RETURNS THE PATH. A test asserting WHICH binary ran must compare against the
+    stub this fixture made; the old literal only matched because the stub was a
+    string rather than a file.
+    """
+    stub = _stub_base(tmp_path)
+    monkeypatch.setattr(sysconfig_service, "which_base", lambda: stub)
+    return stub
 
 
 def _sync_returns(monkeypatch, result):
@@ -107,7 +136,8 @@ def test_init_scaffolds_the_base_tier(monkeypatch, ws, capsys, fake_base):
     out = capsys.readouterr().out
 
     assert rec.scaffolds, "init never ran `base scaffold`, which is the defect"
-    assert rec.scaffolds[0][:2] == ["/fake/base", "scaffold"]
+    assert rec.scaffolds[0][:2] == [fake_base, "scaffold"], (
+        "init ran a different binary than the one which_base resolved")
     assert rec.scaffolds[0][2] == str(ws), "scaffolded some other directory"
     assert ".base/ scaffolded" in out
 
@@ -338,12 +368,19 @@ def test_a_suppressed_base_does_not_read_as_a_missing_one(monkeypatch):
 
 
 def test_both_absence_messages_keep_the_skip_substring():
-    """The substring is load-bearing, not phrasing.
+    """Both absence states describe themselves in the same words.
 
-    `firm extension install` branches on "not installed" in the reason to mean
-    "skip, do not fail", and keeps rc 0 there. A suppressed base is equally a
-    skip. Reword either sentence without that substring and a host-setup fact
-    turns into a failing exit code.
+    CORRECTED BY ISSUE #83. This docstring used to say the substring was
+    load-bearing because `firm extension install` branched on it for its exit
+    code. It did, and that was the defect: `install`'s refusal sentences
+    interpolate the resolved binary's path, so a base under a directory named
+    "not installed" carried the phrase into a genuine refusal and the refusal
+    reported success. `run_install` now switches on the `skipped` field.
+
+    The assertion below is kept because the operator-facing property is still
+    worth having -- a machine with no base and a machine told to leave base
+    alone should not describe themselves in different vocabulary -- but no exit
+    code depends on it any more, and this test must not be read as if one does.
     """
     import os as _os
 
@@ -406,7 +443,8 @@ def test_doctor_names_the_switch_rather_than_blaming_the_install(monkeypatch,
     monkeypatch.delenv("CADRE_NO_BASE", raising=False)
     _, missing = base_domain.assess(ws, "demo", None)
 
-    monkeypatch.setattr(sysconfig_service, "which_base", lambda: "/fake/base")
+    monkeypatch.setattr(sysconfig_service, "which_base",
+                        lambda: _stub_base(ws.parent))
     _, unparseable = base_domain.assess(ws, "demo", None)
 
     assert "CADRE_NO_BASE" in suppressed, suppressed

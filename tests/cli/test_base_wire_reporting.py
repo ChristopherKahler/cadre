@@ -44,9 +44,41 @@ def ws(tmp_path):
     return w
 
 
+def _stub_base() -> str:
+    """A REAL file carrying this host's magic bytes, created once.
+
+    This file used the string "/fake/base". That is not a file, so every test
+    here proved the wiring works against something no host could execute. Since
+    #87, `base_domain.scaffold_tier` identifies the binary it resolved before
+    running it and refuses an unidentified one, so the stand-in has to be
+    identifiable.
+
+    Module-level and created once, so `which_base` keeps returning the same
+    path across calls within a test.
+    """
+    return _STUB
+
+
+def _make_stub() -> str:
+    import tempfile
+    from pathlib import Path
+
+    from firm.sysconfig.binaries import native_image_format
+
+    magic = {"pe": b"MZ\x90\x00", "macho": b"\xcf\xfa\xed\xfe"}.get(
+        native_image_format(), b"\x7fELF")
+    b = Path(tempfile.mkdtemp()) / "base"
+    b.write_bytes(magic + b"\x00" * 128)
+    b.chmod(0o755)
+    return str(b)
+
+
+_STUB = _make_stub()
+
+
 def _wire(monkeypatch, *, base_present=True, scaffold_rc=0, sync_result=None):
     monkeypatch.setattr("firm.sysconfig.service.which_base",
-                        lambda: "/fake/base" if base_present else None)
+                        lambda: _stub_base() if base_present else None)
     monkeypatch.setattr(subprocess, "run",
                         lambda cmd, **kw: _Proc(returncode=scaffold_rc))
     if sync_result is not None:
@@ -106,7 +138,8 @@ def test_a_failed_scaffold_carries_the_exit_code(monkeypatch, ws):
 
 
 def test_a_scaffold_that_cannot_run_is_not_a_silent_false(monkeypatch, ws):
-    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: "/fake/base")
+    monkeypatch.setattr("firm.sysconfig.service.which_base",
+                        lambda: _stub_base())
 
     def _boom(cmd, **kw):
         raise OSError("no such binary")
