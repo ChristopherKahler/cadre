@@ -16,7 +16,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from firm.core.db import connect, get_db_path, resolve_firm_id
-from firm.services.authority import AuthorityError
+from firm.services.authority import AuthorityError, caller_member_id
 from firm.services import comment as comment_svc
 from firm.services import contract as contract_svc
 from firm.services import document as document_svc
@@ -382,21 +382,14 @@ def firm_propose_goal(target: str, parent_entity_type: str, parent_entity_id: st
 
     reasoning: why THIS metric proves your outcome. The Board reads this line
     before deciding; a proposal without a case is a rejection."""
-    member_id = os.environ.get("CADRE_MEMBER_ID", "")
-    if not member_id:
-        return json.dumps({"error": (
-            "no member identity in this session — goals are authored by the "
-            "Board (dashboard goal-create action / `firm goal create`) and "
-            "proposed by Members from inside their runs")})
-    payload = {"target": target, "parent_entity_type": parent_entity_type,
-               "parent_entity_id": parent_entity_id, "metric": metric,
-               "reasoning": reasoning}
-    result = _safe_firm(gate_svc.request_gate, firm_id, {
-        "requesting_member_id": member_id,
-        "action": "create-goal",
-        "target_entity_type": parent_entity_type,
-        "target_entity_id": parent_entity_id,
-        "context": json.dumps(payload),
+    # Same service as the `firm goal propose` CLI verb, so both raise one Gate.
+    result = _safe_firm(goal_svc.propose_goal, firm_id, {
+        "requesting_member_id": caller_member_id() or "",
+        "target": target,
+        "parent_entity_type": parent_entity_type,
+        "parent_entity_id": parent_entity_id,
+        "metric": metric,
+        "reasoning": reasoning,
     })
     return json.dumps(result, default=str)
 

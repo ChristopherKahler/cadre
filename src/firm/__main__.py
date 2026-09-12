@@ -354,7 +354,8 @@ def _build_parser() -> argparse.ArgumentParser:
     goal_create_parser = goal_sub.add_parser(
         "create",
         help="Author a Goal as the Board. Members don't get this verb — they "
-             "propose from inside a run and the proposal arrives as a Gate.",
+             "propose from inside a run with `firm goal propose` and the "
+             "proposal arrives as a Gate.",
     )
     goal_create_parser.add_argument(
         "target", help="The goal, stated as a measurable outcome.")
@@ -374,6 +375,38 @@ def _build_parser() -> argparse.ArgumentParser:
         "--firm-id", dest="firm_id", default=None,
         help="Firm scope. Defaults to the firm this workspace's db holds.")
     goal_create_parser.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
+
+    goal_propose_parser = goal_sub.add_parser(
+        "propose",
+        help="Propose a Goal for the Board to approve. It raises a Gate, and "
+             "the goal exists only once the Board approves it. Works with or "
+             "without the firm MCP server.",
+    )
+    goal_propose_parser.add_argument(
+        "target", help="The goal, stated as a measurable outcome.")
+    goal_propose_parser.add_argument(
+        "--parent-type", required=True, dest="parent_entity_type",
+        choices=["firm", "member", "operation", "project"],
+        help="What this goal attaches to. Your own goal is 'member'.")
+    goal_propose_parser.add_argument(
+        "--parent-id", required=True, dest="parent_entity_id",
+        help="ID of the parent entity (e.g., your own $CADRE_MEMBER_ID, or OP-002).")
+    goal_propose_parser.add_argument(
+        "--reasoning", required=True,
+        help="Why this metric proves the outcome. The Board reads it before deciding.")
+    goal_propose_parser.add_argument(
+        "--metric", default=None,
+        help='Metric JSON (e.g. \'{"value": 10, "unit": "pages/week"}\').')
+    goal_propose_parser.add_argument(
+        "--member", dest="member_id", default=None,
+        help="Member ID making the proposal. Defaults to $CADRE_MEMBER_ID.")
+    goal_propose_parser.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. Defaults to the firm this workspace's db holds.")
+    goal_propose_parser.add_argument(
         "--workspace", type=Path, default=None,
         help="Workspace containing .firm/firm.db (defaults to current directory).",
     )
@@ -1087,6 +1120,20 @@ def main(argv: list[str] | None = None) -> int:
                 metric=args.metric,
                 level=args.level,
                 firm_id=args.firm_id,
+            )
+        if args.goal_command == "propose":
+            from firm.cli.goal import run_goal_propose
+
+            workspace = args.workspace if args.workspace is not None else Path.cwd()
+            return run_goal_propose(
+                workspace=workspace,
+                target=args.target,
+                parent_entity_type=args.parent_entity_type,
+                parent_entity_id=args.parent_entity_id,
+                reasoning=args.reasoning,
+                metric=args.metric,
+                member_id=args.member_id,
+                firm_id=args.firm_id or None,
             )
         if args.goal_command == "update":
             from firm.cli.goal import run_goal_update
