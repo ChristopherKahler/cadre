@@ -1060,7 +1060,7 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
         # The number, as a Goal row — the denominator every drift verdict,
         # brief, and goal-health banner divides by. Board-authored: the Board
         # read and could edit it on the roster screen, so committing IS the
-        # approval. Members propose theirs later via firm_propose_goal.
+        # approval. Members propose theirs later via `firm goal propose`.
         from firm.services import goal as goal_svc
         metric: dict[str, Any] = {}
         if ns.get("metric_value") is not None:

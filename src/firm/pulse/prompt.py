@@ -17,6 +17,7 @@ from typing import Any
 
 from firm.core import repo
 from firm.pulse.spawn import expected_mcp_servers
+from firm.services.goal import member_goal_state
 from firm.hooks.session_pulse import (
     render_active_roster,
     render_goal_health,
@@ -284,8 +285,11 @@ def _render_contract(conn: sqlite3.Connection, member_id: str) -> str | None:
 def _render_operational_context(
     conn: sqlite3.Connection,
     firm_id: str,
+    member_id: str | None = None,
+    cwd: str | None = None,
 ) -> str:
-    """Render operational context by reusing session_pulse.py renders."""
+    """Render operational context by reusing session_pulse.py renders, plus
+    the Member's own goal block when *member_id* is given."""
     parts: list[str] = []
 
     roster = render_active_roster(conn, firm_id)
@@ -297,11 +301,64 @@ def _render_operational_context(
     goals = render_goal_health(conn, firm_id)
     if goals:
         parts.append(goals)
+    if member_id:
+        your_goal = _render_goal_proposal(conn, firm_id, member_id, cwd)
+        if your_goal:
+            parts.append(your_goal)
 
     if not parts:
         return "## Operational Context\n\nNo operational context."
 
     return "## Operational Context\n\n" + "\n\n".join(parts)
+
+
+def _render_goal_proposal(
+    conn: sqlite3.Connection,
+    firm_id: str,
+    member_id: str,
+    cwd: str | None,
+) -> str | None:
+    """Tell a Member with no goal how to propose one, in any firm.
+
+    Charters already written into firms name ``firm_propose_goal``, an MCP tool
+    that many firms never load. This block names the CLI verb, which works
+    whether or not the firm MCP server loads, so those firms work without their
+    charters being edited. It names the MCP tool only when the ``.mcp.json``
+    beside ``cwd`` loads the server; ``cwd``, not the contract's work dir,
+    because that ``.mcp.json`` is the one a run actually loads. Silent once the
+    Member has an active goal.
+    """
+    state, row = member_goal_state(conn, firm_id, member_id)
+    if state == "bound":
+        return None
+    if state == "pending" and row is not None:
+        return (
+            "### Your goal\n\n"
+            f"Your goal proposal {row['id']} is waiting for the Board. Do not "
+            "propose another one; it binds once they approve it."
+        )
+
+    lines = [
+        "### Your goal",
+        "",
+        "No approved goal is attached to you yet. Propose one in this run: the "
+        "metric that proves the outcome you own, with your reasoning. It goes "
+        "to the Board as a Gate and binds only when they approve it, so propose "
+        "once. Your member id is already in $CADRE_MEMBER_ID.",
+        "",
+        '  firm goal propose "<the outcome, as a measurable target>" '
+        "--parent-type member --parent-id $CADRE_MEMBER_ID "
+        "--metric '{\"value\": <number>, \"unit\": \"<unit>\"}' "
+        '--reasoning "<why this metric proves your outcome>"',
+    ]
+    if "firm" in expected_mcp_servers(cwd):
+        lines += [
+            "",
+            "This firm also loads the firm MCP server, so "
+            "mcp__firm__firm_propose_goal does the same thing from a tool call. "
+            "The command above works whether or not the server loaded; prefer it.",
+        ]
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -551,7 +608,7 @@ def assemble_prompt(
         _render_system_context(conn, firm_id),
         _render_member_identity(conn, member_id, workspace),
         *((contract_section,) if contract_section else ()),
-        _render_operational_context(conn, firm_id),
+        _render_operational_context(conn, firm_id, member_id, workspace),
         _render_unit_briefing(conn, unit_id),
         _render_execution_directive(conn, member_id, workspace),
         *((protocols_section,) if protocols_section else ()),
