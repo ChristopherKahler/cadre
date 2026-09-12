@@ -21,7 +21,7 @@ before a line of the fix was written -- 3 failed, 4 passed:
     RED    the_refusal_says_what_was_resolved_and_where_it_would_have_written
     green  a_native_base_still_installs                 <- CONTROL, green both sides
     green  base_absent_is_still_a_skip_and_not_a_refusal <- CONTROL, green both sides
-    green  the_refusal_wording_is_load_bearing...       <- REGRESSION GUARD, see below
+    green  the_refusal_wording_avoids_the_skip_phrase... <- REGRESSION GUARD, see below
     green  install_never_raises_on_a_foreign_base       <- REGRESSION GUARD, see below
 
 The two regression guards pass on the DEFECTIVE tree as well, so they prove
@@ -184,11 +184,12 @@ def test_base_absent_is_still_a_skip_and_not_a_refusal(monkeypatch, home):
 
     assert run.calls == []
     assert "not installed" in res["reason"], (
-        "absence must keep the substring run_install branches on to stay rc 0")
+        "absence must keep the phrase both absence sentences carry; "
+        "run_install now switches on the skipped field")
 
 
 # ---------------------------------------------------------------------------
-# THE WORDING IS LOAD-BEARING
+# THE WORDING IS STILL GUARDED, THOUGH NO EXIT CODE READS IT
 # ---------------------------------------------------------------------------
 
 def _foreign(tmp_path):
@@ -250,8 +251,10 @@ def test_the_absent_branch_wording_is_guarded_too():
     """The fourth branch. Unreachable through install(), so called directly.
 
     base_can_honour_tier still has to answer for its own wording: a caller that
-    reaches it with nothing resolved must not get a sentence that some other
-    caller reads as a skip.
+    reaches it with nothing resolved must not get a sentence that reads like
+    the absence message. No caller branches on this prose for an exit code any
+    more -- run_install switches on the skipped field -- but telling a refusal
+    apart from a host with no base is worth keeping on its own.
     """
     from firm.sysconfig.binaries import base_can_honour_tier
 
@@ -332,24 +335,28 @@ def test_a_refusal_is_not_marked_skipped(monkeypatch, home, tmp_path):
         "a refusal was marked as a skip; got %r" % res.get("skipped"))
 
 
-def test_the_refusal_wording_is_load_bearing_because_run_install_exits_on_it(
+def test_the_refusal_wording_avoids_the_skip_phrase_and_the_refusal_exits_1(
         monkeypatch, home, tmp_path, capsys):
-    """`run_install` returns 0 for ANY reason containing "not installed".
+    """The refusal sentence must not carry the phrase the absence ones carry.
 
-    `base_absence_reason()` puts that phrase in deliberately and its docstring
-    says callers branch on it to mean "skip, do not fail". So a refusal worded
-    "the base on PATH is not installed for this platform" would exit 0 -- a
-    refusal reported through a success code, which is the #62 defect wearing a
-    different hat.
+    CORRECTED BY ISSUE #83. This docstring used to say `run_install` returned 0
+    for ANY reason containing "not installed", and that the wording was
+    load-bearing because the exit code branched on it. It did, and that was the
+    defect: `install`'s refusal sentences interpolate the resolved binary's
+    path, so a base under a directory named "not installed" carried the phrase
+    into a genuine refusal and the refusal reported success. `run_install` now
+    switches on the `skipped` field.
 
-    This test is why the refusal sentence may never contain those two words.
+    The assertions below are kept because the operator-facing property is still
+    worth having -- a refusal and a host with no base at all should not
+    describe themselves in the same vocabulary -- but no exit code depends on
+    the prose any more, and this test must not be read as if one does.
 
     NOT A RED ARM. It passes on the unfixed tree too, because the reason the old
     code happens to produce ("base reported success but ... does not exist")
     also lacks those two words. It guards the wording of the sentence I am
     adding, against a later edit that reaches for the phrase "not installed"
-    because it reads naturally -- at which point the refusal would start
-    exiting 0 and nothing else in the suite would notice.
+    because it reads naturally.
     """
     foreign = _write_binary(tmp_path / "base-foreign", _foreign_magic())
     _point_which_base_at(monkeypatch, foreign)
@@ -357,8 +364,8 @@ def test_the_refusal_wording_is_load_bearing_because_run_install_exits_on_it(
 
     res = base_extension.install("/opt/cadre")
     assert "not installed" not in res["reason"], (
-        "the refusal reason contains the substring run_install treats as "
-        f"'skip, stay rc 0'. Reason was: {res['reason']}")
+        "the refusal reason carries the phrase the absence sentences use, "
+        f"so nothing tells the two apart. Reason was: {res['reason']}")
 
     rc = base_extension.run_install("/opt/cadre")
     assert rc == 1, (
