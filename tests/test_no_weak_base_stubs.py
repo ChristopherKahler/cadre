@@ -40,9 +40,26 @@ free-floating string), it is prose. A literal being passed as a value is code.
 one line can carry a real stub and a comment about stubs, and those are two
 different answers on the same row.
 
-NOTHING IS FINE BY DEFAULT. A stub whose value shape this guard does not
-recognise fails as UNKNOWN rather than passing as acceptable, because a guard
-that shrugs at what it cannot parse is a guard with a silent hole.
+NOTHING IS FINE BY DEFAULT, INSIDE THE CALL SHAPES classify_stubs LISTS.
+A stub whose VALUE this guard cannot pin down fails as UNKNOWN rather than
+passing as acceptable, because a guard that shrugs at what it cannot parse
+is a guard with a silent hole. A name is resolved the way Python resolves
+it, innermost scope first, so a function-local constant is caught as
+WEAK_CONST instead of waved through as an expression, and a name bound both
+to a literal and to something else is UNKNOWN, because which value arrives
+is not decidable from the text.
+
+THAT SENTENCE IS SCOPED ON PURPOSE. It used to be broader, and broader made
+it false: it claimed every unrecognised value shape failed as UNKNOWN, while
+a function-local string constant -- a value shape, inside a recognised call
+-- came back OK_EXPR. Measured by avocet as arm E: 143 passed, unchanged,
+not caught, because the constant collector walked module level only.
+
+Two shapes this guard does not SEE at all, as opposed to classifying wrongly:
+a plain attribute assignment (`m.which_base = lambda: ...`, not an ast.Call)
+and a name imported from another module. Both are issue #93's door, and
+#93's own note holds: widen the recognised SURFACE, never widen what counts
+as an acceptable value.
 
 KNOWN LIMIT, stated here rather than discovered later. This keys on the NAME
 `which_base`. A fixture that patches `shutil.which` to hand back a stand-in base
@@ -82,6 +99,18 @@ SELF = Path(__file__).resolve()
 # costs something -- so test_the_one_exemption_is_still_true() asserts the
 # property that makes it safe, and fails if that stops being the case.
 KNOWN_DELIBERATE = {"tests/cli/test_doctor_unreadable_base.py"}
+
+# The sweep's recorded size, measured 2026-09-12: 125 files under tests/,
+# 124 swept once this guard excludes itself.
+#
+# This assert read `>= 20` against an actual 124, which made it a
+# formality: 104 files, 83.9% of the sweep, could be dropped with it still
+# green, and only 9 files mention which_base at all so the companion
+# assert needed just one of them to survive. A floor that far under the
+# real number cannot fail in the direction it exists for. Pinned to the
+# measured count instead -- a deliberate deletion updates this line in the
+# same commit, and anything else fails loudly.
+SWEPT_BASELINE = 124
 
 _STRING_TOKENS = {tokenize.STRING}
 for _name in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END"):
@@ -162,15 +191,109 @@ def yields_literals(node: ast.AST) -> list[str]:
     return []
 
 
-def _module_string_consts(tree: ast.Module) -> dict[str, str]:
-    out = {}
-    for stmt in tree.body:
-        if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Constant) \
-                and isinstance(stmt.value.value, str):
-            for t in stmt.targets:
+_NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
+                  ast.ClassDef)
+
+
+def _own_scope_binds(scope: ast.AST) -> dict[str, set]:
+    """Names bound in THIS scope's own body, to the string literals they take.
+
+    A binding to anything that is not a string literal records None
+    alongside, so a caller can tell "always this one string" from
+    "sometimes this string, sometimes a real path". Nested function,
+    lambda and class scopes are not descended into: they bind their own
+    names, not this scope's.
+
+    This walked tree.body only until avocet's arm E. A function-local
+    constant was therefore never collected, so the WEAK_CONST branch --
+    which exists for exactly that shape -- could only ever fire on a
+    module-level name, and a local fell through to OK_EXPR.
+    """
+    binds: dict[str, set] = {}
+    stack = list(ast.iter_child_nodes(scope))
+    while stack:
+        n = stack.pop()
+        if isinstance(n, _NESTED_SCOPES):
+            continue
+        targets: list = []
+        value = None
+        if isinstance(n, ast.Assign):
+            targets, value = list(n.targets), n.value
+        elif isinstance(n, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+            targets, value = [n.target], n.value
+        if value is not None:
+            lit = (value.value if isinstance(value, ast.Constant)
+                   and isinstance(value.value, str) else None)
+            for t in targets:
                 if isinstance(t, ast.Name):
-                    out[t.id] = stmt.value.value
-    return out
+                    binds.setdefault(t.id, set()).add(lit)
+        stack.extend(ast.iter_child_nodes(n))
+    return binds
+
+
+def _scope_chains(tree: ast.Module) -> dict[int, list]:
+    """For every Call node, the string bindings visible where it sits.
+
+    Innermost scope LAST, which is the order Python's own name lookup
+    uses. A flat whole-tree table would be simpler and wrong: an
+    unrelated helper binding `path` to a bare string would condemn a
+    correct fixture that binds its own `path` to a real file. That is the
+    same failure as the `len(args) >= 3` draft, which called five good
+    fixtures broken, so there is an arm for it below.
+    """
+    chains: dict[int, list] = {}
+
+    def visit(node: ast.AST, chain: list) -> None:
+        if isinstance(node, ast.Call):
+            chains[id(node)] = chain
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Decorators and argument defaults are evaluated OUTSIDE the
+            # function, so they keep the outer chain.
+            for d in node.decorator_list:
+                visit(d, chain)
+            for d in list(node.args.defaults) + \
+                    [k for k in node.args.kw_defaults if k is not None]:
+                visit(d, chain)
+            inner = chain + [_own_scope_binds(node)]
+            for stmt in node.body:
+                visit(stmt, inner)
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child, chain)
+
+    visit(tree, [_own_scope_binds(tree)])
+    return chains
+
+
+def _lambda_params(lam: ast.Lambda) -> set:
+    a = lam.args
+    names = {x.arg for x in a.posonlyargs + a.args + a.kwonlyargs}
+    for extra in (a.vararg, a.kwarg):
+        if extra is not None:
+            names.add(extra.arg)
+    return names
+
+
+def _resolve_string_name(chain: list, name: str) -> tuple:
+    """Look `name` up the way Python does: the innermost binding wins.
+
+      ("literal", s)    every binding in the winning scope is that string
+      ("mixed", None)   bound to a string AND to something else, so which
+                        value reaches which_base is not decidable here
+      ("expr", None)    bound, but never to a string literal
+      ("unbound", None) nothing in this file binds it
+    """
+    for scope in reversed(chain):
+        if name not in scope:
+            continue
+        vals = scope[name]
+        lits = {v for v in vals if v is not None}
+        if not lits:
+            return "expr", None
+        if len(lits) == 1 and None not in vals:
+            return "literal", next(iter(lits))
+        return "mixed", None
+    return "unbound", None
 
 
 # Verdicts. Named so an arm can assert WHICH one fired: "something was reported"
@@ -200,7 +323,7 @@ def classify_stubs(text: str) -> list[tuple[str, int, str]]:
     except SyntaxError as e:
         return [(UNKNOWN, getattr(e, "lineno", 0) or 0, f"will not parse: {e}")]
 
-    consts = _module_string_consts(tree)
+    chains = _scope_chains(tree)
     found: list[tuple[str, int, str]] = []
 
     for node in ast.walk(tree):
@@ -254,9 +377,26 @@ def classify_stubs(text: str) -> list[tuple[str, int, str]]:
             found.append((WEAK, node.lineno, f"{how} -> {shown}  yields {lits!r}"))
         elif isinstance(body, ast.Constant) and body.value is None:
             found.append((OK_ABSENT, node.lineno, f"{how} -> None"))
-        elif isinstance(body, ast.Name) and body.id in consts:
-            found.append((WEAK_CONST, node.lineno,
-                          f"{how} -> {body.id} = {consts[body.id]!r}"))
+        elif isinstance(body, ast.Name):
+            # A lambda PARAMETER of the same name shadows any outer
+            # binding, so the outer value never reaches which_base.
+            shadowed = (isinstance(val, ast.Lambda)
+                        and body.id in _lambda_params(val))
+            kind, lit = (("unbound", None) if shadowed else
+                         _resolve_string_name(chains.get(id(node), []),
+                                              body.id))
+            if kind == "literal":
+                found.append((WEAK_CONST, node.lineno,
+                              f"{how} -> {body.id} = {lit!r}"))
+            elif kind == "mixed":
+                found.append((UNKNOWN, node.lineno,
+                              f"{how} -> {body.id} is bound both to a "
+                              "string literal and to something else, so "
+                              "which value reaches which_base is not "
+                              "decidable from the text"))
+            else:
+                found.append((OK_EXPR, node.lineno,
+                              f"{how} -> {ast.unparse(body)[:60]}"))
         elif isinstance(body, ast.Constant):
             found.append((UNKNOWN, node.lineno,
                           f"{how} -> non-string constant {body.value!r}"))
@@ -268,9 +408,18 @@ def classify_stubs(text: str) -> list[tuple[str, int, str]]:
 BAD_VERDICTS = (WEAK, WEAK_CONST, UNKNOWN)
 
 
-def _swept_files() -> list[Path]:
+def _candidate_files() -> list[Path]:
+    """Every test file the sweep COULD reach, before any exclusion.
+
+    Split out from _swept_files so the exclusion is a MEASURABLE
+    DIFFERENCE between two sets rather than a filter term nobody can see.
+    """
     return sorted(p for p in TESTS.rglob("*.py")
-                  if "__pycache__" not in p.parts and p.resolve() != SELF)
+                  if "__pycache__" not in p.parts)
+
+
+def _swept_files() -> list[Path]:
+    return [p for p in _candidate_files() if p.resolve() != SELF]
 
 
 def _offences(path: Path) -> list[str]:
@@ -296,21 +445,68 @@ def test_the_sweep_actually_found_files():
     while this module reported green.
     """
     swept = _swept_files()
-    assert len(swept) >= 20, f"only {len(swept)} test file(s) swept under {TESTS}"
+    assert len(swept) >= SWEPT_BASELINE, (
+        f"{len(swept)} test files swept under {TESTS}, down from the\n"
+        f"recorded baseline of {SWEPT_BASELINE}. Either test files were\n"
+        "deleted -- then update SWEPT_BASELINE in the same commit that\n"
+        "deletes them -- or the sweep has quietly narrowed, which is the\n"
+        "thing this arm exists to catch.")
     assert any("which_base" in p.read_text(encoding="utf-8") for p in swept), (
         "no swept file mentions which_base at all, so the sweep is looking in "
         "the wrong place")
 
 
-def test_this_guard_excludes_itself():
-    """The exclusion is asserted, not remembered.
+def test_this_guard_excludes_ITSELF_AND_NOTHING_ELSE():
+    """The exclusion is asserted as an EXACT SET, not as "contains".
 
-    The red arms below embed bare-string stubs as source text. If this file ever
-    enters the sweep, the guard fails on its own arms and the next person makes
-    it green by weakening it.
+    The red arms below embed bare-string stubs as source text. If this
+    file ever enters the sweep, the guard fails on its own arms and the
+    next person makes it green by weakening it. So SELF must be excluded.
+
+    Asserting ONLY that left the other direction open. avocet widened the
+    exclusion to also drop tests/services/test_writeback.py and planted a
+    weak stub in that very file: the sweep stayed green, this arm stayed
+    green, and the entire signal was 143 passed becoming 142 passed. One
+    fewer test, zero failures -- because the sweep is parametrized over
+    _swept_files() at COLLECTION time, so narrowing it DELETES cases
+    rather than failing any. Measured: 124 swept against a floor of 20,
+    so 104 files could go, and only 9 mention which_base at all.
+
+    Equality is what makes a second exclusion fail instead of shrink.
     """
-    assert SELF not in [p.resolve() for p in _swept_files()], (
+    candidates = {p.resolve() for p in _candidate_files()}
+    excluded = candidates - {p.resolve() for p in _swept_files()}
+    assert SELF in excluded, (
         "this guard is sweeping itself and will fail on its own red arms")
+    assert excluded == {SELF}, (
+        "the sweep excludes more than this guard file, so these files are\n"
+        "silently unchecked while every arm here still reads green:\n  "
+        + "\n  ".join(sorted(str(p) for p in excluded - {SELF})))
+
+
+def test_a_second_exclusion_makes_that_arm_go_RED(monkeypatch):
+    """RED ARM for the exclusion check itself.
+
+    An equality assertion that was never shown to fail is the same
+    formality as the floor it replaces. This narrows the sweep by one
+    real file and requires the arm above to raise.
+    """
+    victim = (TESTS / "services" / "test_writeback.py").resolve()
+    assert victim in {p.resolve() for p in _candidate_files()}, (
+        "the victim file is not in the sweep to begin with, so this arm\n"
+        "would pass without testing anything")
+
+    real = _swept_files
+    monkeypatch.setitem(
+        globals(), "_swept_files",
+        lambda: [p for p in real() if p.resolve() != victim])
+
+    excluded = ({p.resolve() for p in _candidate_files()}
+                - {p.resolve() for p in _swept_files()})
+    assert excluded == {SELF, victim}, (
+        f"the arm did not actually narrow the sweep; excluded={excluded!r}")
+    with pytest.raises(AssertionError):
+        test_this_guard_excludes_ITSELF_AND_NOTHING_ELSE()
 
 
 @pytest.mark.parametrize("swept", _swept_files(),
@@ -372,6 +568,45 @@ _ARMS = [
     (WEAK, 'monkeypatch.setattr("p.mod.which_base", lambda: "/fake/base")'),
     (OK_EXPR, 'monkeypatch.setattr("p.mod.which_base", lambda: STUB_BASE_FROM_A_CALL)'),
     (OK_ABSENT, 'monkeypatch.setattr("p.mod.which_base", lambda: None)'),
+
+    # NAMED CONSTANTS. WEAK_CONST existed for exactly this shape and had
+    # NO arm at all, so it was never shown to fire; the module-level case
+    # is armed here alongside the local one it used to miss.
+    (WEAK_CONST,
+     'STUB = "/fake/base"\n'
+     'monkeypatch.setattr(m, "which_base", lambda: STUB)\n'),
+    # avocet's arm E, the one that sent this PR back. It landed OK_EXPR,
+    # which is actively ACCEPTABLE, not UNKNOWN.
+    (WEAK_CONST,
+     'def _probe(monkeypatch, m):\n'
+     '    local_stub = "/fake/base"\n'
+     '    monkeypatch.setattr(m, "which_base", lambda: local_stub)\n'),
+    # THE OTHER DIRECTION. A local bound to a real expression must stay
+    # acceptable, or the fix swings into flagging the fixtures this guard
+    # exists to encourage.
+    (OK_EXPR,
+     'def _probe(monkeypatch, m, tmp_path):\n'
+     '    real = str(tmp_path / "base")\n'
+     '    monkeypatch.setattr(m, "which_base", lambda: real)\n'),
+    # SCOPES, not one flat table. An unrelated helper binding the same
+    # name to a bare string must not condemn a correct fixture. A
+    # collector that walked the whole tree passes every other arm here
+    # and fails this one.
+    (OK_EXPR,
+     'def _elsewhere():\n'
+     '    path = "/fake/base"\n'
+     '\n'
+     'def _probe(monkeypatch, m, tmp_path):\n'
+     '    path = str(tmp_path / "base")\n'
+     '    monkeypatch.setattr(m, "which_base", lambda: path)\n'),
+    # BOUND BOTH WAYS. Which value arrives depends on a branch, so the
+    # honest answer is UNKNOWN rather than a guess in either direction.
+    (UNKNOWN,
+     'def _probe(monkeypatch, m, tmp_path, flag):\n'
+     '    p = "/fake/base"\n'
+     '    if flag:\n'
+     '        p = str(tmp_path / "base")\n'
+     '    monkeypatch.setattr(m, "which_base", lambda: p)\n'),
 ]
 
 
