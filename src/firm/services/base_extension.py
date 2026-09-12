@@ -173,6 +173,29 @@ def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
             f"{base_absence_reason()} — the extension is skipped, not failed")
         return result
 
+    # REFUSE BEFORE ANYTHING RUNS. Issue #75.
+    #
+    # The read-back at the end of this function is a DETECTOR and it stays: in
+    # the 2026-09-11 incident it worked exactly as written, returned
+    # read_back False and named the missing path. But by then base had already
+    # written the operator's own tier. Detection after the fact is not
+    # prevention, and the difference between the defect and the fix is WHEN.
+    #
+    # which_base() takes no parameter, so a caller cannot direct this function
+    # at a binary -- which is why an isolation probe passing --root and
+    # --base-bin failed to constrain it. The fix is not one more argument for a
+    # callee to ignore. install() asserts its OWN resolution instead: it
+    # already knows the tier it expects, so it checks that the binary it
+    # resolved can honour that tier, and refuses with a reason when it cannot.
+    from firm.sysconfig.binaries import base_can_honour_tier
+
+    expected = _installed_path()
+    may_run, refusal = base_can_honour_tier(base, expected)
+    if not may_run:
+        result["path"] = str(expected)
+        result["reason"] = refusal
+        return result
+
     try:
         rendered = render(framework_dir)
     except (OSError, ValueError) as exc:
