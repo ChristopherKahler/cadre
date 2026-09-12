@@ -460,9 +460,11 @@ def _render_execution_directive(
         "",
         "- Complete the assigned Unit according to its acceptance criteria",
         f"- Work in: {work_dir}",
-        "- When done: Report completion status and list outputs produced",
+        "- When done: register your deliverable (the command is below), then "
+        "report what you produced",
         "- Do NOT modify files outside your assigned scope",
-        "- If blocked: Report the blocker clearly instead of guessing",
+        "- If blocked: raise an escalation and say BLOCKED plainly instead of "
+        "guessing",
         "",
         "### Your write surface — these are real commands, run them in Bash",
         "",
@@ -487,12 +489,21 @@ def _render_execution_directive(
         '  firm unit create --name "<the task>" --project <PRJ-id> '
         "--assignee <MEM-id of the right colleague>",
         "",
-        "- Register every deliverable you produce, before you close your Unit. "
-        "A file nobody registered is invisible to the firm:",
+        "- Finish by registering your deliverable against your Unit. You do "
+        "not close the Unit yourself: the pulse marks it done after your run, "
+        "and only when a deliverable was registered against it during the run. "
+        "A run that ends in words alone leaves the Unit blocked for the Board:",
         "  firm doc register --unit <UNIT-id> --path <path to the file>",
+        "  If the work is not a file (a decision, a plan, Units you queued), "
+        "write a short summary of it to a file and register that.",
         "",
-        "- Then close the Unit out:",
-        "  firm unit complete <UNIT-id> --outputs <path to the file>",
+        "- If you are BLOCKED, do not register a half-finished file as the "
+        "deliverable. Raise an escalation against your Unit and end your reply "
+        "with BLOCKED and what you need. A run that raises an escalation, or "
+        "requests a Gate on its Unit the Board has not approved, does not mark "
+        "the Unit done; the Board takes it from there:",
+        '  firm escalation raise --title "BLOCKED: <what you need>" '
+        '--body "<the detail>" --target-type unit --target-id <UNIT-id>',
     ]
 
     # The MCP mention is earned, not assumed. Six of twelve firms load no firm

@@ -140,7 +140,12 @@ def test_identified_member_without_key_denied_on_every_gated_tool(
         with pytest.raises(AuthorityError) as exc:
             call()
         assert exc.value.payload["error"] == "authority_required", name
-        assert exc.value.payload["hint"] == "escalate via: `firm escalation raise --title \"<one line>\"`", name
+        if name == "unit.complete":
+            # The one gated action with a route of its own (#106): the harness
+            # closes a Unit from its registered deliverable.
+            assert "`firm doc register --unit <UNIT-id> --path <file>`" in exc.value.payload["hint"], name
+        else:
+            assert exc.value.payload["hint"] == "escalate via: `firm escalation raise --title \"<one line>\"`", name
 
 
 def test_identified_member_with_key_allowed_on_every_gated_tool(

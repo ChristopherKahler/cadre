@@ -306,6 +306,17 @@ class TestExecutionDirective:
         result = _render_execution_directive(conn, "MEM-001", "/fallback")
         assert "/projects/blog" in result
 
+    def test_teaches_the_close_out_a_keyless_member_can_make(self):
+        # #106: no founded Member holds the authority key, and `firm unit
+        # complete` refuses every keyless caller. What works is registering the
+        # deliverable, which is not gated and is what the harness closes from.
+        conn = _fresh_conn()
+        _add_member(conn, "MEM-001")
+        result = _render_execution_directive(conn, "MEM-001", "/workspace")
+        assert "firm unit complete" not in result
+        assert "firm doc register --unit <UNIT-id> --path" in result
+        assert 'firm escalation raise --title "BLOCKED: ' in result
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Full assembly integration
