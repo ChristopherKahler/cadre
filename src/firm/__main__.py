@@ -482,6 +482,31 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Where Cadre is installed. Defaults to the package's own root, "
              "which is what a normal install wants.")
 
+    # ---- export subparser ----
+    # The manifest declares `[[hooks.session_start.ingest]]` blocks that base
+    # opens at every Member's session start. Until this verb existed nothing in
+    # the product ever wrote the files they name, so base ingested nothing and
+    # a firm's roster never reached the graph. That is issue #4.
+    export_parser = subparsers.add_parser(
+        "export",
+        help="Write the firm's state out for another tool to read.",
+    )
+    export_sub = export_parser.add_subparsers(dest="export_command", required=True,
+                                              metavar="<export-command>")
+    export_base = export_sub.add_parser(
+        "base",
+        help="Write the JSON files base's extension manifest declares as "
+             "ingest sources, so members, units and gates become queryable in "
+             "the firm's graph. Exits non-zero if the export did not happen.",
+    )
+    export_base.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. Defaults to the firm this workspace's db holds.")
+    export_base.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
+
     # ---- doctor subparser ----
     doctor_parser = subparsers.add_parser(
         "doctor",
@@ -931,6 +956,12 @@ def main(argv: list[str] | None = None) -> int:
 
         return run_brief(args.workspace, firm_id=args.firm_id,
                          member_id=args.member_id)
+
+    if args.command == "export":
+        if args.export_command == "base":
+            from firm.services.base_export import run_export
+
+            return run_export(args.workspace, firm_id=args.firm_id)
 
     if args.command == "extension":
         if args.extension_command == "install":
