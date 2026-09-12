@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import threading
 import uuid
@@ -711,12 +712,21 @@ def commit(root: Path, firm_id: str, plan: dict[str, Any],
             p = by_name.get(m["name"])
             if not p or not m.get("contract_id"):
                 continue
+            cli = p.get("cli") or []
+            # Where the hub finds each tool rides with the loadout, as Equip
+            # records it: a timer pulse puts that directory on its own PATH (#111).
+            cli_paths: dict[str, str] = {}
+            for tool in cli:
+                found = shutil.which(str(tool).split()[0]) if str(tool).strip() else None
+                if found:
+                    cli_paths[str(tool)] = os.path.abspath(found)
             updates: dict[str, Any] = {
                 "skill_loadout": {
                     "skills": p["skills"],
                     "commands": p["commands"],
                     "mcp": p["mcp"],
-                    "cli": p.get("cli") or [],
+                    "cli": cli,
+                    "cli_paths": cli_paths,
                     "knowledge": p["knowledge"],
                 },
             }

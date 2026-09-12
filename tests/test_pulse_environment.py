@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from firm.core.db import connect
 from firm.core.migrate import apply_migrations
@@ -57,12 +60,12 @@ def _firm(ws: Path, notify_config: dict | None = None) -> Path:
     return ws
 
 
-def _queue_work_needing(ws: Path, tool: str) -> None:
-    """Give MEM-001 a claimed Unit and a Contract whose loadout names *tool*."""
+def _queue_work_needing(ws: Path, *tools: str) -> None:
+    """Give MEM-001 a claimed Unit and a Contract whose loadout names *tools*."""
     conn = connect(ws / ".firm" / "firm.db")
     create(conn, "contract", {"id": "CON-001", "firm_id": FIRM, "name": "Lead",
                               "runtime_type": "claude_code",
-                              "skill_loadout": {"cli": [tool]}})
+                              "skill_loadout": {"cli": list(tools)}})
     conn.execute("UPDATE member SET contract_id = 'CON-001' WHERE id = 'MEM-001'")
     create(conn, "operation", {"id": "OPS-001", "firm_id": FIRM, "name": "Ops"})
     create(conn, "project", {"id": "PROJ-001", "firm_id": FIRM,
@@ -310,3 +313,208 @@ def test_path_fix_text_says_what_every_pulse_does():
     assert "stale systemd" not in fix
     # It names the directories every pulse now leads its PATH with.
     assert "~/.local/bin" in fix and ".firm/bin" in fix
+
+
+# ---------------------------------------------------------------------------
+# Issue #111: a tool the hub found somewhere no pulse looked
+# ---------------------------------------------------------------------------
+
+# The operator's Node CLIs (gws, railway) live in nvm's bin, which only the hub's
+# PATH carries. bin/<tool> is a symlink to a `#!/usr/bin/env node` script under
+# lib/node_modules, and bin/node is the Node the hub runs it with: v22.11.0,
+# while the node on the manager's PATH, /usr/bin/node, is v18.19.1. Measured on
+# the operator's machine for issue #111.
+NODE_TOOL = "railway"
+
+
+def _stand_in_node(path: Path, says: str) -> None:
+    """A `node` that prints which one it is and the script it was handed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'#!/bin/sh\necho "{says} ran $1"\n', encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _nvm_install(root: Path) -> Path:
+    """A Node install laid out the way nvm lays one out; returns its bin."""
+    bin_dir = root / "nvm" / "versions" / "node" / "v22.11.0" / "bin"
+    script = (bin_dir.parent / "lib" / "node_modules" / "@railway" / "cli"
+              / "bin" / "railway.js")
+    script.parent.mkdir(parents=True)
+    script.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+    script.chmod(0o755)
+    bin_dir.mkdir(parents=True)
+    (bin_dir / NODE_TOOL).symlink_to(os.path.relpath(script, bin_dir))
+    _stand_in_node(bin_dir / "node", "the node beside the tool")
+    return bin_dir
+
+
+def _firm_dir(tmp_path: Path) -> Path:
+    """A firm folder under a firms root, the layout Train requires."""
+    ws = tmp_path / "firms" / FIRM
+    ws.mkdir(parents=True)
+    return ws
+
+
+def _survey_only_the_node_tool(monkeypatch) -> None:
+    """Discovery's catalog cut to the tool under test, so neither the hub nor
+    preflight probes a real CLI or base on this machine."""
+    import firm.dashboard.discovery as discovery
+
+    monkeypatch.setattr(discovery, "_CLI_PROBE",
+                        ((NODE_TOOL, "Railway deploys", ("whoami",)),))
+    monkeypatch.setattr(discovery, "_cli_cache", None)
+    monkeypatch.setattr(discovery, "_base_ext_clis", lambda: [])
+    monkeypatch.setattr(discovery, "base_survey", lambda: {
+        "present": False, "extensions": [], "ext_capable": False})
+
+
+def _in_the_hub(nvm_bin: Path, monkeypatch) -> None:
+    """The hub's environment: its unit's PATH carries nvm's bin."""
+    monkeypatch.setenv("PATH", os.pathsep.join([str(nvm_bin), SYSTEMD_USER_PATH]))
+
+
+def _hub_equips(ws: Path, route: str) -> None:
+    """The Board gives MEM-001 the tool, from Equip or from Train."""
+    if route == "equip":
+        from firm.dashboard.server import equip_member
+
+        conn = connect(ws / ".firm" / "firm.db")
+        try:
+            equip_member(conn, ws, FIRM, "MEM-001",
+                         {"kind": "cli", "name": NODE_TOOL})
+            conn.commit()
+        finally:
+            conn.close()
+        return
+    from firm.dashboard import wiring
+
+    plan = {"members": [{"name": "Lead", "skills": [], "commands": [], "mcp": [],
+                         "cli": [NODE_TOOL], "knowledge": []}],
+            "mcp": [], "gaps": []}
+    result = wiring.commit(ws.parent, FIRM, plan)
+    assert result["ok"], result.get("error")
+
+
+def _start_like_a_timer_unit_with_a_system_node(tmp_path: Path,
+                                                monkeypatch) -> None:
+    """A timer unit's start, as a new process: the manager's PATH, which holds
+    a node of its own, and no survey cached from the hub."""
+    import firm.dashboard.discovery as discovery
+
+    _start_like_a_timer_unit(monkeypatch)
+    system_bin = tmp_path / "system-bin"
+    if not (system_bin / "node").exists():
+        _stand_in_node(system_bin / "node", "the node on the manager's PATH")
+    monkeypatch.setenv("PATH",
+                       os.pathsep.join([str(system_bin), SYSTEMD_USER_PATH]))
+    monkeypatch.setattr(discovery, "_cli_cache", None)
+
+
+def _escalation_text(ws: Path, dedupe_key: str) -> list[tuple[str, str]]:
+    conn = connect(ws / ".firm" / "firm.db")
+    try:
+        return [(r["title"], r["body"]) for r in conn.execute(
+            "SELECT title, body FROM escalation WHERE dedupe_key = ?",
+            (dedupe_key,))]
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("route", ["equip", "train"])
+def test_a_tool_the_hub_found_off_the_floor_runs_in_a_timer_pulse(
+        route, tmp_path, monkeypatch, capsys):
+    """Done when 1 to 3: the timer pulse runs the Member, the tool runs under
+    the node beside it, and the PATH is the one Pulse now dispatches with."""
+    ws = _firm(_firm_dir(tmp_path))
+    _queue_work_needing(ws)
+    nvm_bin = _nvm_install(tmp_path)
+    _survey_only_the_node_tool(monkeypatch)
+    _in_the_hub(nvm_bin, monkeypatch)
+    _hub_equips(ws, route)
+
+    _start_like_a_timer_unit_with_a_system_node(tmp_path, monkeypatch)
+    pulse_now_path = _pulse_now_dispatch_env(ws, monkeypatch)["PATH"]
+    ran: list[tuple[str, str, str]] = []
+
+    def runner(conn, member):
+        # A Member run gets a copy of the pulse's environment (firm.pulse.spawn).
+        tool = subprocess.run([NODE_TOOL, "whoami"], env=dict(os.environ),
+                              capture_output=True, text=True, timeout=30)
+        ran.append((member["id"], tool.stdout.strip(), os.environ["PATH"]))
+        return {"status": "completed"}
+
+    out = _pulse(ws, monkeypatch, capsys, runner=runner)
+
+    assert _escalation_text(ws, f"preflight:{NODE_TOOL}") == []
+    assert [r[0] for r in ran] == ["MEM-001"], out.get("skip_reasons")
+    _, tool_said, member_path = ran[0]
+    assert tool_said.startswith("the node beside the tool ran "), tool_said
+    assert member_path == pulse_now_path
+    assert str(nvm_bin) in member_path.split(os.pathsep)
+
+
+def test_a_tool_gone_from_where_the_hub_found_it_holds_its_member_back(
+        tmp_path, monkeypatch, capsys):
+    """Done when 4: nvm moved on, so the recorded place is empty. The Member is
+    held back and the Board is told the path, so it can equip the tool again."""
+    ws = _firm(_firm_dir(tmp_path))
+    _queue_work_needing(ws)
+    nvm_bin = _nvm_install(tmp_path)
+    _survey_only_the_node_tool(monkeypatch)
+    _in_the_hub(nvm_bin, monkeypatch)
+    _hub_equips(ws, "equip")
+    nvm_bin.parent.rename(nvm_bin.parent.with_name("v22.12.0"))
+
+    _start_like_a_timer_unit_with_a_system_node(tmp_path, monkeypatch)
+    ran: list[str] = []
+
+    def runner(conn, member):
+        ran.append(member["id"])
+        return {"status": "completed"}
+
+    _pulse(ws, monkeypatch, capsys, runner=runner)
+
+    assert ran == []
+    [(title, body)] = _escalation_text(ws, f"preflight:{NODE_TOOL}")
+    missing = str(nvm_bin / NODE_TOOL)
+    assert missing in title and missing in body
+    assert "equip it again" in body
+
+
+def test_a_tool_equipped_before_the_hub_recorded_it_needs_one_equip_again(
+        tmp_path, monkeypatch, capsys):
+    """Done when 5: a loadout written before this fix names the tool and no
+    place. The pulse tells the Board the one thing to do, and after the Board
+    does it in the hub, the timer pulse runs the Member."""
+    from firm.dashboard.server import equip_member, unequip_member
+
+    ws = _firm(_firm_dir(tmp_path))
+    _queue_work_needing(ws, NODE_TOOL)
+    nvm_bin = _nvm_install(tmp_path)
+    _survey_only_the_node_tool(monkeypatch)
+    ran: list[str] = []
+
+    def runner(conn, member):
+        ran.append(member["id"])
+        return {"status": "completed"}
+
+    _start_like_a_timer_unit_with_a_system_node(tmp_path, monkeypatch)
+    _pulse(ws, monkeypatch, capsys, runner=runner)
+
+    assert ran == []
+    [(_, body)] = _escalation_text(ws, f"preflight:{NODE_TOOL}")
+    assert "remove it from the Member and equip it again in the hub" in body
+
+    _in_the_hub(nvm_bin, monkeypatch)
+    conn = connect(ws / ".firm" / "firm.db")
+    try:
+        unequip_member(conn, FIRM, "MEM-001", {"kind": "cli", "name": NODE_TOOL})
+        equip_member(conn, ws, FIRM, "MEM-001", {"kind": "cli", "name": NODE_TOOL})
+        conn.commit()
+    finally:
+        conn.close()
+
+    _start_like_a_timer_unit_with_a_system_node(tmp_path, monkeypatch)
+    out = _pulse(ws, monkeypatch, capsys, runner=runner)
+
+    assert ran == ["MEM-001"], out.get("skip_reasons")

@@ -2145,7 +2145,7 @@ def _fire_pulse(
     # pulse (preflight + member spawns) resolves firm tools without a manual
     # `systemctl --user import-environment PATH` after a host restart. The pulse
     # applies the same PATH itself; this keeps the wrapper process whole too.
-    env["PATH"] = pulse_path(workspace)
+    env["PATH"] = pulse_path(workspace, firm_id)
 
     pulse_argv = [
         _venv_python(workspace), "-m", "firm", "pulse",
@@ -2298,7 +2298,8 @@ def equip_member(
             raise ValueError("name is required")
         if name in [str(x).lstrip("/") for x in loadout[kind]]:
             raise ValueError(f"{name} is already equipped")
-        if kind == "cli" and shutil.which(name.split()[0]) is None:
+        found = shutil.which(name.split()[0]) if kind == "cli" else None
+        if kind == "cli" and found is None:
             # Same honesty contract as the pulse preflight (fork 014):
             # presence is the one thing we can assert about an uncataloged
             # tool. Probe the FIRST token so a base extension equipped as
@@ -2328,6 +2329,13 @@ def equip_member(
                     if isinstance(v, str) and v.startswith("${")
                 ]
         loadout[kind].append(name)
+        if found:
+            # Where the hub found it rides with the loadout. A timer pulse starts
+            # from a PATH that may not reach this directory (nvm's bin, #111) and
+            # puts it on its own PATH from here (firm.pulse.environment.pulse_path).
+            paths = loadout.get("cli_paths")
+            loadout["cli_paths"] = {**(paths if isinstance(paths, dict) else {}),
+                                    name: os.path.abspath(found)}
 
     repo.update(conn, "contract", contract["id"], {"skill_loadout": loadout})
     log_event(
@@ -2374,6 +2382,8 @@ def unequip_member(
             raise ValueError(f"{name} is not equipped")
         loadout[kind] = kept
         name = bare
+        if kind == "cli" and isinstance(loadout.get("cli_paths"), dict):
+            loadout["cli_paths"].pop(bare, None)
 
     repo.update(conn, "contract", contract["id"], {"skill_loadout": loadout})
     log_event(
