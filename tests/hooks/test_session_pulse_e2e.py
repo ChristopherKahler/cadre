@@ -154,7 +154,9 @@ def _snapshot_counts(db_path: Path) -> dict[str, int]:
         conn.close()
 
 
-def _run_hook(workspace: Path) -> subprocess.CompletedProcess[str]:
+def _run_hook(
+    workspace: Path, *, member_id: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     payload = json.dumps({"session_id": "e2e-test", "cwd": str(workspace)})
     env = {
         **os.environ,
@@ -163,6 +165,11 @@ def _run_hook(workspace: Path) -> subprocess.CompletedProcess[str]:
         "FIRM_SRC": str(REPO_ROOT / "src"),
         "PYTHONPATH": str(REPO_ROOT / "src"),
     }
+    # The hook words its output for whoever the session is: the Board, or the
+    # Member a pulse spawned with CADRE_MEMBER_ID. Never the ambient shell's.
+    env.pop("CADRE_MEMBER_ID", None)
+    if member_id:
+        env["CADRE_MEMBER_ID"] = member_id
     # Deliberately cleared. A developer machine with PYTHONIOENCODING set
     # gives the child a UTF-8 stdout for free and hides every locale
     # defect in the hook; CI and a fresh Windows install have it unset.
@@ -207,6 +214,28 @@ def test_entrypoint_output_matches_golden(tmp_path: Path) -> None:
 
     after = _snapshot_counts(db_path)
     assert before == after, f"hook mutated DB. before={before} after={after}"
+
+
+@needs_checkout
+def test_entrypoint_inside_a_member_run_names_no_command_the_member_is_refused(
+    tmp_path: Path,
+) -> None:
+    # #106: the hook fires inside every Member run too, where the spawn stamps
+    # CADRE_MEMBER_ID. The Board's wording names /gate:decide, which is
+    # Board-only, and `cadre goal update`, which needs the authority key no
+    # founded Member holds. The Board's own session still gets the golden.
+    _seed_chrisai_full(tmp_path)
+
+    board = _run_hook(tmp_path)
+    member = _run_hook(tmp_path, member_id="MEM-001")
+
+    assert board.returncode == 0, board.stderr
+    assert member.returncode == 0, member.stderr
+    assert board.stdout == GOLDEN.read_text(encoding="utf-8")
+    assert "<pending-gates" in member.stdout and "<goal-health" in member.stdout
+    for refused in ("/gate:decide", "goal update", "firm_update_goal_metric"):
+        assert refused not in member.stdout, refused
+    assert "--target-type goal --target-id <GOAL-id>" in member.stdout
 
 
 @needs_checkout

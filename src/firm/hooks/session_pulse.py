@@ -200,9 +200,9 @@ _GATES_BEHAVIOR = (
     "Use /gate:decide {id} approve|reject \"{comment}\" to act."
 )
 
-#: The block as a Member's run prompt shows it (pulse/prompt.py reuses this
-#: renderer). Deciding a Gate is Board-only, so /gate:decide refuses every
-#: Member (#106). The SessionStart hook keeps the Board's wording above.
+#: The block as a Member sees it: in its run prompt (pulse/prompt.py reuses this
+#: renderer), and from the SessionStart hook, which fires inside its run too.
+#: Deciding a Gate is Board-only, so /gate:decide refuses every Member (#106).
 _GATES_BEHAVIOR_FOR_MEMBERS = (
     "BEHAVIOR: This context is PASSIVE AWARENESS ONLY.\n"
     "Do NOT proactively mention pending gates unless the user asks about approvals\n"
@@ -314,7 +314,7 @@ _GOAL_BEHAVIOR = (
     "`cadre goal update <id> --current <value>` (CLI) or firm_update_goal_metric (MCP)."
 )
 
-#: The block as a Member's run prompt shows it. Refreshing a metric needs the
+#: The block as a Member sees it, as above. Refreshing a metric needs the
 #: authority key (goal.update_metric), which no founded Member holds (#106), so a
 #: Member reports a newer value to the Board instead. The escalation names the
 #: goal as its target: the pulse reads an escalation with no target, raised
@@ -530,12 +530,16 @@ def render(
     roster = render_active_roster(conn, firm_id)
     if roster:
         parts.append(roster)
-    # The SessionStart hook is the Board's surface, so it keeps the Board's
-    # wording. A Member's run prompt calls the renderers itself and gets theirs.
-    gates = render_pending_gates(conn, firm_id, now=now, for_board=True)
+    # The hook fires in the Board's own sessions and inside every Member run,
+    # where the spawn stamps CADRE_MEMBER_ID. Only the Board gets the Board's
+    # wording; a Member gets the commands it can run (#106).
+    from firm.services.authority import caller_member_id
+
+    for_board = caller_member_id() is None
+    gates = render_pending_gates(conn, firm_id, now=now, for_board=for_board)
     if gates:
         parts.append(gates)
-    goals = render_goal_health(conn, firm_id, now=now, for_board=True)
+    goals = render_goal_health(conn, firm_id, now=now, for_board=for_board)
     if goals:
         parts.append(goals)
     budget = render_budget_health(conn, firm_id)
