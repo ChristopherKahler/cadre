@@ -163,6 +163,22 @@ def run_enable(
         _emit({"ok": False, "reason": f"claude runtime not wired: {detail}"})
         return 1
 
+    # A timer pulse starts from the scheduler's bare PATH and finds a loadout
+    # tool outside ~/.local/bin and .firm/bin only through the path recorded
+    # when the tool was equipped (#111). A tool equipped before those were
+    # recorded has none, so record it now from this process's PATH -- the hub's
+    # when the Board switches the pulse on there -- before the timer can fire.
+    # Nothing goes into the unit: the pulse reads the record from the database.
+    try:
+        from firm.pulse.preflight import record_cli_paths
+        conn = connect(get_db_path(workspace))
+        try:
+            tool_paths_recorded = record_cli_paths(conn, firm_id)
+        finally:
+            conn.close()
+    except Exception:
+        tool_paths_recorded = {}   # the timer still starts; preflight reports any miss
+
     sched = _sched(unit_dir)
     stem = f"{_UNIT_PREFIX}{firm_id}"
     env = capture_env(workspace, firm_id, claude_bin)
@@ -207,6 +223,7 @@ def run_enable(
         "unit_dir": installed.get("unit_dir", ""),
         "claude_bin": claude_bin,
         "env_keys": sorted(env),
+        "tool_paths_recorded": tool_paths_recorded,
     })
     return 0
 

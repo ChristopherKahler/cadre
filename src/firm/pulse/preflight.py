@@ -18,30 +18,81 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sqlite3
 from typing import Any
 
 from firm.core import repo
+from firm.sysconfig.binaries import image_format, native_image_format
+
+# A Windows drive as WSL mounts it. A WSL login shell's PATH ends with the
+# Windows PATH, so railway can resolve to the Windows npm shim under /mnt/c.
+_WINDOWS_DRIVE_MOUNT = re.compile(r"^/mnt/[A-Za-z]/")
 
 
-def _absent_reason(name: str) -> str:
+def _absent_reason(name: str, recorded: str | None = None) -> str:
     """Resolution failures name the PATH they failed against. "not installed"
     once sent the Board hunting a missing binary that sat in ~/.local/bin the
-    whole time (fork 014) — the lie was the environment, not the machine."""
-    return (f"`{name}` did not resolve on this process's PATH — searched: "
-            + (os.environ.get("PATH") or "(empty PATH)"))
+    whole time (fork 014) — the lie was the environment, not the machine.
+
+    When the hub recorded where it found the tool and nothing is there any more
+    (an nvm upgrade moves every tool installed under the old Node), that path is
+    what the Board needs to see, so the reason names it (#111)."""
+    searched = os.environ.get("PATH") or "(empty PATH)"
+    if recorded and not os.path.exists(recorded):
+        return (f"`{name}` is gone from {recorded}, where the hub found it when "
+                f"it was equipped — searched: {searched}")
+    return f"`{name}` did not resolve on this process's PATH — searched: {searched}"
 
 
-def _loadout_clis(contract: dict[str, Any] | None) -> list[str]:
+def recordable_tool_path(found: str | None) -> str | None:
+    """The path to record for a tool this process resolved, or None.
+
+    Never a path on a Windows drive mount (/mnt/<letter>/, directly or through a
+    symlink), and never a binary built for another platform
+    (``firm.sysconfig.binaries``). A WSL login shell resolves railway to the
+    Windows npm shim under /mnt/c, and recording that would put a Windows
+    folder ahead of /usr/bin on every timer pulse (#111). A script, such as
+    nvm's ``#!/usr/bin/env node`` CLIs, is no image format and stays
+    recordable.
+    """
+    if not found:
+        return None
+    path = os.path.abspath(found)
+    real = os.path.realpath(found)
+    if any(_WINDOWS_DRIVE_MOUNT.match(p) for p in (found, path, real)):
+        return None
+    kind = image_format(real)
+    if kind in ("pe", "elf", "macho") and kind != native_image_format():
+        return None
+    return path
+
+
+def _loadout(contract: dict[str, Any] | None) -> dict[str, Any]:
     if not contract:
-        return []
+        return {}
     raw = contract.get("skill_loadout")
     try:
         lo = json.loads(raw) if isinstance(raw, str) else (raw or {})
     except (json.JSONDecodeError, TypeError):
-        return []
-    return [str(c) for c in (lo.get("cli") or [])] if isinstance(lo, dict) else []
+        return {}
+    return lo if isinstance(lo, dict) else {}
+
+
+def _loadout_clis(contract: dict[str, Any] | None) -> list[str]:
+    return [str(c) for c in (_loadout(contract).get("cli") or [])]
+
+
+def _loadout_cli_paths(contract: dict[str, Any] | None) -> dict[str, str]:
+    """tool -> the path the hub resolved it to when the Board equipped it."""
+    lo = _loadout(contract)
+    paths = lo.get("cli_paths")
+    if not isinstance(paths, dict):
+        return {}
+    carried = set(_loadout_clis(contract))
+    return {str(n): str(p) for n, p in paths.items()
+            if str(n) in carried and isinstance(p, str) and p}
 
 
 def firm_cli_map(conn: sqlite3.Connection, firm_id: str) -> dict[str, list[str]]:
@@ -51,6 +102,54 @@ def firm_cli_map(conn: sqlite3.Connection, firm_id: str) -> dict[str, list[str]]
     for m in repo.find(conn, "member", firm_id=firm_id):
         out[m["id"]] = _loadout_clis(contracts.get(m.get("contract_id")))
     return out
+
+
+def firm_cli_paths(conn: sqlite3.Connection, firm_id: str) -> dict[str, str]:
+    """tool -> where the hub found it, for every tool a Member of the firm carries.
+
+    The hub resolves a tool on its own PATH when the Board equips it (Equip or
+    Train) and records the path in the loadout. A timer pulse starts from the
+    systemd manager's PATH, which can miss that directory (nvm's bin, #111), so
+    the pulse puts each recorded directory on its PATH
+    (``firm.pulse.environment.pulse_path``).
+    """
+    contracts = {c["id"]: c for c in repo.find(conn, "contract", firm_id=firm_id)}
+    out: dict[str, str] = {}
+    for m in repo.find(conn, "member", firm_id=firm_id):
+        for name, path in _loadout_cli_paths(
+                contracts.get(m.get("contract_id"))).items():
+            out.setdefault(name, path)
+    return out
+
+
+def record_cli_paths(conn: sqlite3.Connection, firm_id: str) -> dict[str, str]:
+    """Record where this process finds each loadout CLI that has no recorded
+    path yet, and return what it recorded as {tool: path}.
+
+    Equip and Train record a tool's path when the Board equips it. A loadout
+    equipped before they did has none, and a firm needs one only once a timer
+    pulses it, so ``firm heartbeat enable`` calls this with the enabling
+    process's PATH: the hub's when the Board switches the pulse on there (#111).
+    A tool this PATH cannot find, or finds only somewhere ``recordable_tool_path``
+    refuses, stays unrecorded, and preflight's escalation stands. A path already
+    recorded is left as it is.
+    """
+    recorded: dict[str, str] = {}
+    for contract in repo.find(conn, "contract", firm_id=firm_id):
+        lo = _loadout(contract)
+        paths = lo.get("cli_paths") if isinstance(lo.get("cli_paths"), dict) else {}
+        added: dict[str, str] = {}
+        for name in _loadout_clis(contract):
+            if name in paths or not name.strip():
+                continue
+            path = recordable_tool_path(shutil.which(name.split()[0]))
+            if path:
+                added[name] = path
+        if added:
+            repo.update(conn, "contract", contract["id"],
+                        {"skill_loadout": {**lo, "cli_paths": {**paths, **added}}})
+            recorded.update(added)
+    return recorded
 
 
 def dead_tools(conn: sqlite3.Connection, firm_id: str) -> dict[str, str]:
@@ -68,6 +167,7 @@ def dead_tools(conn: sqlite3.Connection, firm_id: str) -> dict[str, str]:
 
     from firm.dashboard.discovery import cli_survey
     surveyed = {c["name"]: c for c in cli_survey()}
+    recorded = firm_cli_paths(conn, firm_id)
 
     dead: dict[str, str] = {}
     for name in sorted(named):
@@ -79,10 +179,10 @@ def dead_tools(conn: sqlite3.Connection, firm_id: str) -> dict[str, str]:
             # one question the preflight may honestly ask about it — does it
             # resolve on PATH? Fail closed only on genuine absence.
             if shutil.which(name) is None:
-                dead[name] = _absent_reason(name)
+                dead[name] = _absent_reason(name, recorded.get(name))
             continue
         if not c["present"]:
-            dead[name] = _absent_reason(name)
+            dead[name] = _absent_reason(name, recorded.get(name))
         elif c["live"] is False:
             dead[name] = "installed but not signed in — the identity probe failed"
     return dead
@@ -124,17 +224,30 @@ def _fix_for(why: str) -> str:
         return ("Fix — CREDENTIAL: the tool is installed and on PATH but its "
                 "account is dead. Re-authenticate it (usually a re-login); no "
                 "PATH or install work is needed.")
+    if "is gone from" in w:
+        # The hub recorded where it found the tool and that place is empty (#111).
+        return ("Fix — EQUIP AGAIN, not a credential (this is NOT a login "
+                "problem): the tool is no longer where the hub found it when it "
+                "was equipped. Upgrading Node with nvm does this to every tool "
+                "installed under the old version. Make sure the hub can run it "
+                "again (reinstall it if needed), then remove it from each Member "
+                "that carries it and equip it again in the hub. The hub records "
+                "where it finds the tool now, and every pulse searches there.")
     if "did not resolve" in w or "path" in w or "not installed" in w:
         # Every pulse puts these directories in front of the PATH it was started
         # with (firm.pulse.environment.pulse_path), whether a timer or Pulse now
-        # started it, so a miss means the tool is in none of them (#107).
+        # started it, so a miss means the tool is in none of them (#107, #111).
         return ("Fix — ENVIRONMENT, not a credential (this is NOT a login "
                 "problem): the tool did not resolve on the pulse's PATH. Every "
-                "pulse, from the timer or from Pulse now, puts ~/.local/bin and "
-                "the firm's .firm/bin in front of the PATH it started with, so "
-                "the tool is in none of the directories searched above. Install "
-                "it into ~/.local/bin or .firm/bin, or add its directory to the "
-                "PATH of whatever starts the pulse.")
+                "pulse, from the timer or from Pulse now, puts ~/.local/bin, the "
+                "firm's .firm/bin and the directory where the hub found each "
+                "equipped tool in front of the PATH it started with, so the tool "
+                "is in none of the directories searched above. If the hub can "
+                "run it, remove it from the Member and equip it again in the hub: "
+                "a tool equipped before the hub recorded where it found tools has "
+                "no directory on record. Otherwise install it into ~/.local/bin "
+                "or .firm/bin, or add its directory to the PATH of whatever "
+                "starts the pulse.")
     return "Fix: resolve the surface named above, then re-pulse."
 
 

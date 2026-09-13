@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 
 
-def pulse_path(workspace: Path) -> str:
+def pulse_path(workspace: Path, firm_id: str | None = None) -> str:
     """A full PATH for a pulse -- the ONE PATH floor, used by the hub when it
     dispatches Pulse now and by the pulse process itself when it starts.
 
@@ -50,12 +50,21 @@ def pulse_path(workspace: Path) -> str:
     Carry a real PATH so neither the preflight nor the member spawns ever run
     bare -- firm-local dirs first, then the inherited PATH, then a system floor
     in case the inherited PATH was thin.
+
+    With *firm_id*, the directories where the hub found the firm's equipped
+    tools come right after the firm-local dirs (#111). The hub's PATH carries
+    nvm's bin and a timer's does not, so a timer pulse held back every Member
+    equipped with gws or railway. Ahead of the inherited PATH, a
+    ``#!/usr/bin/env node`` tool also runs under the node installed beside it,
+    as it does for the hub, not under /usr/bin/node.
     """
     home = Path.home()
     lead = [str(home / ".local" / "bin"), str(workspace / ".firm" / "bin")]
     base_bin = shutil.which("base")
     if base_bin:
         lead.insert(0, str(Path(base_bin).parent))
+    if firm_id:
+        lead += _recorded_tool_dirs(workspace, firm_id)
     floor = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin",
              "/sbin", "/bin"]
     ordered: list[str] = []
@@ -66,6 +75,28 @@ def pulse_path(workspace: Path) -> str:
                 seen.add(seg)
                 ordered.append(seg)
     return os.pathsep.join(ordered)
+
+
+def _recorded_tool_dirs(workspace: Path, firm_id: str) -> list[str]:
+    """The directories the hub found the firm's equipped tools in, that still
+    exist (``firm.pulse.preflight.firm_cli_paths``). A tool whose directory is
+    gone stays off the PATH, and preflight names the missing path."""
+    try:
+        from firm.core.db import connect, db_is_remote, get_db_path
+        from firm.pulse.preflight import firm_cli_paths
+
+        db_path = get_db_path(workspace)
+        if not db_is_remote() and not db_path.exists():
+            return []   # connect() would create an empty database
+        conn = connect(db_path)
+        try:
+            recorded = firm_cli_paths(conn, firm_id)
+        finally:
+            conn.close()
+    except Exception:
+        return []   # a PATH for the pulse must never fail on the record
+    dirs = [os.path.dirname(path) for _, path in sorted(recorded.items())]
+    return [d for d in dirs if d and os.path.isdir(d)]
 
 
 def read_env_file(workspace: Path) -> dict[str, str]:
@@ -189,7 +220,7 @@ def pulse_environment(
         replaced.setdefault(name, os.environ.get(name))
         os.environ[name] = value
 
-    put("PATH", pulse_path(workspace))
+    put("PATH", pulse_path(workspace, firm_id))
     try:
         found = notify_token(workspace, _notify_config(db_path, firm_id))
         if found and not os.environ.get(found[0]):
