@@ -35,6 +35,7 @@ from typing import Any
 
 from firm.core import repo
 from firm.core.db import connect, get_db_path
+from firm.core.proc import popen_utf8
 from firm.dashboard import discovery
 from firm.dashboard.founding import (
     _FOUNDING_FLAGS,
@@ -513,10 +514,10 @@ def _run_wiring(job_id: str, workspace: Path, firm_id: str,
     env.pop("CADRE_DB_TOKEN", None)
 
     try:
-        proc = subprocess.Popen(
+        proc = popen_utf8(
             argv, cwd=str(_framework_root()),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env=env, text=True,
+            env=env,
         )
     except OSError as exc:
         _finish(job_id, error=f"could not spawn the wiring agent: {exc}")

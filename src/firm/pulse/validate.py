@@ -17,6 +17,8 @@ import shutil
 import sys
 from typing import Any, Callable
 
+from firm.core.proc import run_utf8
+
 
 # ---------------------------------------------------------------------------
 # Result type
@@ -429,8 +431,8 @@ def _validate_ac_script(
             failures.append(f"{rel}: {why}")
             continue
         try:
-            proc = subprocess.run(
-                runner, cwd=cwd, capture_output=True, text=True,
+            proc = run_utf8(
+                runner, cwd=cwd, capture_output=True,
                 timeout=timeout_sec,
             )
         except subprocess.TimeoutExpired:

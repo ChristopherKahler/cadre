@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Protocol
 
 import firm.secrets.vault as vault_mod
+from firm.core.proc import run_utf8
 
 GLOBAL_TIER = "global"
 FIRM_TIER = "firm"
@@ -146,9 +147,9 @@ class BaseVaultProvider:
         if not binary:
             return False
         try:
-            probe = subprocess.run(
+            probe = run_utf8(
                 [binary, "env", "--help"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, timeout=10,
                 env=os.environ.copy(),
             )
         except (OSError, subprocess.TimeoutExpired):
@@ -160,9 +161,9 @@ class BaseVaultProvider:
         return probe.returncode == 0 and "unknown command" not in blob
 
     def _run(self, workspace: Path, *args: str) -> str:
-        proc = subprocess.run(
+        proc = run_utf8(
             ["base", "env", *args],
-            capture_output=True, text=True, timeout=30, cwd=str(workspace),
+            capture_output=True, timeout=30, cwd=str(workspace),
             env=os.environ.copy(),
         )
         if proc.returncode != 0:

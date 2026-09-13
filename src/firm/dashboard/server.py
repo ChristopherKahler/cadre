@@ -30,6 +30,7 @@ from urllib.parse import parse_qs
 from firm.core import repo
 from firm.core.db import connect, db_is_remote, get_db_path, resolve_firm_id
 from firm.core.migrate import apply_migrations
+from firm.core.proc import run_utf8
 from firm.dashboard import auth as board_auth
 from firm.dashboard import calibration as calibration_svc
 from firm.pulse.orchestrator import (
@@ -241,8 +242,8 @@ def install_extension(
         cmd = [str(x) for x in install["cmd"]]
         if confirmed:
             try:
-                proc = subprocess.run(
-                    cmd, cwd=workspace, capture_output=True, text=True,
+                proc = run_utf8(
+                    cmd, cwd=workspace, capture_output=True,
                     timeout=int(install.get("timeout", 120)),
                 )
                 install_result = {
@@ -394,8 +395,8 @@ def run_view_action(
     payload = json.dumps(body or {}, separators=(",", ":"))
     argv = [a.replace("{json}", payload) for a in argv]
     try:
-        proc = subprocess.run(
-            argv, cwd=workspace, capture_output=True, text=True,
+        proc = run_utf8(
+            argv, cwd=workspace, capture_output=True,
             timeout=int(spec.get("timeout", 60)),
         )
     except subprocess.TimeoutExpired:
@@ -1419,10 +1420,10 @@ def perform_action(
         ws = Path(str(row[2])).parent.parent if row and row[2] else None
         if ws is None:
             return {"ok": False, "reason": "no local workspace for this firm"}
-        proc = subprocess.run(
+        proc = run_utf8(
             [_sys.executable, "-m", "firm", "pulse", "--abort",
              "--workspace", str(ws)],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, timeout=120,
             stdin=subprocess.DEVNULL,
         )
         try:

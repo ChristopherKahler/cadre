@@ -55,6 +55,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from firm.core.proc import run_utf8
+
 PLACEHOLDER = "{{framework_dir}}"
 # Not "{{handler}}". base prints the unresolved path back at the user when a
 # command's handler is missing, so this token is written to read as the fix —
@@ -217,9 +219,9 @@ def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
         staged.write_text(rendered, encoding="utf-8")
         env = _base_env()
 
-        checked = subprocess.run(
+        checked = run_utf8(
             [base, "extension", "validate", str(staged)],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, timeout=60,
             env=env, stdin=subprocess.DEVNULL)
         if checked.returncode != 0:
             result["reason"] = ("the manifest did not validate, so nothing was "
@@ -227,9 +229,9 @@ def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
             return result
         result["validated"] = True
 
-        placed = subprocess.run(
+        placed = run_utf8(
             [base, "extension", "install", str(staged)],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, timeout=60,
             env=env, stdin=subprocess.DEVNULL)
         if placed.returncode != 0:
             result["reason"] = ("validated but the install failed: "
@@ -277,9 +279,9 @@ def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
                 "exist, so every `base cadre <verb>` would fail")
             return result
         try:
-            ran = subprocess.run(
+            ran = run_utf8(
                 [base, "cadre", "--help"],
-                capture_output=True, text=True, timeout=60,
+                capture_output=True, timeout=60,
                 cwd=str(Path.cwd()), env=env, stdin=subprocess.DEVNULL)
         except (OSError, subprocess.TimeoutExpired) as exc:
             result["reason"] = f"the handler could not be run: {exc}"

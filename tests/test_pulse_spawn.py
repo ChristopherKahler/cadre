@@ -310,11 +310,18 @@ class TestSpawnCommand:
             result = spawn_member_run("test prompt", timeout_sec=60, cwd=str(tmp_path))
 
         expected_cmd = ["/usr/bin/claude-test", *_CLAUDE_FLAGS, "-p", "test prompt"]
+        # `encoding`/`errors` rather than `text=True`, and that is the point of
+        # #114 rather than a detail of it: text mode alone decodes a Member's
+        # stream with the machine's locale codec, which is cp1252 on Windows and
+        # cannot carry an em dash. The spawn goes through
+        # `firm.core.proc.popen_utf8`, which calls this same `subprocess.Popen`
+        # -- so the mock still sees it, with the codec named.
         mock_popen.assert_called_once_with(
             expected_cmd,
+            encoding="utf-8",
+            errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
             cwd=str(tmp_path),
             env=mock.ANY,
         )

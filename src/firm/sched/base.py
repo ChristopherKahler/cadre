@@ -19,6 +19,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Protocol
 
+from firm.core.proc import run_utf8
+
 _INTERVAL_RE = re.compile(r"^(\d+)(s|m|min|h|d)$")
 
 _UNIT_SECONDS = {"s": 1, "m": 60, "min": 60, "h": 3600, "d": 86400}
@@ -39,7 +41,7 @@ def run_cmd(argv: list[str], timeout: int = 30) -> tuple[int, str]:
     """Run a scheduler CLI (systemctl/launchctl/schtasks); (rc, output).
     Never raises — an absent binary reports as rc 1 with the reason."""
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        proc = run_utf8(argv, capture_output=True, timeout=timeout)
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
         return 1, f"{argv[0]} unavailable: {exc}"
     return proc.returncode, (proc.stdout + proc.stderr).strip()
