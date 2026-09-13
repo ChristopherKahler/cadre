@@ -40,7 +40,9 @@ than where the platform name is wrong.
 
 The sweep at the bottom is the part that keeps it fixed: 29 call sites across
 15 files were reading child output with the locale codec, and a fix that
-leaves the 30th to a future patch is a fix with a countdown on it.
+leaves the 30th to a future patch is a fix with a countdown on it. It was
+widened after grading: five ways of spelling a subprocess call walked past
+the first version of it, four of them without even being counted.
 """
 
 from __future__ import annotations
@@ -459,11 +461,20 @@ def test_the_reason_reaches_the_line_the_operator_reads(monkeypatch, tmp_path):
 
 
 def test_an_honestly_empty_rule_set_still_reads_as_empty(monkeypatch, tmp_path):
-    """CONTROL for the test above: the old sentence is still the right one.
+    """CONTROL: a caller that names no reason still gets the old sentence.
 
-    A domain that genuinely carries no rules must not be reported as one that
-    could not be read. Without this arm the change could have replaced one
-    fixed sentence with another and nothing would have noticed.
+    WHAT THIS DOES AND DOES NOT PROVE, because the first version of this
+    docstring claimed the wrong one (avocet, 2026-09-13). The real ``sync``
+    cannot emit ``rule_seeded=False`` with an empty ``rule_reason`` -- driven
+    across ``_seed_rule_detail``'s whole outcome space, every False carries a
+    reason, so every REAL failure now takes the reasoned sentence. So this is
+    not a control on the product reaching the old branch.
+
+    It is a control on the branch surviving for a caller that omits the key,
+    and those exist: ten stubs across tests/cli/test_base_wire_reporting.py and
+    tests/cli/test_init_wires_base.py return ``rule_seeded`` False with no
+    ``rule_reason`` at all. Delete the branch and they read ``None`` into the
+    operator's line. That is what is being held here.
     """
     from firm.services import base_domain
 
@@ -487,19 +498,103 @@ def test_an_honestly_empty_rule_set_still_reads_as_empty(monkeypatch, tmp_path):
 # commented-out call and trips on a docstring, and the thing being asked --
 # "does THIS call read a child's output" -- is a property of the call's
 # keywords, which text does not carry.
+#
+# WHAT THIS SWEEP RESOLVES PER FILE, and why it is not a fixed list of names.
+# Version one matched an attribute call whose base was literally `subprocess`
+# and checked for `encoding=`. Five shapes got past it, measured by grading
+# (avocet, 2026-09-13):
+#
+#   from subprocess import run       -> not even counted
+#   from subprocess import check_output  -> not even counted
+#   import subprocess as sp          -> not even counted
+#   stdout=PIPE, PIPE imported by name   -> not even counted
+#   encoding="utf-8", errors="strict"    -> counted, and passed CLEAN
+#
+# The first four are invisible rather than wrong, which is the worse failure:
+# the guard reports zero and the floor below cannot notice, because a missed
+# call is a call that was never seen. The fifth is worse still -- it names the
+# right codec and still dies on one stray byte, which is the exact thing
+# `test_the_policy_lives_in_one_place` warns about one section down.
+#
+# None of those spellings exists in src/firm today; every file there writes
+# plain `import subprocess`. That is precisely why the gap could have sat here
+# until the first file that did not.
 
 _SUBPROCESS_READERS = {"run", "Popen", "check_output"}
-_WRAPPERS = {"run_utf8", "popen_utf8"}
+_WRAPPER_ATTRS = {"run_utf8", "popen_utf8"}
+_WRAPPER_MODULE = "firm.core.proc"
 _UTF8_SPELLINGS = {"utf8"}
+# Decode error handlers that CANNOT raise. `strict` is the one that can, and a
+# decode that can raise is the whole defect. `replace` is the house policy --
+# the others are accepted only because they also fail safe.
+_NON_RAISING = {"replace", "ignore", "backslashreplace", "surrogateescape"}
 
 
-def _called_name(node: ast.Call) -> str | None:
+def _dotted(node: ast.AST) -> str:
+    """`firm.core.proc` out of the attribute chain that spells it."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+    return ""
+
+
+class _Names:
+    """What ONE module calls subprocess, the wrappers, and PIPE by.
+
+    Read out of that module's own imports. A name is only trusted because the
+    file in front of us bound it, so a local variable called `run` somewhere
+    else cannot be mistaken for `subprocess.run`.
+    """
+
+    def __init__(self, tree: ast.Module) -> None:
+        self.modules: set[str] = set()        # names bound to the subprocess module
+        self.funcs: dict[str, str] = {}       # local name -> subprocess attr
+        self.pipes: set[str] = set()          # local names bound to PIPE / STDOUT
+        self.wrappers: set[str] = set()       # local names bound to the wrappers
+        self.wrapper_modules: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "subprocess":
+                        self.modules.add(alias.asname or alias.name)
+                    elif alias.name == _WRAPPER_MODULE:
+                        self.wrapper_modules.add(alias.asname or alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module == "subprocess":
+                    for alias in node.names:
+                        local = alias.asname or alias.name
+                        if alias.name in _SUBPROCESS_READERS:
+                            self.funcs[local] = alias.name
+                        elif alias.name in ("PIPE", "STDOUT"):
+                            self.pipes.add(local)
+                elif node.module == _WRAPPER_MODULE:
+                    for alias in node.names:
+                        if alias.name in _WRAPPER_ATTRS:
+                            self.wrappers.add(alias.asname or alias.name)
+
+
+def _called_name(node: ast.Call, names: _Names) -> str | None:
+    """Canonical `subprocess.<fn>` or wrapper name for this call, else None."""
     fn = node.func
-    if (isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name)
-            and fn.value.id == "subprocess"):
-        return f"subprocess.{fn.attr}"
+    if isinstance(fn, ast.Attribute):
+        base = fn.value
+        if isinstance(base, ast.Name):
+            if base.id in names.modules and fn.attr in _SUBPROCESS_READERS:
+                return f"subprocess.{fn.attr}"
+            if base.id in names.wrapper_modules and fn.attr in _WRAPPER_ATTRS:
+                return fn.attr
+        if fn.attr in _WRAPPER_ATTRS and _dotted(base) == _WRAPPER_MODULE:
+            return fn.attr
+        return None
     if isinstance(fn, ast.Name):
-        return fn.id
+        if fn.id in names.wrappers:
+            return fn.id
+        if fn.id in names.funcs:
+            return f"subprocess.{names.funcs[fn.id]}"
     return None
 
 
@@ -507,7 +602,7 @@ def _keyword(node: ast.Call, name: str) -> ast.keyword | None:
     return next((k for k in node.keywords if k.arg == name), None)
 
 
-def _reads_child_output(node: ast.Call, name: str) -> bool:
+def _reads_child_output(node: ast.Call, name: str, names: _Names) -> bool:
     """Does this call capture what the child writes?
 
     ``check_output`` always does. Otherwise the call says so with
@@ -531,48 +626,70 @@ def _reads_child_output(node: ast.Call, name: str) -> bool:
         return True
     for stream in ("stdout", "stderr"):
         k = _keyword(node, stream)
-        if k is not None and isinstance(k.value, ast.Attribute) \
-                and k.value.attr == "PIPE":
+        if k is None:
+            continue
+        if isinstance(k.value, ast.Attribute) and k.value.attr == "PIPE":
+            return True
+        if isinstance(k.value, ast.Name) and k.value.id in names.pipes:
             return True
     return False
 
 
-def _decodes_utf8(node: ast.Call) -> bool:
-    """An explicit, READABLE ``encoding=``.
+def _decode_cannot_raise(node: ast.Call) -> bool:
+    """An explicit, READABLE utf-8 decode that has no way to fail.
 
-    A Name is not enough. ``encoding=ENCODING`` looks careful and this file
-    cannot tell what it resolves to, so it does not count -- which is why
-    ``firm/core/proc.py`` spells the literal out.
+    Both halves, and both as literals. A Name is not enough -- ``encoding=ENC``
+    looks careful and this file cannot tell what it resolves to, which is why
+    ``firm/core/proc.py`` spells its own literals out. And ``encoding="utf-8"``
+    alone is not enough either: under the default ``errors="strict"`` the call
+    still dies on the first byte that is not clean UTF-8, which is #114 again
+    wearing a different message.
     """
-    k = _keyword(node, "encoding")
-    if k is None or not isinstance(k.value, ast.Constant):
+    enc = _keyword(node, "encoding")
+    if enc is None or not isinstance(enc.value, ast.Constant):
         return False
-    return str(k.value.value).lower().replace("-", "").replace("_", "") \
-        in _UTF8_SPELLINGS
+    spelling = str(enc.value.value).lower().replace("-", "").replace("_", "")
+    if spelling not in _UTF8_SPELLINGS:
+        return False
+    err = _keyword(node, "errors")
+    if err is None or not isinstance(err.value, ast.Constant):
+        return False
+    return str(err.value.value).lower() in _NON_RAISING
 
 
 def _scan(source: str, where: str) -> tuple[list[str], int]:
     """(violations, output-reading call sites seen)."""
+    tree = ast.parse(source)
+    names = _Names(tree)
     bad: list[str] = []
     seen = 0
-    for node in ast.walk(ast.parse(source)):
+    for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        name = _called_name(node)
-        if name in _WRAPPERS:
+        name = _called_name(node, names)
+        if name is None:
+            continue
+        if name in _WRAPPER_ATTRS:
             seen += 1
             continue
-        if name is None or not name.startswith("subprocess."):
-            continue
-        if name.split(".", 1)[1] not in _SUBPROCESS_READERS:
-            continue
-        if not _reads_child_output(node, name):
+        if not _reads_child_output(node, name, names):
             continue
         seen += 1
-        if not _decodes_utf8(node):
+        if not _decode_cannot_raise(node):
             bad.append(f"{where}:{node.lineno}: {name}(...) reads the child's "
-                       "output with no explicit encoding")
+                       "output with a decode that can fail")
     return bad, seen
+
+
+def _wrapper_calls() -> int:
+    total = 0
+    for path in sorted(FIRM.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        names = _Names(tree)
+        total += sum(1 for node in ast.walk(tree)
+                     if isinstance(node, ast.Call)
+                     and _called_name(node, names) in _WRAPPER_ATTRS)
+    return total
 
 
 def _sweep() -> tuple[list[str], int, int]:
@@ -588,59 +705,88 @@ def _sweep() -> tuple[list[str], int, int]:
     return bad, seen, files
 
 
-_VIOLATING = (
-    "import subprocess\n"
-    "subprocess.run(['base', 'rule', 'list'], capture_output=True, text=True)\n"
-)
-_THROWN_AWAY = (
-    "import subprocess\n"
-    "subprocess.Popen(['x'], stdout=subprocess.DEVNULL,\n"
-    "                 stderr=subprocess.DEVNULL)\n"
-)
-_FORWARDING = (
-    "import subprocess\n"
-    "def w(argv, **kw):\n"
-    "    return subprocess.run(argv, **kw)\n"
-)
-_NAMED_CONSTANT = (
-    "import subprocess\n"
-    "ENC = 'utf-8'\n"
-    "subprocess.run(['x'], capture_output=True, encoding=ENC)\n"
-)
+# Every one of these must be caught. The first three were caught by the first
+# version of the sweep; the last five were not, and are here because they were
+# found by grading rather than by writing more of the same.
+_CAUGHT = {
+    "a bare locale-decoded call":
+        "import subprocess\n"
+        "subprocess.run(['base', 'rule', 'list'], capture_output=True,"
+        " text=True)\n",
+    "a call forwarding **kwargs":
+        "import subprocess\n"
+        "def w(argv, **kw):\n"
+        "    return subprocess.run(argv, **kw)\n",
+    "encoding named rather than spelled":
+        "import subprocess\n"
+        "ENC = 'utf-8'\n"
+        "subprocess.run(['x'], capture_output=True, encoding=ENC)\n",
+    "from subprocess import run":
+        "from subprocess import run\n"
+        "run(['x'], capture_output=True, text=True)\n",
+    "from subprocess import check_output":
+        "from subprocess import check_output\n"
+        "check_output(['x'])\n",
+    "import subprocess as sp":
+        "import subprocess as sp\n"
+        "sp.run(['x'], capture_output=True, text=True)\n",
+    "stdout=PIPE with PIPE imported by name":
+        "import subprocess\n"
+        "from subprocess import PIPE\n"
+        "subprocess.Popen(['x'], stdout=PIPE, stderr=PIPE, text=True)\n",
+    "utf-8 named but errors left strict":
+        "import subprocess\n"
+        "subprocess.run(['x'], capture_output=True, encoding='utf-8',"
+        " errors='strict')\n",
+}
+
+# And these must NOT be flagged, or the sweep starts demanding decoders for
+# streams nobody reads and stops being worth keeping.
+_ALLOWED = {
+    "a DEVNULL spawn":
+        "import subprocess\n"
+        "subprocess.Popen(['x'], stdout=subprocess.DEVNULL,\n"
+        "                 stderr=subprocess.DEVNULL)\n",
+    "a local function that merely shares a name":
+        "def run(argv, capture_output=False, text=False):\n"
+        "    return argv\n"
+        "run(['x'], capture_output=True, text=True)\n",
+}
 
 
 def test_the_sweep_can_go_red():
-    """A checker nobody has seen fail is not a checker (falsify your prover)."""
-    bad, seen = _scan(_VIOLATING, "canary")
-    assert len(bad) == 1 and seen == 1, (bad, seen)
+    """A checker nobody has seen fail is not a checker (falsify your prover).
 
-    bad, seen = _scan(_THROWN_AWAY, "canary")
-    assert bad == [] and seen == 0, (
-        "a DEVNULL spawn was counted as an output reader; the sweep would "
-        "then demand a decoder for streams nobody reads")
+    One case per shape rather than a single happy-path canary, because the
+    five that were missing here were missing individually: each one is a
+    separate way for a call to be invisible, and a canary for the shape you
+    already handle proves nothing about the one you do not.
+    """
+    for label, source in _CAUGHT.items():
+        bad, seen = _scan(source, "canary")
+        assert len(bad) == 1, f"{label}: not flagged (bad={bad}, seen={seen})"
+        assert seen == 1, f"{label}: not even counted (seen={seen})"
 
-    bad, seen = _scan(_FORWARDING, "canary")
-    assert len(bad) == 1 and seen == 1, (
-        "a call forwarding **kwargs was let through; that is exactly the "
-        "shape a wrapper has, and a wrapper is where the whole policy lives")
-
-    bad, seen = _scan(_NAMED_CONSTANT, "canary")
-    assert len(bad) == 1 and seen == 1, (
-        "encoding=<Name> was accepted; this file cannot resolve a name, so "
-        "accepting one is accepting a call it has not read")
+    for label, source in _ALLOWED.items():
+        bad, seen = _scan(source, "canary")
+        assert bad == [] and seen == 0, (
+            f"{label}: flagged as an unguarded reader (bad={bad}, seen={seen})")
 
 
 def test_no_call_in_src_reads_a_child_with_the_locale_codec():
     """THE COUNT IS ZERO, and this is what holds it there."""
     bad, seen, files = _sweep()
     assert bad == [], (
-        f"{len(bad)} call site(s) read a child's output with whatever codec "
-        "the machine's locale names. On Windows that is cp1252 and it takes "
-        "down founding (#114). Route it through firm.core.proc, or pass "
-        'encoding="utf-8" explicitly:\n  ' + "\n  ".join(bad))
-    # A reader that reports zero must first prove it can see. The floor sits
-    # below the count this found when it was written, so an honest refactor
-    # does not fail it, and far above zero so an ast change that stops
+        f"{len(bad)} call site(s) read a child's output with a decode that can "
+        "fail. On Windows the locale codec is cp1252 and it takes founding "
+        "down (#114); utf-8 with strict errors dies on the same byte with a "
+        "different message. Route it through firm.core.proc, or pass "
+        'encoding="utf-8" and a non-raising errors= explicitly:\n  '
+        + "\n  ".join(bad))
+    # A reader that reports zero must first prove it can see. 31 when this was
+    # written: 29 wrapper call sites plus the two inside firm/core/proc.py that
+    # the **kwargs clause pulls in. The floor sits below that so an honest
+    # refactor does not fail it, and far above zero so an ast change that stops
     # matching does.
     assert seen >= 25, (
         f"the sweep found only {seen} output-reading call sites across {files} "
@@ -666,11 +812,7 @@ def test_the_policy_lives_in_one_place():
     assert proc.stdout == "a�b", f"run_utf8 returned {proc.stdout!r}"
 
     assert _sweep()[0] == []
-    wrapper_calls = sum(
-        1 for path in FIRM.rglob("*.py")
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
-        if isinstance(node, ast.Call) and _called_name(node) in _WRAPPERS)
-    assert wrapper_calls >= 25, (
-        f"only {wrapper_calls} call sites go through firm.core.proc; the "
-        "conversion moved 28, so the policy has leaked back out to the call "
+    assert _wrapper_calls() >= 25, (
+        f"only {_wrapper_calls()} call sites go through firm.core.proc; the "
+        "conversion moved 29, so the policy has leaked back out to the call "
         "sites")
