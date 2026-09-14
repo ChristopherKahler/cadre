@@ -666,7 +666,33 @@ FINGERPRINTS = ("FOREIGNMARKER", "whimbrel-117-", "planted by the #117",
                 "hostile.toml", "second.toml", "third.toml", FOUNDING_FIRM_ID)
 
 
-def attribute(drift: list[str], root: Path) -> tuple[list[str], list[str]]:
+def _marks(root: Path) -> tuple[str, ...]:
+    return tuple(FINGERPRINTS) + (root.name,)
+
+
+def baseline_of(key: str, root: Path) -> dict[str, int] | list[str] | None:
+    """What attribution compares a watched thing against later.
+
+    A file: how often each of this run's marks occurs in its body, zero for
+    every mark when the file is absent, None when it exists and cannot be
+    read. A directory (a `dir:` key): the names of its entries, [] when absent.
+    """
+    path = Path(key[4:] if key.startswith("dir:") else key)
+    if key.startswith("dir:"):
+        return sorted(p.name for p in path.iterdir()) if path.is_dir() else []
+    marks = _marks(root)
+    if not path.exists():
+        return {m: 0 for m in marks}
+    try:
+        body = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return {m: body.count(m) for m in marks}
+
+
+def attribute(drift: list[str], root: Path,
+              baseline: dict[str, dict[str, int] | list[str] | None],
+              ) -> tuple[list[str], list[str]]:
     """Split drift into "this run did it" and "something else did".
 
     A tripwire over SHARED LIVE STATE has to attribute, not merely detect.
@@ -680,23 +706,33 @@ def attribute(drift: list[str], root: Path) -> tuple[list[str], list[str]]:
     Measured 2026-09-14: the operator's Windows-side workspace graph moved during arm
     M2 of a run that never named a Windows path, while another builder was
     working in that workspace.
+
+    WHAT IS NEW, NEVER WHAT IS PRESENT. Measured 2026-09-14 on the first arm E
+    run: the operator's Windows global graph already carried `whimbrel-117-`,
+    `hostile.toml`, `second.toml` and `third.toml`, in four relay pings about
+    that morning's incident. So another session's relay write during column M6
+    was called this run's leak and stopped the run, while this run's own root
+    name occurred 0 times in the file. So a file is this run's only when a mark
+    occurs MORE OFTEN than in *baseline* (taken with the snapshot), and a
+    directory only when an entry that was not there before carries a mark.
     """
     mine: list[str] = []
     theirs: list[str] = []
-    marks = tuple(FINGERPRINTS) + (root.name,)
+    marks = _marks(root)
     for key in drift:
-        path = Path(key[4:] if key.startswith("dir:") else key)
+        now = baseline_of(key, root)
+        was = baseline.get(key)
         if key.startswith("dir:"):
-            names = [p.name for p in path.iterdir()] if path.is_dir() else []
-            (mine if any(any(m in n for m in marks) for n in names)
+            new = set(now or []) - set(was or [])
+            (mine if any(m in name for name in new for m in marks)
              else theirs).append(key)
             continue
-        try:
-            body = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        if now is None:
             mine.append(key)        # cannot read it to clear it: assume ours
             continue
-        (mine if any(mark in body for mark in marks) else theirs).append(key)
+        counted = was if isinstance(was, dict) else {}
+        grew = [m for m, n in now.items() if n > counted.get(m, 0)]
+        (mine if grew else theirs).append(key)
     return mine, theirs
 
 
@@ -741,6 +777,9 @@ def main() -> int:
 
     watch_files, watch_dirs = watched()
     before = snapshot(watch_files, watch_dirs)
+    # Taken at the same moment as the snapshot: drift is attributed by marks
+    # that are NEW, never by marks the operator's files already carried.
+    marked = {key: baseline_of(key, root) for key in before}
     print("tripwire watches:", len(watch_files), "files and", len(watch_dirs),
           "directories, across these homes:",
           ", ".join(str(h) for h in _tiers_to_watch()))
@@ -821,11 +860,13 @@ def main() -> int:
 
         after = snapshot(watch_files, watch_dirs)
         drift = [k for k, v in before.items() if after.get(k) != v]
-        mine, theirs = attribute(drift, root)
+        mine, theirs = attribute(drift, root, marked)
         if theirs:
             print(f"  [{column}] these moved while this ran, and carry nothing "
-                  f"of this run's: {theirs}")
+                  f"new of this run's: {theirs}")
             before = after          # re-baseline; another session owns those
+            for key in theirs:
+                marked[key] = baseline_of(key, root)
         if mine:
             failures.append(f"{column}: THIS RUN LEAKED INTO: {mine}")
             print(f"  STOPPING after {column}: {mine}")
