@@ -166,6 +166,109 @@ def test_winsched_service_launcher_supervises(tmp_path, ok_cmd):
     assert "ONLOGON" in create
 
 
+# A real `schtasks /Query /TN <task> /FO LIST /V` block, captured on Windows 10
+# 19045 during issue #119 (lane F arm B). Every key, the spacing and the line
+# order are verbatim. Only the host name, the account and the launcher path
+# are replaced, because they identify the machine and are not what status()
+# reads. Status / Last Run Time / Last Result are filled per case below.
+_WINSCHED_V_BLOCK = r"""
+Folder: \Cadre
+HostName:                             WINHOST
+TaskName:                             \Cadre\cadre-heartbeat-lab
+Next Run Time:                        9/14/2026 12:52:00 PM
+Status:                               {status}
+Logon Mode:                           Interactive only
+Last Run Time:                        {last_run}
+Last Result:                          {last_result}
+Author:                               WINHOST\operator
+Task To Run:                          "C:\Users\operator\.cadre\sched\cadre-heartbeat-lab.cmd"
+Start In:                             N/A
+Comment:                              N/A
+Scheduled Task State:                 Enabled
+Idle Time:                            Disabled
+Power Management:                     Stop On Battery Mode, No Start On Batteries
+Run As User:                          operator
+Delete Task If Not Rescheduled:       Disabled
+Stop Task If Runs X Hours and X Mins: 72:00:00
+Schedule:                             Scheduling data is not available in this format.
+Schedule Type:                        One Time Only, Minute
+Start Time:                           12:48:00 PM
+Start Date:                           9/14/2026
+End Date:                             N/A
+Days:                                 N/A
+Months:                               N/A
+Repeat: Every:                        0 Hour(s), 1 Minute(s)
+Repeat: Until: Time:                  None
+Repeat: Until: Duration:              Disabled
+Repeat: Stop If Still Running:        Disabled
+"""
+
+
+# (Status, Last Run Time, Last Result) exactly as schtasks printed them, each
+# read off a live task in lane F arms B and E, then what status() must say.
+_WINSCHED_STATUS_CASES = [
+    pytest.param("Ready", "11/30/1999 12:00:00 AM", "267011",
+                 {"failed": False, "never_run": True, "dropped_tick": False,
+                  "last_result": 0x41303},
+                 "last_fire", id="never-run-sentinel"),
+    pytest.param("Ready", "9/14/2026 12:51:00 PM", "0",
+                 {"failed": False, "never_run": False, "dropped_tick": False,
+                  "last_result": 0, "last_fire": "9/14/2026 12:51:00 PM"},
+                 None, id="finished-ok"),
+    pytest.param("Running", "9/14/2026 1:08:01 PM", "267009",
+                 {"failed": False, "state": "running", "never_run": False,
+                  "dropped_tick": False, "last_result": 0x41301},
+                 None, id="running-is-not-a-failure"),
+    pytest.param("Running", "9/14/2026 1:10:00 PM", "-2147020576",
+                 {"failed": False, "dropped_tick": True,
+                  "last_result": 0x800710E0},
+                 None, id="trigger-refused-while-running"),
+    pytest.param("Ready", "9/14/2026 1:11:00 PM", "-1073741510",
+                 {"failed": True, "dropped_tick": False,
+                  "last_result": 0xC000013A},
+                 None, id="console-closed-is-a-failure"),
+]
+
+
+@pytest.mark.parametrize("status_text,last_run,last_result,expected,absent",
+                         _WINSCHED_STATUS_CASES)
+def test_winsched_status_tells_running_never_run_and_dropped_apart(
+        tmp_path, monkeypatch, status_text, last_run, last_result, expected,
+        absent):
+    """status() used to report a normally running pulse as failed (267009),
+    a never-run task as having fired in 1999, and a dropped tick not at all."""
+    block = _WINSCHED_V_BLOCK.format(status=status_text, last_run=last_run,
+                                     last_result=last_result)
+
+    def fake(argv, timeout=30):
+        return (0, block) if "/Query" in argv else (0, "")
+
+    monkeypatch.setattr(winsched_mod, "run_cmd", fake)
+    st = WindowsScheduler(launcher_dir=tmp_path).status("cadre-heartbeat-lab")
+
+    assert st["installed"] is True
+    for key, value in expected.items():
+        assert st.get(key) == value, (key, st)
+    if absent:
+        assert absent not in st, st
+
+
+def test_winsched_status_unreadable_result_fails_toward_failed(tmp_path,
+                                                               monkeypatch):
+    """A Last Result that is not a number must never read as healthy.
+
+    Synthetic input on purpose: this is the branch for output nobody has seen
+    yet, so no captured example of it can exist."""
+    block = _WINSCHED_V_BLOCK.format(status="Ready",
+                                     last_run="9/14/2026 12:51:00 PM",
+                                     last_result="not-a-number")
+    monkeypatch.setattr(winsched_mod, "run_cmd",
+                        lambda argv, timeout=30: (0, block))
+    st = WindowsScheduler(launcher_dir=tmp_path).status("cadre-heartbeat-lab")
+    assert st["failed"] is True
+    assert st["last_result"] == "not-a-number"
+
+
 def test_unit_files_are_utf8_whatever_the_locale_is(tmp_path, monkeypatch):
     """Unit files are UTF-8 by specification; the locale codec is not.
 

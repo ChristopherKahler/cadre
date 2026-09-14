@@ -17,6 +17,7 @@ floor); ``status()`` parses ``schtasks /Query /V`` for state and run times.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,34 @@ from typing import Any
 from firm.sched.base import SchedulerError, interval_to_seconds, run_cmd
 
 _TASK_FOLDER = "Cadre"
+
+# Task Scheduler's `Last Result`, which schtasks prints as a SIGNED decimal, read
+# here as the unsigned 32-bit code. Every value below was captured from a live
+# task on Windows 10 19045 during issue #119 unless it says otherwise.
+_LR_OK = 0x00000000
+_LR_RUNNING = 0x00041301        # an instance is running right now
+_LR_NEVER_RUN = 0x00041303      # the task has never run
+# A trigger fired while an instance was still running and MultipleInstances=
+# IgnoreNew dropped it. Measured: `Last Run Time` still advances to that
+# trigger, and the NEXT finish overwrites this code with the finish's own, so
+# a dropped tick is visible only between the two. It is not a task failure.
+_LR_REFUSED = 0x800710E0
+# Documented, NOT captured: an Interactive-only trigger while the user is logged
+# out. Skipping then is the design (logged out means no pulse), not a failure.
+_LR_NOT_LOGGED_ON = 0x800704DD
+_NOT_FAILURES = frozenset({_LR_OK, _LR_RUNNING, _LR_NEVER_RUN, _LR_REFUSED,
+                           _LR_NOT_LOGGED_ON})
+# A never-run task reports `Last Run Time: 11/30/1999 12:00:00 AM` (en-US).
+# Matched on the year so another date order still reads as "never", not as
+# a pulse that fired in 1999.
+_NEVER_RUN_TIME = re.compile("(?<![0-9])1999(?![0-9])")
+
+
+def _last_result_code(val: str) -> int | None:
+    try:
+        return int(val) & 0xFFFFFFFF
+    except ValueError:
+        return None
 
 
 def _cmd_quote(s: str) -> str:
@@ -126,6 +155,10 @@ class WindowsScheduler:
             return out
         out["installed"] = True
         out["state"] = "unknown"
+        # `state` is task liveness only. Neither `last_fire` nor `failed` can say
+        # whether a PULSE did work: a dropped tick advances Last Run Time, and
+        # its refusal code is overwritten by the next finish. The firm database
+        # is the record of work.
         for line in q.splitlines():
             key, _, val = (x.strip() for x in line.partition(":"))
             if key == "Status" and val:
@@ -133,10 +166,24 @@ class WindowsScheduler:
             elif key == "Next Run Time" and val and val != "N/A":
                 out["next_fire"] = val
             elif key == "Last Run Time" and val and val != "N/A":
-                out["last_fire"] = val
-            elif key == "Last Result" and val not in ("0", "", "267011"):
-                # 267011 = has never run — not a failure
-                out["failed"] = True
+                if _NEVER_RUN_TIME.search(val):
+                    out["never_run"] = True      # absent, not a 1999 timestamp
+                else:
+                    out["never_run"] = False
+                    out["last_fire"] = val
+            elif key == "Last Result" and val:
+                code = _last_result_code(val)
+                if code is None:
+                    # Output nobody has seen yet must never read as healthy.
+                    out["last_result"] = val
+                    out["failed"] = True
+                    continue
+                out["last_result"] = code
+                out["dropped_tick"] = code == _LR_REFUSED
+                if code == _LR_NEVER_RUN:
+                    out["never_run"] = True
+                if code not in _NOT_FAILURES:
+                    out["failed"] = True
         launcher = self._launcher(stem)
         if launcher.exists():
             for line in launcher.read_text(encoding="utf-8").splitlines():
