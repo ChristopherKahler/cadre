@@ -137,18 +137,13 @@ def test_with_no_stamp_and_no_archive_the_commit_is_unknown(no_stamp):
     assert _build_info.version_string() == _build_info.BASE_VERSION
 
 
-def test_the_archive_placeholder_can_never_be_read_as_a_commit():
-    """The whole no-git fallback rests on this being un-mistakable.
-
-    In a plain checkout the literal stays ``$Format:%H$``. If it ever became
-    sha-shaped, an unsubstituted placeholder would be reported as a real
-    commit and every downstream reader would believe it.
-    """
-    raw = _build_info._ARCHIVE_COMMIT
-    assert not _build_info._is_sha(raw)
-    assert not re.match(r"^[0-9a-f]{40}$", raw)
-
-
+# The unsubstituted placeholder must never read as a commit: the whole no-git
+# fallback rests on that. It is pinned by the "$Format:%H$" case below, a
+# literal, and deliberately NOT by reading _build_info._ARCHIVE_COMMIT: git
+# archive substitutes that constant with the real commit, so a test reading it
+# failed on every tree made by git archive, GitHub's source tarballs included
+# (#120 G2 F6, avocet's L10). The case below still fails if _is_sha ever
+# accepts the placeholder.
 @pytest.mark.parametrize("value,expected", [
     ("$Format:%H$", False),
     ("", False),
