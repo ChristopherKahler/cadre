@@ -22,10 +22,12 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from firm.services import base_extension
+from firm.services import firm_relay, graph_isolation
 
 ROOT_FOR_SOURCE = Path(__file__).resolve().parent.parent.parent
 
@@ -621,7 +623,8 @@ def fake_base(monkeypatch, tmp_path):
     return tmp_path
 
 
-def _land(home: Path, text: str = 'name = "cadre"\nframework_dir = "/opt/cadre"\n') -> None:
+def _land(home: Path,
+          text: str = '[extension]\nname = "cadre"\nframework_dir = "/opt/cadre"\n') -> None:
     (home / ".base-gbl" / "extensions" / "cadre.toml").write_text(text, encoding="utf-8")
 
 
@@ -675,7 +678,7 @@ def test_install_does_not_claim_success_it_did_not_read_back(monkeypatch, fake_b
 def test_install_refuses_a_landed_file_that_still_has_the_placeholder(monkeypatch, fake_base):
     run = _Run(0, 0)
     monkeypatch.setattr(subprocess, "run", run)
-    _land(fake_base, 'name = "cadre"\nframework_dir = "{{framework_dir}}"\n')
+    _land(fake_base, '[extension]\nname = "cadre"\nframework_dir = "{{framework_dir}}"\n')
     res = base_extension.install("/opt/cadre")
     assert res["ok"] is False
     assert "never got filled in" in res["reason"]
@@ -772,6 +775,9 @@ def test_the_install_command_is_reachable_from_the_cli():
         cwd=str(Path(__file__).resolve().parents[2]))
     assert done.returncode == 0, done.stderr
     assert "--framework-dir" in done.stdout
+    # #117: a firm's manifest belongs in the firm's own tier, and this is the
+    # flag that names the firm from a shell.
+    assert "--workspace" in done.stdout
 
 
 def test_that_cli_reachability_check_can_fail():
@@ -1139,3 +1145,408 @@ def test_an_empty_listing_is_a_failed_read_never_a_clean_one(fake_base,
         "an empty rule listing was read as a clean graph")
     assert res["collision"] is False
     assert "UNKNOWN" in res["reason"]
+
+
+# ---------------------------------------------------------------------------
+# #117, spec item 5: the manifest goes into the FIRM's own tier
+#
+# A firm gets its own base tier at `<firm>/.firm/base-home`, and a Member
+# spawned in the firm runs `base cadre` with that tier as its BASE_HOME
+# (`firm/pulse/spawn.py`). A manifest installed anywhere else is a command no
+# Member can run.
+#
+# These arms were pre-registered before the code existed, each on its own
+# channel and each with the mutation that must redden it. None of them uses
+# `_land()`. That helper puts the manifest in place BEFORE the call, so an arm
+# built on it passes whichever tier the install aimed at: it cannot see a wrong
+# destination. `_TierBase` writes where the call's BASE_HOME points, as base
+# does, so the destination is a consequence of the env the install really
+# handed to base.
+#
+# Every arm controls three things: BASE_HOME (a stand-in operator tier seeded
+# with another extension and an OLDER Cadre manifest), the firm, and the
+# working directory. The older operator manifest is what makes the silent
+# failure reachable: a read-back aimed at the operator's tier, over an install
+# that went to the firm's, would find that file and call it proof.
+# ---------------------------------------------------------------------------
+
+_OPERATOR_OLDER_MANIFEST = (
+    '[extension]\nname = "cadre"\nversion = "0.0.1-operator"\n'
+    'framework_dir = "/somewhere/else"\n')
+_ANOTHER_EXTENSION = '[extension]\nname = "lore"\nversion = "9.9.9"\n'
+#: Present in this install's render and in no seeded file.
+_RENDERED_MARK = 'framework_dir = "/opt/cadre"'
+
+
+class _Done:
+    def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+class _TierBase:
+    """A stub base that writes where the call's BASE_HOME points, as base does.
+
+    Records argv, env and cwd for every call. It never falls back to HOME: a
+    call carrying no BASE_HOME writes nothing and fails, because on a
+    developer's machine HOME is the real operator tier.
+    """
+
+    listing = CLEAN_LISTING
+
+    def __init__(self, landed_text=None) -> None:
+        self.calls: list[dict] = []
+        #: Optional change to the staged manifest before it lands, standing in
+        #: for a base that wrote something other than what it was given.
+        self.landed_text = landed_text
+
+    def __call__(self, cmd, **kwargs):
+        argv = [str(a) for a in cmd]
+        env = dict(kwargs.get("env") or {})
+        self.calls.append({"argv": argv, "env": env, "cwd": kwargs.get("cwd")})
+        if argv[1:3] == ["rule", "list"]:
+            return _Done(0, self.listing)
+        if argv[1:3] == ["extension", "install"]:
+            home = env.get("BASE_HOME")
+            if not home:
+                return _Done(1, "", "stub base: no BASE_HOME in the env, wrote nothing")
+            staged = Path(argv[3]).read_text(encoding="utf-8")
+            dest = Path(home) / ".base-gbl" / "extensions" / "cadre.toml"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            text = self.landed_text(staged) if self.landed_text else staged
+            dest.write_text(text, encoding="utf-8")
+            return _Done(0, "Installed cadre")
+        return _Done(0, "ok")
+
+
+def _stub_binary(path: Path, native: bool = True) -> str:
+    """A file carrying this host's magic bytes, or another platform's."""
+    from firm.sysconfig.binaries import native_image_format
+
+    magics = {"pe": b"MZ\x90\x00", "macho": b"\xcf\xfa\xed\xfe", "elf": b"\x7fELF"}
+    host = native_image_format()
+    fmt = host if native else ("elf" if host == "pe" else "pe")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(magics[fmt] + b"\x00" * 128)
+    path.chmod(0o755)
+    return str(path)
+
+
+def _make_firm(root: Path) -> Path:
+    (root / ".firm").mkdir(parents=True)
+    (root / ".firm" / "firm.db").write_bytes(b"")
+    return root
+
+
+def _snapshot(directory: Path) -> dict[str, bytes]:
+    """Every file's name and bytes. The caller checks how many it visited."""
+    return {p.name: p.read_bytes() for p in sorted(directory.iterdir()) if p.is_file()}
+
+
+@pytest.fixture
+def two_tiers(monkeypatch, tmp_path):
+    operator = tmp_path / "operator"
+    operator_ext = operator / ".base-gbl" / "extensions"
+    operator_ext.mkdir(parents=True)
+    (operator_ext / "lore.toml").write_text(_ANOTHER_EXTENSION, encoding="utf-8")
+    (operator_ext / "cadre.toml").write_text(_OPERATOR_OLDER_MANIFEST, encoding="utf-8")
+    monkeypatch.setenv("BASE_HOME", str(operator))
+
+    firm = _make_firm(tmp_path / "firm")
+    (firm / "sub").mkdir()
+
+    standing = tmp_path / "standing"
+    standing.mkdir()
+    monkeypatch.chdir(standing)
+    assert firm_relay.resolve_firm(standing) is None, (
+        "precondition: a directory above the standing directory holds a firm, "
+        "so no arm here can tell 'no firm' from 'a firm'")
+
+    stub = _stub_binary(tmp_path / "bin" / "base")
+    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: stub)
+    return SimpleNamespace(tmp=tmp_path, operator=operator, operator_ext=operator_ext,
+                           firm=firm, standing=standing)
+
+
+def test_a1_destination_the_manifest_lands_in_the_firms_tier_and_nowhere_else(
+        two_tiers, monkeypatch):
+    """A1, the filesystem, both tiers. Reads no field of the result.
+
+    Must catch the delegating `_base_env` dropping the workspace (M2), which
+    sends the install to the operator's tier.
+    """
+    before = _snapshot(two_tiers.operator_ext)
+    print(f"A1: the operator snapshot visited {len(before)} file(s)")
+    assert len(before) == 2, (
+        f"the operator snapshot visited {len(before)} file(s), not the 2 seeded, "
+        "so a byte-identity check over it proves NOTHING")
+    monkeypatch.setattr(subprocess, "run", _TierBase())
+
+    base_extension.install("/opt/cadre", workspace=two_tiers.firm)
+
+    firm_ext = graph_isolation.tier_extensions_dir(two_tiers.firm)
+    tomls = sorted(p.name for p in firm_ext.glob("*.toml")) if firm_ext.is_dir() else []
+    print(f"A1: the firm's tier holds {tomls}")
+    assert tomls == ["cadre.toml"], (
+        f"the firm's tier holds {tomls}; it must hold exactly this manifest")
+    assert _RENDERED_MARK in (firm_ext / "cadre.toml").read_text(encoding="utf-8"), (
+        "the firm's cadre.toml is not this install's render")
+    after = _snapshot(two_tiers.operator_ext)
+    changed = sorted(n for n in set(before) | set(after) if before.get(n) != after.get(n))
+    assert changed == [], f"the install changed the operator's tier: {changed}"
+
+
+def test_a2_honest_report_the_path_reported_is_the_file_really_read(
+        two_tiers, monkeypatch):
+    """A2, the returned dict checked against the disk.
+
+    Leg (a) is a healthy install. In leg (b) base lands Cadre's manifest with
+    its placeholder still in it, which must read back False: that leg catches a
+    read-back swapped for an existence check (M6, the spec's "must not do").
+    Both legs catch a read-back aimed at the operator's tier (M3), where the
+    older operator manifest would be read as proof.
+    """
+    want = graph_isolation.tier_extensions_dir(two_tiers.firm) / "cadre.toml"
+
+    monkeypatch.setattr(subprocess, "run", _TierBase())
+    healthy = base_extension.install("/opt/cadre", workspace=two_tiers.firm)
+    assert healthy["read_back"] is True, healthy["reason"]
+    assert Path(healthy["path"]) == want, (
+        f"the install reported {healthy['path']}, but the firm's manifest is {want}")
+    assert _RENDERED_MARK in Path(healthy["path"]).read_text(encoding="utf-8"), (
+        "read_back is True over a file that is not this install's render")
+
+    unrendered = _TierBase(landed_text=lambda staged: staged.replace(
+        _RENDERED_MARK, f'framework_dir = "{base_extension.PLACEHOLDER}"'))
+    monkeypatch.setattr(subprocess, "run", unrendered)
+    corrupt = base_extension.install("/opt/cadre", workspace=two_tiers.firm)
+    assert base_extension.PLACEHOLDER in want.read_text(encoding="utf-8"), (
+        "precondition: the stub did not land the unrendered manifest in the "
+        "firm's tier, so leg (b) tests nothing")
+    assert corrupt["read_back"] is False, (
+        "read_back is True over a landed manifest that still carries its placeholder")
+    assert corrupt["ok"] is False
+    assert Path(corrupt["path"]) == want
+
+    # Leg (c): base lands ANOTHER extension's manifest that still declares a
+    # `cadre` command. Cadre's manifest carries `name = "cadre"` twice, under
+    # [extension] and under [[commands]], so a substring read-back cannot tell
+    # this file from Cadre's. Must catch the read-back going back to a
+    # substring match (M12).
+    renamed = _TierBase(landed_text=lambda staged: staged.replace(
+        '[extension]\nname = "cadre"', '[extension]\nname = "somethingelse"', 1))
+    monkeypatch.setattr(subprocess, "run", renamed)
+    other = base_extension.install("/opt/cadre", workspace=two_tiers.firm)
+    landed = want.read_text(encoding="utf-8")
+    assert tomllib.loads(landed)["extension"]["name"] == "somethingelse", (
+        "precondition: the stub did not land a manifest of another extension, "
+        "so leg (c) tests nothing")
+    assert 'name = "cadre"' in landed, (
+        "precondition: the landed file no longer carries the [[commands]] name, "
+        "so leg (c) cannot reach the shape a substring check misreads")
+    assert other["read_back"] is False, (
+        "read_back is True over a manifest whose [extension] is not cadre, "
+        "because its [[commands]] block says name = \"cadre\"")
+    assert other["ok"] is False
+    assert Path(other["path"]) == want
+
+
+def test_a3_no_workspace_control_installs_where_it_always_did(two_tiers, monkeypatch):
+    """A3, the filesystem, operator tier. The blindness control: green under
+    every mutation in the matrix, and the arm that keeps a workspace OPTIONAL."""
+    lore = two_tiers.operator_ext / "lore.toml"
+    lore_before = lore.read_bytes()
+    monkeypatch.setattr(subprocess, "run", _TierBase())
+
+    base_extension.install("/opt/cadre")
+
+    landed = (two_tiers.operator_ext / "cadre.toml").read_text(encoding="utf-8")
+    assert _RENDERED_MARK in landed and "0.0.1-operator" not in landed, (
+        "an install with no workspace did not replace the operator tier's manifest")
+    assert lore.read_bytes() == lore_before
+    assert not graph_isolation.firm_base_home(two_tiers.firm).exists(), (
+        "an install with no workspace created a firm tier")
+
+
+def test_a4_prevention_a_refused_firm_install_runs_no_subprocess(
+        two_tiers, monkeypatch, tmp_path):
+    """A4, a spy counting subprocess calls. The refusal is decided on the
+    binary's format, so the proof is that nothing ran.
+
+    The control comes first: the same spy, a native base and the same
+    workspace record calls, so the zero below is a reading and not blindness.
+    """
+    control = _TierBase()
+    monkeypatch.setattr(subprocess, "run", control)
+    base_extension.install("/opt/cadre", workspace=two_tiers.firm)
+    print(f"A4 control: the spy recorded {len(control.calls)} call(s) on a native base")
+    assert len(control.calls) >= 1, (
+        "the spy recorded nothing on a native base, so a zero below proves NOTHING")
+
+    foreign = _stub_binary(tmp_path / "foreign" / "base", native=False)
+    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: foreign)
+    spy = _TierBase()
+    monkeypatch.setattr(subprocess, "run", spy)
+    res = base_extension.install("/opt/cadre", workspace=two_tiers.firm)
+    print(f"A4: the spy recorded {len(spy.calls)} call(s) on a foreign base")
+    assert spy.calls == [], f"a refused install ran {[c['argv'][1:3] for c in spy.calls]}"
+    assert res["ok"] is False
+
+
+def test_a5_handler_tier_every_base_call_carries_the_firms_base_home(
+        two_tiers, monkeypatch):
+    """A5, a spy on the env of each call. Four calls today: validate, install,
+    `base cadre --help`, and one `rule list` per prompt domain. The count is
+    derived from the manifest rather than typed, so a change that drops a call
+    fails here instead of passing on fewer calls."""
+    run = _TierBase()
+    monkeypatch.setattr(subprocess, "run", run)
+    base_extension.install("/opt/cadre", workspace=two_tiers.firm)
+
+    want = str(graph_isolation.firm_base_home(two_tiers.firm))
+    domains = base_extension.manifest_domains(base_extension.render("/opt/cadre"))
+    expected = 3 + len(domains)
+    seen = [(" ".join(c["argv"][1:3]), c["env"].get("BASE_HOME")) for c in run.calls]
+    print(f"A5: visited {len(seen)} base call(s), expected {expected}")
+    for verb, home in seen:
+        print(f"  {verb:<20} BASE_HOME={home}")
+    assert len(seen) == expected, f"visited {len(seen)} base calls, expected {expected}: {seen}"
+    wrong = [verb for verb, home in seen if home != want]
+    assert wrong == [], f"these base calls ran outside the firm's tier {want}: {wrong}"
+
+    helps = [c for c in run.calls if c["argv"][1:3] == ["cadre", "--help"]]
+    assert len(helps) == 1
+    assert Path(helps[0]["cwd"]).resolve() == two_tiers.standing.resolve(), (
+        "the handler proof did not run from the directory this leg set, so the "
+        "leg is not controlling which workspace tier base resolves")
+
+
+def test_a6_refusal_report_a_refused_firm_install_names_the_firms_tier(
+        two_tiers, monkeypatch, tmp_path):
+    """A6, the returned dict on the refusal path.
+
+    The refusal is decided on the binary's format, so it happens whichever
+    tier is passed and A4 cannot tell them apart. What has to be right is the
+    tier the refusal NAMES. Must catch the refusal being checked against the
+    operator's tier (M4).
+    """
+    foreign = _stub_binary(tmp_path / "foreign" / "base", native=False)
+    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: foreign)
+    monkeypatch.setattr(subprocess, "run", _TierBase())
+
+    res = base_extension.install("/opt/cadre", workspace=two_tiers.firm)
+
+    want = graph_isolation.tier_extensions_dir(two_tiers.firm) / "cadre.toml"
+    assert Path(res["path"]) == want, (
+        f"the refusal reports {res['path']}, not the firm's tier {want}")
+    assert str(want) in res["reason"], (
+        f"the refusal does not name the firm's tier: {res['reason']}")
+    assert str(two_tiers.operator) not in res["reason"], (
+        "the refusal names the operator's tier while refusing an install into a firm")
+
+
+def _cli_install(*extra: str) -> int:
+    from firm.__main__ import main
+
+    return main(["extension", "install", "--framework-dir", "/opt/cadre", *extra])
+
+
+def _firm_tiers(root: Path) -> list[str]:
+    """Every firm tier under root: a `base-home` directory inside a `.firm`.
+
+    Only that shape. conftest points BASE_HOME at `<tmp_path>/base-home` for
+    every test, so a search for the bare name could match a path this lane
+    never made.
+    """
+    return sorted(str(p) for p in root.rglob(graph_isolation.TIER_DIRNAME)
+                  if p.is_dir() and p.parent.name == ".firm")
+
+
+def test_c1_standing_in_a_firm_installs_into_that_firms_tier(two_tiers, monkeypatch):
+    """C1. No flag, standing in a subdirectory of a firm: the firm's tier.
+    Must catch the dispatch passing no default (M8)."""
+    monkeypatch.setattr(subprocess, "run", _TierBase())
+    monkeypatch.chdir(two_tiers.firm / "sub")
+    before = _snapshot(two_tiers.operator_ext)
+
+    code = _cli_install()
+
+    firm_manifest = graph_isolation.tier_extensions_dir(two_tiers.firm) / "cadre.toml"
+    assert code == 0
+    assert firm_manifest.is_file(), (
+        "standing inside a firm with no flag did not install into that firm's tier")
+    assert _snapshot(two_tiers.operator_ext) == before, (
+        "standing inside a firm with no flag changed the operator's tier")
+
+
+def test_c2_outside_any_firm_the_cli_keeps_todays_tier(two_tiers, monkeypatch):
+    """C2, the control for C1 and C3. Standing outside every firm with no flag
+    installs where it always did and creates no firm tier anywhere."""
+    monkeypatch.setattr(subprocess, "run", _TierBase())
+
+    code = _cli_install()
+
+    assert code == 0
+    landed = (two_tiers.operator_ext / "cadre.toml").read_text(encoding="utf-8")
+    assert _RENDERED_MARK in landed, "the operator's tier did not receive this install"
+    made = _firm_tiers(two_tiers.tmp)
+    assert made == [], f"an install outside any firm created a firm tier: {made}"
+    # The finder has to be able to see one, or the empty list above is blindness.
+    graph_isolation.ensure_tier(two_tiers.firm)
+    assert len(_firm_tiers(two_tiers.tmp)) == 1, (
+        "the firm-tier finder did not see a tier that exists, so its empty answer "
+        "above proves NOTHING")
+
+
+def test_c3_an_explicit_workspace_beats_the_firm_you_stand_in(two_tiers, monkeypatch):
+    """C3. Standing in one firm and naming another: the named one gets the
+    manifest and the one you stand in is left alone. Must catch the dispatch
+    ignoring the flag (M9)."""
+    other = _make_firm(two_tiers.tmp / "other-firm")
+    monkeypatch.setattr(subprocess, "run", _TierBase())
+    monkeypatch.chdir(two_tiers.firm / "sub")
+
+    code = _cli_install("--workspace", str(other))
+
+    assert code == 0
+    assert (graph_isolation.tier_extensions_dir(other) / "cadre.toml").is_file(), (
+        "the firm named by --workspace did not receive the manifest")
+    assert not graph_isolation.firm_base_home(two_tiers.firm).exists(), (
+        "the firm you stood in was written despite an explicit --workspace")
+
+
+def test_c4_a_workspace_that_is_not_a_firm_is_refused_before_anything_is_made(
+        two_tiers, monkeypatch, capsys):
+    """C4. A `--workspace` with no .firm/firm.db exits 2 and creates nothing.
+
+    Naming a workspace creates its tier on disk, so a typo has to be refused
+    before that can happen, the way `cadre relay --firm` refuses it. Leg 1 names
+    a real directory that is not a firm (the likeliest typo: the firms root
+    instead of a firm in it). Leg 2 names a path that does not exist. Must
+    catch the refusal being removed (M10).
+    """
+    run = _TierBase()
+    monkeypatch.setattr(subprocess, "run", run)
+    before = _snapshot(two_tiers.operator_ext)
+
+    typo = two_tiers.tmp / "typo"
+    typo.mkdir()
+    (typo / "notes.txt").write_text("not a firm\n", encoding="utf-8")
+    code = _cli_install("--workspace", str(typo))
+    err = capsys.readouterr().err
+    walked = sorted(p.relative_to(typo).as_posix() for p in typo.rglob("*"))
+    print(f"C4: the walk of the typo directory visited {len(walked)} entries: {walked}")
+    assert walked, "the walk of the typo directory visited nothing, so it proves NOTHING"
+    assert code == 2, f"a --workspace that is not a firm exited {code}, not 2"
+    assert str(typo) in err and ".firm/firm.db" in err, (
+        f"the refusal does not name the path and the missing database: {err!r}")
+    assert walked == ["notes.txt"], f"the refused install created {walked} under the typo"
+
+    nowhere = two_tiers.tmp / "nowhere"
+    code = _cli_install("--workspace", str(nowhere))
+    assert code == 2, f"a --workspace that does not exist exited {code}, not 2"
+    assert not nowhere.exists(), "a refused --workspace created the directory it named"
+
+    assert run.calls == [], f"a refused install ran base: {[c['argv'][1:3] for c in run.calls]}"
+    assert _snapshot(two_tiers.operator_ext) == before
