@@ -1429,6 +1429,17 @@ def _cli_install(*extra: str) -> int:
     return main(["extension", "install", "--framework-dir", "/opt/cadre", *extra])
 
 
+def _firm_tiers(root: Path) -> list[str]:
+    """Every firm tier under root: a `base-home` directory inside a `.firm`.
+
+    Only that shape. conftest points BASE_HOME at `<tmp_path>/base-home` for
+    every test, so a search for the bare name could match a path this lane
+    never made.
+    """
+    return sorted(str(p) for p in root.rglob(graph_isolation.TIER_DIRNAME)
+                  if p.is_dir() and p.parent.name == ".firm")
+
+
 def test_c1_standing_in_a_firm_installs_into_that_firms_tier(two_tiers, monkeypatch):
     """C1. No flag, standing in a subdirectory of a firm: the firm's tier.
     Must catch the dispatch passing no default (M8)."""
@@ -1456,8 +1467,13 @@ def test_c2_outside_any_firm_the_cli_keeps_todays_tier(two_tiers, monkeypatch):
     assert code == 0
     landed = (two_tiers.operator_ext / "cadre.toml").read_text(encoding="utf-8")
     assert _RENDERED_MARK in landed, "the operator's tier did not receive this install"
-    made = sorted(str(p) for p in two_tiers.tmp.rglob(graph_isolation.TIER_DIRNAME))
+    made = _firm_tiers(two_tiers.tmp)
     assert made == [], f"an install outside any firm created a firm tier: {made}"
+    # The finder has to be able to see one, or the empty list above is blindness.
+    graph_isolation.ensure_tier(two_tiers.firm)
+    assert len(_firm_tiers(two_tiers.tmp)) == 1, (
+        "the firm-tier finder did not see a tier that exists, so its empty answer "
+        "above proves NOTHING")
 
 
 def test_c3_an_explicit_workspace_beats_the_firm_you_stand_in(two_tiers, monkeypatch):
@@ -1475,3 +1491,39 @@ def test_c3_an_explicit_workspace_beats_the_firm_you_stand_in(two_tiers, monkeyp
         "the firm named by --workspace did not receive the manifest")
     assert not graph_isolation.firm_base_home(two_tiers.firm).exists(), (
         "the firm you stood in was written despite an explicit --workspace")
+
+
+def test_c4_a_workspace_that_is_not_a_firm_is_refused_before_anything_is_made(
+        two_tiers, monkeypatch, capsys):
+    """C4. A `--workspace` with no .firm/firm.db exits 2 and creates nothing.
+
+    Naming a workspace creates its tier on disk, so a typo has to be refused
+    before that can happen, the way `cadre relay --firm` refuses it. Leg 1 names
+    a real directory that is not a firm (the likeliest typo: the firms root
+    instead of a firm in it). Leg 2 names a path that does not exist. Must
+    catch the refusal being removed (M10).
+    """
+    run = _TierBase()
+    monkeypatch.setattr(subprocess, "run", run)
+    before = _snapshot(two_tiers.operator_ext)
+
+    typo = two_tiers.tmp / "typo"
+    typo.mkdir()
+    (typo / "notes.txt").write_text("not a firm\n", encoding="utf-8")
+    code = _cli_install("--workspace", str(typo))
+    err = capsys.readouterr().err
+    walked = sorted(p.relative_to(typo).as_posix() for p in typo.rglob("*"))
+    print(f"C4: the walk of the typo directory visited {len(walked)} entries: {walked}")
+    assert walked, "the walk of the typo directory visited nothing, so it proves NOTHING"
+    assert code == 2, f"a --workspace that is not a firm exited {code}, not 2"
+    assert str(typo) in err and ".firm/firm.db" in err, (
+        f"the refusal does not name the path and the missing database: {err!r}")
+    assert walked == ["notes.txt"], f"the refused install created {walked} under the typo"
+
+    nowhere = two_tiers.tmp / "nowhere"
+    code = _cli_install("--workspace", str(nowhere))
+    assert code == 2, f"a --workspace that does not exist exited {code}, not 2"
+    assert not nowhere.exists(), "a refused --workspace created the directory it named"
+
+    assert run.calls == [], f"a refused install ran base: {[c['argv'][1:3] for c in run.calls]}"
+    assert _snapshot(two_tiers.operator_ext) == before

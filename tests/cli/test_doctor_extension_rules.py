@@ -31,7 +31,7 @@ from firm.cli import doctor as doctor_mod
 from firm.core.db import get_db_path
 from firm.core.migrate import apply_migrations
 from firm.core.repo import create
-from firm.services import base_extension
+from firm.services import base_extension, graph_isolation
 from firm.sysconfig import service as sysconfig_service
 
 FIRM = "zqrules"
@@ -245,3 +245,127 @@ def test_doctor_says_nothing_is_injected_when_base_is_absent(tmp_path):
     assert card["ok"] is True
     assert "not on this machine" in card["detail"], (
         f"the card passes without saying why: {card['detail']!r}")
+
+
+# ---------------------------------------------------------------------------
+# #117: the card reads the FIRM's own tier
+#
+# Once the manifest is installed into `<firm>/.firm/base-home`, the rules a
+# Member of this firm receives are served from that tier, and a Member reads no
+# other. `_base_answers` above gives one listing whatever env a call carries,
+# so no arm built on it can see WHICH tier the card read. These answer check
+# 12's listing by the BASE_HOME the call carries, so the firm's tier and every
+# other tier say different things.
+# ---------------------------------------------------------------------------
+
+def _tier_answers(monkeypatch, tmp_path: Path, firm: Path, *, firm_listing: str,
+                  other_listing: str) -> list[dict]:
+    """Answer check 12's `rule list` by tier. Returns the calls it answered."""
+    stub = _stub_base(tmp_path)
+    monkeypatch.setattr(sysconfig_service, "which_base", lambda: stub)
+    firm_home = str(graph_isolation.firm_base_home(firm))
+    real_run = subprocess.run
+    seen: list[dict] = []
+
+    def _run(cmd, **kwargs):
+        if cmd and str(cmd[0]) == stub:
+            argv = [str(a) for a in cmd]
+            home = (kwargs.get("env") or {}).get("BASE_HOME")
+            if argv[1:3] == ["rule", "list"] and "ext:cadre:cadre-firm" in argv:
+                seen.append({"argv": argv, "base_home": home})
+                return _Result(firm_listing if home == firm_home else other_listing)
+            return _Result(CLEAN_LISTING)
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", _run)
+    return seen
+
+
+def _firm_and_operator(tmp_path: Path, monkeypatch) -> Path:
+    """A firm, a separate operator tier in BASE_HOME, and a cwd in neither."""
+    firm = tmp_path / "firm"
+    _firm(firm)
+    operator = tmp_path / "operator"
+    operator.mkdir()
+    monkeypatch.setenv("BASE_HOME", str(operator))
+    standing = tmp_path / "standing"
+    standing.mkdir()
+    monkeypatch.chdir(standing)
+    return firm
+
+
+def test_df1_the_card_reads_the_graph_copy_in_the_firms_own_tier(tmp_path,
+                                                                  monkeypatch):
+    """DF1. The firm's tier serves a rule Cadre never wrote; the operator's
+    tier does not. Must catch doctor's call dropping the workspace (M11)."""
+    firm = _firm_and_operator(tmp_path, monkeypatch)
+    seen = _tier_answers(monkeypatch, tmp_path, firm,
+                         firm_listing=FOREIGN_LISTING, other_listing=CLEAN_LISTING)
+
+    card = _card(firm)
+
+    print(f"DF1: check 12 made {len(seen)} rule list call(s), "
+          f"BASE_HOME {[c['base_home'] for c in seen]}")
+    assert seen, "check 12 made no rule list call, so this arm proves NOTHING"
+    assert card["ok"] is False, (
+        "the firm's own tier serves rules Cadre never wrote, and the card calls "
+        f"the firm healthy: {card['detail']!r}")
+    assert "chrisai firm root" in card["detail"]
+
+
+def test_df2_a_collision_only_in_the_operators_tier_is_not_this_firms(
+        tmp_path, monkeypatch):
+    """DF2, the mirror of DF1 and its must-stay-quiet control. Without it, a
+    card that reported a collision whenever ANY tier had one would pass DF1."""
+    firm = _firm_and_operator(tmp_path, monkeypatch)
+    seen = _tier_answers(monkeypatch, tmp_path, firm,
+                         firm_listing=CLEAN_LISTING, other_listing=FOREIGN_LISTING)
+
+    card = _card(firm)
+
+    print(f"DF2: check 12 made {len(seen)} rule list call(s), "
+          f"BASE_HOME {[c['base_home'] for c in seen]}")
+    assert seen, "check 12 made no rule list call, so this arm proves NOTHING"
+    assert card["ok"] is True, (
+        "a collision that exists only in the operator's tier was reported "
+        f"against a firm whose own tier is clean: {card['detail']!r}")
+
+
+def test_dfc_doctor_outside_any_firm_still_stops_before_reading_any_tier(
+        tmp_path, monkeypatch, capsys):
+    """DF-C, the control outside any firm.
+
+    Check 12 cannot run outside a firm: run_doctor stops at the missing
+    database first. So this pins a different thing, and only that: reading the
+    firm's tier gave doctor no way to resolve a tier for a directory that is
+    not a firm. It stays green when doctor's call drops the workspace, by
+    construction.
+    """
+    stub = _stub_base(tmp_path)
+    monkeypatch.setattr(sysconfig_service, "which_base", lambda: stub)
+    real_run = subprocess.run
+    calls: list[list[str]] = []
+
+    def _run(cmd, **kwargs):
+        if cmd and str(cmd[0]) == stub:
+            calls.append([str(a) for a in cmd])
+            return _Result(CLEAN_LISTING)
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", _run)
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "notes.txt").write_text("not a firm\n", encoding="utf-8")
+    monkeypatch.chdir(plain)
+
+    code = doctor_mod.run_doctor(plain)
+    # Read the capture BEFORE printing, or the count below is swallowed with it.
+    err = capsys.readouterr().err
+
+    walked = sorted(p.relative_to(plain).as_posix() for p in plain.rglob("*"))
+    print(f"DF-C: the walk visited {len(walked)} entries: {walked}")
+    assert walked, "the walk visited nothing, so it proves NOTHING"
+    assert code == 1
+    assert "db-not-found" in err
+    assert calls == [], f"doctor ran base for a directory that is not a firm: {calls}"
+    assert walked == ["notes.txt"], f"doctor created {walked} in a directory that is not a firm"

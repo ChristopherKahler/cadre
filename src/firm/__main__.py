@@ -1052,11 +1052,20 @@ def main(argv: list[str] | None = None) -> int:
             # --workspace wins. Otherwise walk up for .firm/firm.db, and outside
             # any firm pass no workspace, which keeps today's tier. A Member
             # runs `base cadre` in its firm's own tier, so a flag people forget
-            # would install where no Member looks. Made absolute because it
-            # becomes BASE_HOME, and a relative BASE_HOME means whatever
-            # directory base happens to resolve it from.
+            # would install where no Member looks.
             if args.workspace is not None:
-                workspace = Path(args.workspace).expanduser().absolute()
+                from firm.services.firm_relay import explicit_firm
+
+                named, why = explicit_firm(args.workspace)
+                if named is None:
+                    # Refused BEFORE run_install, so before anything exists on
+                    # disk: naming a workspace creates its tier. Exit 2, the
+                    # answer `cadre relay --firm` gives for the same mistake.
+                    print(f"Error: {why}", file=sys.stderr)
+                    return 2
+                # Absolute, because it becomes BASE_HOME, and a relative
+                # BASE_HOME means whatever directory base resolves it from.
+                workspace = named.absolute()
             else:
                 from firm.services.firm_relay import resolve_firm
 
