@@ -23,11 +23,9 @@ from firm.services import firm_relay
 
 def _firm_or_none(explicit: Path | None) -> Path | None:
     if explicit:
-        workspace = Path(explicit).expanduser()
-        if not (workspace / ".firm" / "firm.db").exists():
-            print(f"Error: {workspace} is not a firm — no .firm/firm.db there.",
-                  file=sys.stderr)
-            return None
+        workspace, why = firm_relay.explicit_firm(explicit)
+        if workspace is None:
+            print(f"Error: {why}", file=sys.stderr)
         return workspace
     found = firm_relay.resolve_firm()
     if found is None:

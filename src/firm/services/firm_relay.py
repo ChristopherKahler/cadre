@@ -56,6 +56,23 @@ def resolve_firm(start: Path | str | None = None) -> Path | None:
     return None
 
 
+def explicit_firm(workspace: Path | str) -> tuple[Path | None, str]:
+    """A firm someone NAMED, or None and the sentence that says why it is not one.
+
+    Refused rather than guessed about. A person who names a directory has said
+    which firm they mean, so a directory with no `.firm/firm.db` is a mistake to
+    report, not a firm to create. Handing it to base as a workspace creates that
+    directory's tier on disk (`graph_isolation.ensure_tier`), so a typo would
+    leave a `.firm/` behind in whatever it named. Every verb that takes an
+    explicit firm calls this one helper, so no two verbs can disagree about what
+    counts as a firm.
+    """
+    path = Path(workspace).expanduser()
+    if not (path / ".firm" / "firm.db").exists():
+        return None, f"{path} is not a firm — no .firm/firm.db there."
+    return path, ""
+
+
 def _base() -> tuple[str | None, str]:
     from firm.sysconfig.service import base_absence_reason, which_base
 

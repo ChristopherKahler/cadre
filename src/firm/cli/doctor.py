@@ -403,8 +403,15 @@ def diagnose(workspace: Path, firm_id: str, *,
         else:
             try:
                 _rendered = _base_extension.render()
+                # THIS FIRM's tier (#117). The manifest and the rules a Member
+                # is served live in `<firm>/.firm/base-home` once the extension
+                # is installed there, and a Member spawned in this firm reads
+                # that tier and no other. Read with the env of no workspace,
+                # this card reports on the operator's tier, which no Member of
+                # this firm uses: clean over a firm that collides, and a
+                # collision over a firm that is clean.
                 _foreign = _base_extension.foreign_rules(
-                    _rendered, _base_bin, _base_extension._base_env())
+                    _rendered, _base_bin, _base_extension._base_env(workspace))
             except _base_extension.GraphReadFailed as _exc:
                 # A zero here would mean "I could not see", which reads
                 # identically to "nothing is wrong". Say undeterminable.
