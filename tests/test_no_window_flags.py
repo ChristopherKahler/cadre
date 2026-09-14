@@ -577,6 +577,18 @@ _WRAPPER_TARGETS = {f"firm.core.proc.{w}"
 _WINDOW_FLAG_NAMES = {"CREATE_NEW_CONSOLE", "DETACHED_PROCESS"}
 _WINDOW_FLAG_BITS = 0x00000010 | 0x00000008
 _ALLOWED_SPAWNER = "src/firm/core/proc.py"
+# ONE raw spawn is allowed outside proc.py (osprey's ruling on the A3 guard, #119
+# fork doc, 2026-09-14): the git call in src/firm/_build_info.py's _git_answer,
+# which PR 132 owns. `import firm` imports that module before firm.core.proc can
+# be imported, so it cannot use run_utf8. It is allowed only while it cannot open
+# a window: it must pass creationflags=_NO_WINDOW, bound once at module level to
+# getattr(subprocess, "CREATE_NO_WINDOW", 0). One difference from proc.py stays:
+# proc.py adds CREATE_NO_WINDOW only when cadre has no console, and this call adds
+# it under a console too, so Ctrl+C in a terminal does not reach that git child;
+# its 30 s timeout bounds how long that can last. Found by AST: the first
+# subprocess.run inside that function. Any other raw spawn in the file, a second
+# one in that function included, is still a violation.
+_BOOTSTRAP_SPAWNER = ("src/firm/_build_info.py", "_git_answer", "subprocess.run")
 
 
 def _dotted_name(node: ast.AST) -> str:
@@ -646,12 +658,50 @@ def _string_code(node: ast.AST) -> str | None:
     return None
 
 
+def _bootstrap_allowance(tree: ast.Module, names: _Bindings,
+                         rel: str) -> tuple[int | None, str | None]:
+    """(id of the one allowed raw spawn in this file or None, its pin violation or None)."""
+    path, func, shape = _BOOTSTRAP_SPAWNER
+    if rel != path:
+        return None, None
+    fn = next((n for n in tree.body
+               if isinstance(n, ast.FunctionDef) and n.name == func), None)
+    calls = sorted((n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                    and _call_shape(n, names) == ("spawn", shape)),
+                   key=lambda n: (n.lineno, n.col_offset)) if fn else []
+    if not calls:
+        return None, None
+    call = calls[0]
+    flags = next((k for k in call.keywords if k.arg == "creationflags"), None)
+    passes = flags is not None and any(
+        isinstance(s, ast.Name) and s.id == "_NO_WINDOW" for s in ast.walk(flags.value))
+    binds = [n for n in ast.walk(tree)
+             if (isinstance(n, ast.Assign) and any(
+                 isinstance(t, ast.Name) and t.id == "_NO_WINDOW" for t in n.targets))
+             or (isinstance(n, (ast.AnnAssign, ast.AugAssign))
+                 and isinstance(n.target, ast.Name) and n.target.id == "_NO_WINDOW")]
+    value = binds[0].value if len(binds) == 1 else None
+    bound = (len(binds) == 1 and any(binds[0] is n for n in tree.body)
+             and isinstance(value, ast.Call) and _dotted_name(value.func) == "getattr"
+             and len(value.args) == 3 and not value.keywords
+             and names.resolve(_dotted_name(value.args[0])) == "subprocess"
+             and isinstance(value.args[1], ast.Constant)
+             and value.args[1].value == "CREATE_NO_WINDOW"
+             and isinstance(value.args[2], ast.Constant) and value.args[2].value == 0)
+    if passes and bound:
+        return id(call), None
+    return id(call), (f"{rel}:{call.lineno}: the one raw spawn allowed outside "
+                      f"firm.core.proc ({func}) no longer passes creationflags=_NO_WINDOW "
+                      "bound once to getattr(subprocess, 'CREATE_NO_WINDOW', 0)")
+
+
 def _guard_scan(source: str, rel: str) -> tuple[list[str], list[str], int]:
     """(violations, raw spawn shapes seen, wrapper calls seen) for one file."""
     tree = ast.parse(source)
     names = _Bindings(tree)
     allowed = rel == _ALLOWED_SPAWNER
-    bad: list[str] = []
+    boot_call, boot_pin = _bootstrap_allowance(tree, names, rel)
+    bad: list[str] = [boot_pin] if boot_pin else []
     raw: list[str] = []
     wrappers = 0
     skip: set[int] = set()
@@ -671,7 +721,7 @@ def _guard_scan(source: str, rel: str) -> tuple[list[str], list[str], int]:
                 wrappers += 1
             elif shape:
                 raw.append(shape[1])
-                if not allowed:
+                if not allowed and id(node) != boot_call:
                     bad.append(f"{rel}:{line}: {shape[1]} starts a process "
                                "outside firm.core.proc")
             if _dotted_name(node.func) == "getattr" and len(node.args) >= 2 \
@@ -832,8 +882,59 @@ def test_no_child_in_src_starts_outside_firm_core_proc():
     assert seen_in_proc == ["os.execvpe", "subprocess.Popen", "subprocess.run"], (
         f"the sweep saw {seen_in_proc} inside proc.py; it has stopped resolving "
         "calls, and the zero above means nothing")
+    # The one raw spawn allowed outside proc.py must be SEEN as well, or the zero
+    # for its file is a blind reading.
+    assert raw_by_file.get(_BOOTSTRAP_SPAWNER[0]) == [_BOOTSTRAP_SPAWNER[2]], (
+        f"the sweep saw {raw_by_file.get(_BOOTSTRAP_SPAWNER[0])} in "
+        f"{_BOOTSTRAP_SPAWNER[0]}")
     assert files >= 100, f"visited {files} files"
     assert wrappers >= 30, f"only {wrappers} wrapper calls seen across src/"
+
+
+def test_the_one_raw_spawn_outside_proc_is_allowed_only_while_it_cannot_open_a_window():
+    """The git call in _build_info._git_answer (see _BOOTSTRAP_SPAWNER for why).
+
+    Each canary is the real file with one change, and each must redden exactly
+    its own rule: the pin (flag removed, or bound to anything but CREATE_NO_WINDOW),
+    the window-flag names (DETACHED_PROCESS or CREATE_NEW_CONSOLE added, which
+    proc.py refuses too), or the spawn rule (a second raw spawn in the function or
+    the file, or the same call in any other file).
+    """
+    rel, _, shape = _BOOTSTRAP_SPAWNER
+    source = (REPO / rel).read_text(encoding="utf-8")
+    bad, raw, _ = _guard_scan(source, rel)
+    assert bad == [] and raw == [shape], f"the real file: bad={bad} raw={raw}"
+
+    def one_change(old: str, new: str) -> str:
+        assert source.count(old) == 1, (
+            f"canary anchor {old!r} is in {rel} {source.count(old)} times")
+        return source.replace(old, new)
+
+    flag = "creationflags=_NO_WINDOW,"
+    close = "creationflags=_NO_WINDOW,\n        )\n"
+    bind = '_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)'
+    pin = "no longer passes creationflags=_NO_WINDOW"
+    spawn = "subprocess.run starts a process outside firm.core.proc"
+    canaries = [
+        ("the no-window flag removed", one_change(flag, ""), rel, pin),
+        ("the flag bound to 0", one_change(bind, "_NO_WINDOW = 0"), rel, pin),
+        ("DETACHED_PROCESS added",
+         one_change(flag, "creationflags=_NO_WINDOW | subprocess.DETACHED_PROCESS,"),
+         rel, "the attribute DETACHED_PROCESS"),
+        ("CREATE_NEW_CONSOLE added",
+         one_change(flag, "creationflags=_NO_WINDOW | subprocess.CREATE_NEW_CONSOLE,"),
+         rel, "the attribute CREATE_NEW_CONSOLE"),
+        ("a second raw spawn in the same function",
+         one_change(close, close + '        subprocess.run(("git", "status"), '
+                                   'creationflags=_NO_WINDOW)\n'), rel, spawn),
+        ("a second raw spawn in the file",
+         source + '\n\ndef _second(root):\n    return subprocess.run(("git",), '
+                  'cwd=root, creationflags=_NO_WINDOW)\n', rel, spawn),
+        ("the same call in any other file", source, "src/firm/elsewhere.py", spawn),
+    ]
+    for label, text, where, rule in canaries:
+        found, _, _ = _guard_scan(text, where)
+        assert len(found) == 1 and rule in found[0], f"{label}: {found}"
 
 
 def test_the_board_pulse_wrapper_parses_and_starts_the_pulse_through_proc(
