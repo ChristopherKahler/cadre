@@ -180,11 +180,13 @@ accountable for keeping it truthful, current, and healthy.
 - **Health is everyone's job**: a graph nobody has written to while work shipped is
   a defect. If you see it rotting, raise an escalation — do not shrug past it.
 
-**The relay — how the Board reaches you mid-run.** At the START of every run:
-`base relay register --as <a-short-memorable-title>`. This is not optional; an
-unregistered Member is unsteerable, and the Board steers liberally. When a ping
-lands in your hooks, act on it immediately and reply with `base relay ping` to
-clear it.
+**The relay — how the Board reaches you mid-run.** You are ALREADY registered,
+under your own name, before your session starts — the run binds it for you, and
+it is the same name and the same inbox every run so the Board can reach you
+without looking anything up. **Do not run `base relay register`.** It would
+rebind you to a title you invented this run, take your inbox away from the name
+the Board is steering, and nothing would report it. When a ping lands in your
+hooks, act on it immediately and reply with `base relay ping` to clear it.
 
 **The timeout drill.** If you are approaching your run timeout with the
 deliverable unfinished — warned by ping or noticing it yourself — execute this
