@@ -3,29 +3,30 @@
 # evidence; only FIRING is. Break each thing these guards exist to catch and
 # watch the named arms go red, with the unmutated row as the blindness control.
 #
-# The three clauses under test, and the question each answers:
-#   M-A  check() stops PROBING and assumes `base cadre` runs.
-#        -> is `extension_runs` a reading, or decoration beside the file check?
-#   M-B  ensure() takes install()'s own verdict instead of re-reading.
-#        -> is the re-read load-bearing, or does it always agree anyway?
-#   M-C  founding REFUSES when base is absent.
-#        -> is "degraded, never broken" enforced, or just described?
+# SECOND VERSION. The first matrix pinned a repair that installed the extension
+# into the operator's tier. After #117 every Member runs with the firm's tier,
+# and a three-arm probe on the real base showed that repair changed no Member's
+# exit code (operator tier installed -> rc 0; firm tier empty -> 127; firm tier
+# with identical bytes -> 0). The repair was removed on that measurement, so its
+# arms (M-B "believe the installer", L6, ADIS) are retired here, not bent green.
 #
-# Law 39: each mutation must fire a DIFFERENT arm, or they are one detector
-# written three times. The pairing here is A4<-M-A, ADIS<-M-B, A7<-M-C.
+# The four clauses under test:
+#   M-A  check() stops PROBING and assumes `base cadre` runs.
+#   M-B  check() probes with the OPERATOR's BASE_HOME instead of the firm's --
+#        the exact regression this lane shipped once already.
+#   M-C  founding REFUSES when base is absent.
+#   M-D  ensure() puts the removed repair back and calls install().
 #
 # PREDICTED BEFORE RUNNING (a prediction written afterwards is not one):
-#   ORIG   -> all five sets green
-#   M-A    -> A4 RED, A6 RED, ADIS RED (all three read extension_runs),
-#             A7 green, CONTROLS green
-#   M-B    -> ADIS RED only. A4 and A6 green, because under both of those the
-#             installer's verdict and the re-read AGREE, so neither can see the
-#             difference. That is the whole reason ADIS exists.
-#   M-C    -> A7 RED (both legs: the result flips to not-ok), everything else green
+#   ORIG  -> all five sets green
+#   M-A   -> A4 RED, A11 RED (both read extension_runs); A7, NOREPAIR, CTRL green
+#   M-B   -> A11 RED, CTRL RED (the healthy controls only pass when the FIRM
+#            tier is probed); A4 green (dead either way), A7 green, NOREPAIR green
+#   M-C   -> A7 RED only
+#   M-D   -> NOREPAIR RED only
 #
-# MEASURED: see the matrix this script prints. Where a row disagrees with the
-# prediction, the prediction is kept above rather than rewritten -- a matrix
-# that only ever shows the shape it expected is not a measurement.
+# MEASURED: see the matrix this prints. A row that disagrees with the prediction
+# leaves the prediction above untouched.
 set -u
 WT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 READY="$WT/src/firm/services/base_ready.py"
@@ -36,11 +37,11 @@ cd "$WT" || exit 9
 FAIL=0
 ROWS=0
 
-A4="test_l4_a_manifest_on_disk_over_a_dead_command_reads_as_two_facts"
-A6="test_l6_an_install_that_reports_success_over_a_dead_command_is_not_ok"
-ADIS="test_an_installer_that_claims_success_is_not_taken_at_its_word"
+A4="test_l4_a_manifest_in_the_firms_tier_over_a_dead_command_reads_as_two_facts"
+A11="test_l11_an_install_in_the_operators_tier_does_not_count_for_the_firm or test_l8_an_install_only_in_the_operators_tier_is_reported_as_not_running"
 A7="test_l7_a_firm_is_founded_without_base_and_the_result_says_so or test_the_base_reading_is_taken_before_the_workspace_exists"
-CONTROLS="test_l2_control_a_healthy_machine_reads_every_key_true or test_l5_control_the_same_manifest_with_a_live_command_is_ok"
+NOREPAIR="test_ensure_never_installs_into_any_tier or test_founding_writes_nothing_into_the_operators_tier"
+CTRL="test_l2_control_the_manifest_in_the_firms_tier_reads_every_key_true or test_l5_control_the_same_manifest_with_a_live_command_is_ok or test_ensure_on_a_firm_whose_command_runs_reports_nothing_to_repair"
 
 cp "$READY" "$KEEP/base_ready.py.orig"
 cp "$FOUNDING" "$KEEP/founding.py.orig"
@@ -51,20 +52,20 @@ echo "pristine founding.py  md5: $FOUNDING_MD5"
 echo
 
 run_set() {   # $1 label, $2 -k expression, $3 expected (green|red)
-  local out rc n_pass n_fail
+  local out rc n_pass n_fail n_err
   out=$(env PYTHONPATH=src CADRE_CLAUDE_BIN=/bin/echo timeout 300 python3 -m pytest \
         tests/services/test_base_ready.py tests/test_founding_validates_base.py \
         -o addopts= -q -k "$2" 2>&1)
   rc=$?
   n_pass=$(printf '%s\n' "$out" | grep -o '[0-9]* passed' | tail -1 | cut -d' ' -f1)
   n_fail=$(printf '%s\n' "$out" | grep -o '[0-9]* failed' | tail -1 | cut -d' ' -f1)
-  : "${n_pass:=0}"; : "${n_fail:=0}"
+  n_err=$(printf '%s\n' "$out" | grep -o '[0-9]* error' | tail -1 | cut -d' ' -f1)
+  : "${n_pass:=0}"; : "${n_fail:=0}"; : "${n_err:=0}"
   ROWS=$((ROWS+1))
-  # A selector that matched NOTHING is a void result, never a pass (law 23).
-  if [ "$n_pass" = "0" ] && [ "$n_fail" = "0" ]; then
+  if [ "$n_pass" = "0" ] && [ "$n_fail" = "0" ] && [ "$n_err" = "0" ]; then
     echo "    $1: SELECTED ZERO TESTS — proves nothing"; FAIL=$((FAIL+1)); return
   fi
-  echo "    $1: passed=$n_pass failed=$n_fail rc=$rc (want $3)"
+  echo "    $1: passed=$n_pass failed=$n_fail errors=$n_err rc=$rc (want $3)"
   if [ "$3" = "green" ] && [ "$rc" -ne 0 ]; then
     echo "      UNEXPECTED RED"; FAIL=$((FAIL+1))
   fi
@@ -98,36 +99,29 @@ restore() {
   fi
 }
 
+all_sets() {  # $1..$5 expectations for A4 A11 A7 NOREPAIR CTRL
+  run_set "A4       installed-and-dead in the firm tier" "$A4" "$1"
+  run_set "A11      operator-tier install does not count" "$A11" "$2"
+  run_set "A7       founding never refuses" "$A7" "$3"
+  run_set "NOREPAIR nothing is installed anywhere" "$NOREPAIR" "$4"
+  run_set "CTRL     healthy firm tier" "$CTRL" "$5"
+}
+
 echo "ORIG (blindness control — every arm must be green here)"
-run_set "A4  installed-and-dead" "$A4" green
-run_set "A6  repair that did not take" "$A6" green
-run_set "ADIS installer not taken at its word" "$ADIS" green
-run_set "A7  founding never refuses" "$A7" green
-run_set "CTRL healthy machine" "$CONTROLS" green
+all_sets green green green green green
 echo
 
 echo "M-A  check() assumes the command runs instead of probing it"
 mutate "$READY" 'result["extension_runs"] = ran.returncode == 0' \
                 'result["extension_runs"] = True  # MUTANT M-A'
-run_set "A4  installed-and-dead" "$A4" red
-run_set "A6  repair that did not take" "$A6" red
-run_set "ADIS installer not taken at its word" "$ADIS" red
-run_set "A7  founding never refuses" "$A7" green
-run_set "CTRL healthy machine" "$CONTROLS" green
+all_sets red red green green green
 restore
 echo
 
-echo "M-B  ensure() believes install()'s own verdict instead of the re-read"
-mutate "$READY" '    after = check(workspace)
-    after["install"] = installed' \
-                '    after = check(workspace)
-    after["ok"] = bool(installed.get("ok"))  # MUTANT M-B
-    after["install"] = installed'
-run_set "A4  installed-and-dead" "$A4" green
-run_set "A6  repair that did not take" "$A6" green
-run_set "ADIS installer not taken at its word" "$ADIS" red
-run_set "A7  founding never refuses" "$A7" green
-run_set "CTRL healthy machine" "$CONTROLS" green
+echo "M-B  check() probes base cadre with the OPERATOR's BASE_HOME"
+mutate "$READY" '                           timeout=_TIMEOUT_SEC, env=_env(workspace),' \
+                '                           timeout=_TIMEOUT_SEC, env=_env(None),  # MUTANT M-B'
+all_sets green red green green red
 restore
 echo
 
@@ -136,11 +130,17 @@ mutate "$FOUNDING" '    base_before = base_ready.check()' \
                    '    base_before = base_ready.check()
     if not base_before.get("base_present"):   # MUTANT M-C
         return {"ok": False, "error": "base is not installed"}'
-run_set "A4  installed-and-dead" "$A4" green
-run_set "A6  repair that did not take" "$A6" green
-run_set "ADIS installer not taken at its word" "$ADIS" green
-run_set "A7  founding never refuses" "$A7" red
-run_set "CTRL healthy machine" "$CONTROLS" green
+all_sets green green red green green
+restore
+echo
+
+echo "M-D  ensure() puts the removed operator-tier repair back"
+mutate "$READY" '    state["repair"] = (
+        "founding cannot install' \
+                '    from firm.services import base_extension as _be; _be.install()  # MUTANT M-D
+    state["repair"] = (
+        "founding cannot install'
+all_sets green green green red green
 restore
 echo
 

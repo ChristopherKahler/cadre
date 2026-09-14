@@ -1083,13 +1083,13 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
     from firm.services import base_domain
     base_wire = base_domain.wire_workspace(workspace, fid, proposal)
 
-    # The firm has a base tier now, so the extension can be put into it and
-    # PROVED. `ensure` installs only when `base cadre` does not already run,
-    # and it re-reads the machine afterwards instead of trusting the
-    # installer's own verdict -- an install reporting success over a dead
-    # command is the exact failure this lane exists for (#118). Never raises,
-    # never refuses: a firm whose extension could not be installed is degraded
-    # and says which half is missing.
+    # The firm has a base tier now, so ask the question a Member will ask:
+    # does `base cadre` run with THIS FIRM'S BASE_HOME (#117 spawns every
+    # Member into it). `ensure` reads the firm's tier and installs nothing --
+    # the only install that exists writes the operator's tier, which no Member
+    # reads, so it would report a repair while every Member still got 127
+    # (#118, measured). Never raises, never refuses: the gap is named in the
+    # result and on the readiness screen instead.
     base_state = base_ready.ensure(workspace)
 
     conn = connect(get_db_path(workspace))
@@ -1232,8 +1232,9 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
         # Two readings, taken at two different moments on purpose.
         # base_present is from BEFORE the workspace existed, which is the
         # question DoD 1 asks: did founding know before it started making a
-        # firm. base_cadre_runs is from after the repair, which is the question
-        # a Member asks: does the command I am told to run actually run.
+        # firm. base_cadre_runs is read in the FIRM'S OWN TIER once it exists,
+        # which is the question a Member asks: does the command I am told to
+        # run actually run where I run it.
         "base_present": bool(base_before.get("base_present")),
         "base_cadre_runs": bool(base_state.get("extension_runs")),
         "base_ready": base_state,
