@@ -3103,6 +3103,17 @@ def make_hub_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                     return
                 _http_send(self, 200, _HUB_HTML.encode(), "text/html; charset=utf-8")
                 return
+            if path == "/api/identity":
+                # The same dict `cadre identity` prints and
+                # `cadre doctor --install` checks, plus what this hub can
+                # reach. DoD 5 of issue #120: the three surfaces have to agree
+                # about what is installed, and the only way to make that
+                # structural rather than hopeful is one producer.
+                from firm.identity import hub_identity
+
+                _http_send(self, 200, hub_identity(root, registry))
+                return
+
             if path == "/api/hub":
                 _rescan()
                 _http_send(self, 200,

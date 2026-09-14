@@ -1,10 +1,14 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.build_meta"
+# In-tree backend. It stamps the commit into src/firm/_build_stamp.py before
+# setuptools collects anything, then delegates. See _build/backend.py; the
+# reason it exists is issue #120.
+build-backend = "backend"
+backend-path = ["_build"]
 
 [project]
 name = "cadre"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Cadre — Coordinated Agent Deployment Runtime Engine. A standalone framework for orchestrating an AI Firm of Members, Goals, Operations, and Units."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -53,6 +57,10 @@ Homepage = "https://github.com/ChristopherKahler/cadre"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+# Derived, never typed. firm.__version__ is computed from the build stamp.
+version = {attr = "firm.__version__"}
 
 [tool.setuptools.package-data]
 # base_ext ships a TEMPLATE, not a .toml — "base_ext/*.toml" does not match

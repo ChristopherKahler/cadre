@@ -1,0 +1,12 @@
+# The in-tree build backend has to travel inside the sdist.
+#
+# `python -m build` makes the sdist first and then builds the wheel FROM that
+# sdist. pyproject.toml names `backend-path = ["_build"]`, and setuptools only
+# packages what it discovers under src/, so without this line the sdist has no
+# _build/ directory and the wheel build dies with:
+#   `backend-path` entry '_build' does not exist or is not a directory
+# Measured in CI on 0bfcdf8, run 34881529560, on the build step and on all three
+# acceptance jobs. Every local build in the lane used `python -m build --wheel`,
+# which builds straight from the source tree and never makes an sdist, which is
+# why nothing caught it before CI did.
+include _build/backend.py

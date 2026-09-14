@@ -139,6 +139,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Full history. The version is X.Y.Z.dev<N>+g<sha7> where N is
+          # `git rev-list --count HEAD`, and a depth-1 clone answers 1 for
+          # every commit ever made. The sha half would still move, so nothing
+          # would break -- which is exactly why it needs saying: the job would
+          # build dev1 forever and the number would look like information
+          # while carrying none.
+          fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.12"
@@ -148,6 +156,131 @@ jobs:
           python -m pip install --upgrade build
           python -m build
           ls -l dist/
+
+      # The gate that would have caught the stale wheel. Issue #120: a wheel
+      # built 2026-09-10 sat in a gitignored dist/ on a build box whose main
+      # was seven commits behind origin/main with a CLEAN working tree, so a
+      # rebuild there shipped pre-fix code with nothing untidy to notice. The
+      # artifact now carries the commit it was built from, and this step
+      # refuses one that was not built from the commit under test.
+      #
+      # On a pull_request, GITHUB_SHA is the MERGE commit, and actions/checkout
+      # checks out that same merge commit -- so the two agree by construction.
+      # That is the right thing to compare: it is the tree CI actually tested.
+      - name: The wheel must be built from the commit under test
+        run: |
+          gate="$RUNNER_TEMP/provenance_gate.py"
+          cat > "$gate" <<'PY'
+          import glob, os, re, sys, zipfile
+
+          wheels = sorted(glob.glob("dist/*.whl"))
+          print(f"wheels found: {len(wheels)}")
+          if not wheels:
+              sys.exit("no wheel in dist/ — this step proved NOTHING")
+
+          want = os.environ["GITHUB_SHA"]
+
+          def baked_commit(path):
+              with zipfile.ZipFile(path) as zf:
+                  for name in zf.namelist():
+                      if name.endswith("firm/_build_stamp.py"):
+                          text = zf.read(name).decode("utf-8", "replace")
+                          m = re.search(r"COMMIT\s*=\s*['\"]([0-9a-f]{40})['\"]", text)
+                          return m.group(1) if m else None
+              return None
+
+          def refusal(wheel, got):
+              """Why this wheel was not built from `want`, or None if it was.
+
+              The real wheels and the controls below go through this same function,
+              so a control that passes says something about the real check.
+              """
+              if got is None:
+                  return f"{wheel}: carries no build stamp at all"
+              if got != want:
+                  return f"{wheel}: built from {got}, not {want}"
+              if got[:7] not in os.path.basename(wheel):
+                  return f"{wheel}: filename does not carry the commit {got[:7]}"
+              return None
+
+          checked = 0
+          failures = []
+          for wheel in wheels:
+              checked += 1
+              got = baked_commit(wheel)
+              print(f"  {os.path.basename(wheel)}")
+              print(f"    baked commit: {got}")
+              print(f"    GITHUB_SHA:   {want}")
+              reason = refusal(wheel, got)
+              if reason:
+                  failures.append(reason)
+
+          print(f"wheels checked: {checked}")
+          if checked == 0:
+              sys.exit("checked zero wheels — a pass here would mean nothing")
+
+          # Controls. The check has to be able to say NO, and the only way to show
+          # that is to send wrong input through the same refusal() the wheels went
+          # through. Each control is built so exactly one clause can decide it: a
+          # wrong commit in a filename that carries that same wrong commit can only
+          # be refused by the commit comparison, and the right commit in a filename
+          # with no commit in it can only be refused by the filename check. The first
+          # version of this control compared the baked commit to forty zeros. That is
+          # unequal on every run whether or not the comparison works, so it could
+          # never go red.
+          bogus = "0" * 40
+          if refusal(f"dist/cadre-0+g{want[:7]}-py3-none-any.whl", want) is not None:
+              sys.exit("control failed: a wheel built from the commit under test was refused")
+          if refusal(f"dist/cadre-0+g{bogus[:7]}-py3-none-any.whl", bogus) is None:
+              sys.exit("control failed: a wheel built from a wrong commit was accepted")
+          if refusal("dist/cadre-0-py3-none-any.whl", want) is None:
+              sys.exit("control failed: a filename that does not carry the commit was accepted")
+          print("control: the comparison accepts a matching commit and refuses a wrong commit and a wrong filename")
+
+          if failures:
+              for line in failures:
+                  print(f"FAIL {line}")
+              sys.exit(1)
+          print("every wheel was built from the commit under test")
+          PY
+
+          # End-to-end control, through the gate's own entry point. A wheel stamped
+          # with one commit, checked while GITHUB_SHA names another, must be refused,
+          # and refused because the commits differ. The controls inside the gate test
+          # its comparison; only this one tests where the gate gets the commit it
+          # compares against. If the gate ever took that commit from the wheel itself,
+          # every wheel would match its own stamp, and this is the check that goes red.
+          # The stamp is forty 1s, not the forty 0s the inner controls use, so neither
+          # control can pass or fail because of the other.
+          control="$RUNNER_TEMP/provenance_control"
+          rm -rf "$control"
+          mkdir -p "$control/dist"
+          other=$(python - "$control/dist" <<'PY'
+          import os, sys, zipfile
+          other = "1" * 40
+          wheel = os.path.join(sys.argv[1], f"cadre-0+g{other[:7]}-py3-none-any.whl")
+          with zipfile.ZipFile(wheel, "w") as zf:
+              zf.writestr("firm/_build_stamp.py", f"COMMIT = {other!r}\n")
+          print(other)
+          PY
+          )
+          if [ "${#other}" != 40 ]; then
+            echo "control could not build its wheel; this step proved NOTHING"
+            exit 1
+          fi
+          if (cd "$control" && python "$gate") > "$control/out.txt" 2>&1; then
+            cat "$control/out.txt"
+            echo "control failed: a wheel stamped with another commit passed the gate"
+            exit 1
+          fi
+          cat "$control/out.txt"
+          if ! grep -q "built from $other, not $GITHUB_SHA" "$control/out.txt"; then
+            echo "control failed: the gate refused, but not because the commits differ"
+            exit 1
+          fi
+          echo "control: a wheel stamped with another commit is refused through the gate itself"
+
+          python "$gate"
 
       - name: Install the wheel into an empty environment
         run: |
@@ -172,10 +305,14 @@ jobs:
               print("imported", name)
           PY
 
-      - name: Prove the console scripts resolve
+      - name: Prove the console scripts resolve and can name their commit
         run: |
           /tmp/clean/bin/cadre --version
           /tmp/clean/bin/firm --version
+          # The whole point of #120: ask the INSTALL what it is, not the source
+          # tree. This runs out of /tmp/clean, which has nothing but the wheel.
+          /tmp/clean/bin/cadre identity
+          /tmp/clean/bin/cadre doctor --install
 
       - name: Run the suite against the installed package
         run: |
