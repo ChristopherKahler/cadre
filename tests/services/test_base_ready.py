@@ -715,7 +715,13 @@ def test_u5_a_skipped_install_is_read_from_the_field_never_from_the_sentence(
 
     assert len(seen) == 1, f"install was reached {len(seen)} times, not once"
     assert state["repaired"] is False, state
-    assert "skipped" in state["repair"], state["repair"]
+    # Keyed on the sentence ONLY the skipped branch writes, never on the bare word.
+    # The first version asserted `"skipped" in repair`, and MU5 (skipped read from
+    # the sentence) left it GREEN: every other branch quotes the manifest path, and
+    # pytest's tmp_path carries this test's own name, "test_u5_a_skipped_install...".
+    # Law 40: a substring that a legitimate line also contains cannot fail.
+    assert state["repair"].startswith("the install into the firm's own tier was skipped: "), (
+        state["repair"])
 
 
 def test_u6_an_install_that_raises_is_named_and_ensure_still_returns(monkeypatch, machine):
