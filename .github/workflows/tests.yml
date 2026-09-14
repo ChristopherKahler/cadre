@@ -105,6 +105,10 @@ jobs:
         env:
           PYTHONPATH: src
           CADRE_CLAUDE_BIN: C:\Windows\System32\cmd.exe
+          # tests/test_winsched_live.py installs a real scheduled task on this
+          # throwaway runner, reads it back and removes it (#119, D7). It is
+          # skipped anywhere this is not set.
+          CADRE_WINSCHED_LIVE: "1"
 
   action-pins:
     name: actions are pinned to commits
