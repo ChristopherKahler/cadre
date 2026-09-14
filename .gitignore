@@ -36,3 +36,6 @@ PLANNING.md
 # way CI runs it would otherwise leave two untracked files behind each time.
 acceptance.json
 acceptance-rc.txt
+
+# Written by _build/backend.py at build time. Never committed.
+src/firm/_build_stamp.py
