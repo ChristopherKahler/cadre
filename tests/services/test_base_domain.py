@@ -226,8 +226,23 @@ def test_seed_rule_is_false_when_base_is_absent(monkeypatch, wired):
     assert base_domain._seed_rule(wired, "zqdom") is False
 
 
-def test_seed_rule_passes_base_home_through(monkeypatch, wired):
-    """A harness pointing base at a scratch tier must not be re-pointed home."""
+def test_a_call_against_a_firm_is_pinned_to_that_firms_own_tier(monkeypatch, wired):
+    """#117 REVERSED THIS ASSERTION, and the reason belongs here.
+
+    It used to read: "a harness pointing base at a scratch tier must not be
+    re-pointed home", and it asserted that an ambient BASE_HOME survived a call
+    made against a firm. That passthrough is the hole. base takes its entire
+    global tier from BASE_HOME -- extensions, domains, rules, the relay store --
+    so whatever BASE_HOME happens to say while Cadre is working a firm decides
+    what gets written into that firm's graph. Measured on the operator's machine
+    2026-09-14: one session-start against his own tier put 13,564 lines of an
+    unrelated extension's data and 116 lines of his own domain definitions into
+    `firms/seedwin`, a firm that owned 86 of its 13,774 lines.
+
+    The old claim did not disappear, it moved down one function: the passthrough
+    still stands for a call with no firm to isolate, which is what keeps
+    `cadre extension install` and this suite's own BASE_HOME fence working.
+    """
     monkeypatch.setenv("BASE_HOME", "/tmp/scratch-tier")
     seen: dict = {}
 
@@ -237,7 +252,19 @@ def test_seed_rule_passes_base_home_through(monkeypatch, wired):
 
     monkeypatch.setattr(subprocess, "run", _run)
     base_domain.rule_count(wired, "zqdom")
-    assert seen.get("BASE_HOME") == "/tmp/scratch-tier"
+    assert seen.get("BASE_HOME") == str(wired / ".firm" / "base-home")
+
+
+def test_a_call_with_no_firm_still_carries_the_ambient_tier(monkeypatch):
+    """The half of the old claim that survives, and the control on the one above.
+
+    Without this, "the firm always wins" could be built as an unconditional
+    overwrite, and every caller with no firm to isolate -- `extension install`,
+    the fence in conftest -- would silently lose the tier it deliberately set.
+    """
+    monkeypatch.setenv("BASE_HOME", "/tmp/scratch-tier")
+
+    assert base_domain._base_env().get("BASE_HOME") == "/tmp/scratch-tier"
 
 
 # ---------------------------------------------------------------------------

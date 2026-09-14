@@ -166,7 +166,8 @@ def _base_learn(workspace: Path, domain: str, entity: str, text: str,
             [base, "learn", "--domain", domain, "--entity", entity,
              "--type", note_type, "--text", text],
             capture_output=True, timeout=60,
-            cwd=str(workspace), env=_base_env(), stdin=subprocess.DEVNULL)
+            cwd=str(workspace), env=_base_env(workspace),
+            stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"ok": False, "graph": "failed", "detail": str(exc)}
     if done.returncode != 0:

@@ -540,6 +540,43 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Workspace containing .firm/firm.db (defaults to current directory).",
     )
 
+    # ---- relay subparser ----
+    # A firm keeps its own message store, because #117 gives it its own
+    # BASE_HOME and base keeps the relay inbox in that tier. `base relay ping`
+    # typed by hand reaches whatever store the environment happens to name --
+    # the operator's -- where a Member running inside a firm is not registered
+    # and never hears it. This verb resolves the firm and talks to ITS store,
+    # so steering a firm works from anywhere with nothing exported by hand.
+    relay_parser = subparsers.add_parser(
+        "relay",
+        help="Talk to the sessions inside a firm's own message store.",
+    )
+    relay_sub = relay_parser.add_subparsers(dest="relay_command", required=True,
+                                            metavar="<relay-command>")
+    for _verb, _blurb in (
+        ("sessions", "List the sessions registered in this firm's store."),
+        ("ping", "Send a message to a session in this firm's store."),
+        ("task", "Steer a LIVE session in this firm's store, mid-turn."),
+    ):
+        _p = relay_sub.add_parser(_verb, help=_blurb)
+        _p.add_argument(
+            "--firm", dest="firm_dir", type=Path, default=None,
+            help="The firm's directory. Defaults to the firm you are standing "
+                 "in (walks up for .firm/firm.db).")
+        if _verb in ("ping", "task"):
+            _p.add_argument("--to", required=True,
+                            help="The title to reach in this firm's store.")
+            _p.add_argument("--from", dest="from_name", default="cadre",
+                            help="Who it is from. Defaults to cadre.")
+        if _verb == "ping":
+            _p.add_argument("--msg", required=True, help="What to say.")
+        if _verb == "task":
+            _p.add_argument("--summary", required=True,
+                            help="What that session must act on now.")
+            _p.add_argument("--slug", default=None,
+                            help="The id the receiver clears. Defaults to a "
+                                 "timestamped one.")
+
     # ---- doctor subparser ----
     doctor_parser = subparsers.add_parser(
         "doctor",
@@ -1173,6 +1210,11 @@ def main(argv: list[str] | None = None) -> int:
             return run_board_password(clear=args.clear)
         parser.parse_args(["board", "--help"])
         return 0
+
+    if args.command == "relay":
+        from firm.cli.relay import run_relay
+
+        return run_relay(args)
 
     if args.command == "doctor":
         from firm.cli.doctor import run_doctor
