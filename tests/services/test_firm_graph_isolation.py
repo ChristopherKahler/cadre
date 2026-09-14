@@ -89,6 +89,37 @@ def test_the_tier_exists_by_the_time_base_is_told_about_it(tmp_path):
     assert (workspace / ".firm" / "base-home").is_dir()
 
 
+def test_the_tier_carries_an_empty_extensions_directory(tmp_path):
+    """An empty allow-list is a statement; an absent one is not.
+
+    Measured 2026-09-14 against a firm founded by `cadre init`: the tier
+    existed, the extensions directory did not, and the census refused with
+    "which extensions this firm allows cannot be established" over a firm that
+    was in fact clean. Creating it empty turns that into a verdict.
+    """
+    workspace = _firm(tmp_path)
+
+    graph_isolation.ensure_tier(workspace)
+
+    assert graph_isolation.tier_extensions_dir(workspace).is_dir()
+    assert graph_isolation.installed_extensions(workspace) == set()
+
+
+def test_an_empty_allow_list_makes_every_extension_foreign(tmp_path):
+    """The teeth in that change: allowing nothing is not allowing anything."""
+    workspace = _firm(tmp_path)
+    graph_isolation.ensure_tier(workspace)
+    (workspace / ".base" / "domains.toml").write_text(
+        '[[domain]]\nname = "acme"\n', encoding="utf-8")
+    _seed_graph(workspace, ["ext/cadre/CadreMember/mem-001", "domain/acme"])
+
+    result = graph_isolation.census(workspace)
+
+    assert result["reason"] == ""
+    assert result["foreign"] == {"ext/cadre": 1}, (
+        "a firm whose tier declares no extensions allows none, including ours")
+
+
 def test_the_firms_tier_beats_an_ambient_base_home(monkeypatch, tmp_path):
     """The reversal, stated as an assertion.
 

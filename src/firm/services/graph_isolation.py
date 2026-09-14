@@ -98,9 +98,20 @@ def ensure_tier(workspace: Path | str) -> Path:
     Idempotent, and deliberately NOT a "did I create it" boolean: callers care
     where the tier is, and a caller that branches on "was it new" would treat a
     re-founded firm differently from a fresh one for no reason.
+
+    THE EXTENSIONS DIRECTORY IS CREATED EMPTY, ON PURPOSE. An empty directory
+    is a statement -- "this firm allows no extensions" -- and it is the
+    whitelist's honest ground state. An ABSENT one is not a statement at all,
+    so :func:`census` refuses over it rather than calling every `ext/` subject
+    in the graph foreign. Measured 2026-09-14 on a firm founded by `cadre init`
+    with the tier but no extensions directory: the census returned "which
+    extensions this firm allows cannot be established" for a firm that was in
+    fact perfectly clean. Making the directory turns that into a verdict, and
+    the refusal path stays for the case it was written for -- a firm whose tier
+    was never created at all.
     """
     root = firm_base_home(workspace)
-    root.mkdir(parents=True, exist_ok=True)
+    (root / ".base-gbl" / "extensions").mkdir(parents=True, exist_ok=True)
     return root
 
 
