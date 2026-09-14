@@ -21,18 +21,37 @@ a different row to go red for each break.
             room is not the machine this ships onto.
     ARM D   the census itself, over a graph seeded with known foreign subjects.
             It must NAME them.
+    ARM E   the hub route (#118 DoD 4). One firm founded through
+            `founding.commit`, the one call the hub makes, on a machine whose
+            ambient tier is planted, then two session starts. Four rows:
+            E1  the firm's own tier holds exactly `cadre.toml`, parsed as Cadre's;
+            E2  the planted operator tier's extensions keep every byte;
+            E3  nothing foreign is in the firm's graph AND Cadre's own entities are;
+            E4  `base cadre --help` runs in the firm's tier with no manual step.
+            Arms B and C cannot carry these rows: `cadre init` installs no
+            extension and writes no exports.
 
-    M1   `_base_env` stops setting BASE_HOME   -> B and C must go RED, A and D stay green
-    M2   the census accepts any ext namespace  -> D must go RED, A, B and C stay green
-    M3   the firm's tier IS the operator's     -> B and C must go RED, A and D stay green
+    M1   `_base_env` stops setting BASE_HOME   -> B, C and E1-E4 RED; A, D green
+    M2   the census accepts any ext namespace  -> D RED; everything else green
+    M3   the firm's tier IS the operator's     -> B, C, D and E1-E4 RED; A green
+    M4   `ensure` calls install() with no workspace -> E1-E4 RED; A-D green
+    M5   `ensure` never calls install()        -> E1, E3, E4 RED; E2 and A-D green
+    M6   `commit` skips base_export.export     -> E3 RED alone
 
 M1 and M3 both redden B and C, and that is stated rather than dressed up: C is
 B under a fatter tier, so they are one detector measured twice. The independent
 pair is (B/C, D) -- the isolation and the reader that reports on it -- and M2
 fires exactly one of them while M1 and M3 fire exactly the other.
 
-Nothing here touches the operator's own files. Five of them are hashed before
-and after every arm; the count checked is printed, and a count of zero is a
+In arm E, M4 fires all four rows by construction (the manifest lands in the
+operator's tier, so the firm's tier has none, nothing of Cadre's is ingested,
+and the command fails), so it is coupled, never a discriminator. M5 fires E1
+and leaves E2 green, so E2 is a separate detector from E1. M6 fires E3 alone,
+so E3's "Cadre's entities are present" half is separate from E1 and E4.
+
+Nothing here touches the operator's own files. Five of them are hashed in every
+home before and after every column, and his extensions directory and
+`~/.cadre/sched` are listed; the count checked is printed, and a count of zero is a
 failure rather than a pass. The operator's live `firms/seedwin` is never read as a
 fixture: it is the live specimen of the defect and it is evidence.
 
@@ -43,10 +62,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 try:
@@ -85,6 +106,10 @@ def watched() -> tuple[list[Path], list[Path]]:
     cannot see a NEW file, and what landed in the operator's extensions
     directory was three new files. A listing catches an addition; a hash of the
     files you already knew about never can.
+
+    `~/.cadre/sched` is listed for arm E. `founding.commit` does not reach the
+    scheduler (#118 G0 fact 9), and a founding elsewhere on this machine was
+    measured writing a launcher there, so any change in it stops the run.
     """
     files: list[Path] = []
     dirs: list[Path] = []
@@ -94,11 +119,16 @@ def watched() -> tuple[list[Path], list[Path]]:
                   home / ".base-gbl" / ".base" / "graph.nq",
                   home / ".base" / "graph.nq",
                   home / ".claude" / "CLAUDE.md"]
-        dirs += [home / ".base-gbl" / "extensions"]
+        dirs += [home / ".base-gbl" / "extensions",
+                 home / ".cadre" / "sched"]
     return files, dirs
 
 HOSTILE_FACTS = [{"id": f"hostile-{i}", "text": f"FOREIGNMARKER planted {i}",
                   "when": "2026-09-14 09:00:00"} for i in range(7)]
+
+#: The firm arm E founds. It exists nowhere on this machine except because of
+#: this run, so anything named after the firm is attributable (FINGERPRINTS).
+FOUNDING_FIRM_ID = "gadwall118e"
 
 
 def digest(path: Path) -> str:
@@ -379,6 +409,189 @@ def arm_d(src: Path, root: Path) -> dict:
             "visited": result.get("visited", 0), "foreign": result.get("foreign", {})}
 
 
+def _founding_proposal(fid: str) -> dict:
+    """`_proposal` in tests/test_founding_validates_base.py, value for value."""
+    return {
+        "firm_id": fid,
+        "name": "Zed Base",
+        "premise": "a firm for measuring the base wiring with",
+        "north_star": {"target": "prove founding checks base"},
+        "operations": [{"name": "Running it", "purpose": "keep it running"}],
+        "members": [{"name": "Vantage", "role": "Chief of Staff",
+                     "owns": "everything", "operation": "Running it",
+                     "leads": True, "model": "sonnet",
+                     "skills": [], "gates": []}],
+    }
+
+
+#: The founding child. It names the tree that answered: the venv this harness
+#: runs under carries an editable install of ANOTHER checkout, and a number
+#: from that tree is a true number about the wrong code.
+_FOUND_CODE = """
+import json, sys
+from pathlib import Path
+import firm
+from firm.dashboard import founding
+out = founding.commit(Path(sys.argv[2]), json.loads(sys.argv[1]))
+ready = out.get("base_ready") or {}
+install = ready.get("install") or {}
+exported = out.get("base_export") or {}
+print("ARM-E-RESULT " + json.dumps({
+    "firm_file": firm.__file__,
+    "ok": out.get("ok"),
+    "error": out.get("error", ""),
+    "base_cadre_runs": out.get("base_cadre_runs"),
+    "repaired": ready.get("repaired"),
+    "repair": ready.get("repair", ""),
+    "ready_reason": ready.get("reason", ""),
+    "install_ok": install.get("ok"),
+    "install_reason": install.get("reason", ""),
+    "exported": len(exported.get("written") or []),
+    "wire_live": (out.get("base_wire") or {}).get("live"),
+}, default=str))
+"""
+
+
+def found_through_the_hub(src: Path, root: Path, fid: str, operator_tier: Path,
+                          base: Path) -> tuple[Path, dict, str]:
+    """Found a firm the way the hub does: `founding.commit`, in a child.
+
+    `commit` has one caller in the product, `dashboard/server.py`, and this is
+    that call with the web server taken out. Returns the workspace, what the
+    child reported, and what went wrong or "".
+    """
+    firms = root / "armE"
+    firms.mkdir(parents=True, exist_ok=True)
+    workspace = firms / fid
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(src)
+    env["BASE_HOME"] = str(operator_tier)      # the ambient tier founding must beat
+    env.pop("CADRE_NO_BASE", None)
+    # This platform's base first, as found_firm has it, then THIS interpreter's
+    # bin. A source checkout's manifest handler is bin/cadre, and that shim
+    # execs `cadre` off PATH (PR 127 G2), so without the venv on PATH install()'s
+    # own `base cadre --help` fails and every E row measures the shell.
+    env["PATH"] = os.pathsep.join(
+        [str(base.parent), str(Path(sys.executable).parent), env.get("PATH") or ""])
+    proc = run([sys.executable, "-c", _FOUND_CODE,
+                json.dumps(_founding_proposal(fid)), str(firms)],
+               env, firms, timeout=900)
+    said = [line for line in (proc.stdout or "").splitlines()
+            if line.startswith("ARM-E-RESULT ")]
+    if proc.returncode != 0 or not said:
+        return workspace, {}, (
+            f"founding.commit did not report (rc {proc.returncode}): "
+            f"{(proc.stderr or proc.stdout or '')[-400:]}")
+    report = json.loads(said[-1][len("ARM-E-RESULT "):])
+    try:
+        Path(report.get("firm_file") or "").resolve().relative_to(src.resolve())
+    except ValueError:
+        return workspace, report, (
+            f"the child imported firm from {report.get('firm_file')}, not from "
+            f"{src}, so every E row would describe another tree")
+    if report.get("ok") is not True:
+        return workspace, report, (
+            f"founding.commit returned ok={report.get('ok')}: {report.get('error')}")
+    return workspace, report, ""
+
+
+_CADRE_ENTITIES = ("CadreMember", "CadreUnit", "CadreGate")
+#: base's shape for an ingested entity, measured read-only on seedwin's graph
+#: 2026-09-14: `ontology#ext/cadre/CadreMember/<id>` and `.../CadreUnit/<id>`.
+_CADRE_SUBJECT = re.compile(r"ontology#ext/cadre/([^/>]+)/")
+
+
+def _tier_bytes(directory: Path) -> dict[str, str]:
+    """name -> md5 of every file directly in *directory*; {} when it is absent."""
+    if not directory.is_dir():
+        return {}
+    return {p.name: digest(p) for p in sorted(directory.iterdir()) if p.is_file()}
+
+
+def arm_e(src: Path, root: Path, base: Path, operator_tier: Path) -> dict:
+    """One firm founded through the hub route, then two session starts.
+
+    Every path these rows read is built HERE from the workspace, never asked of
+    the product, so a mutation that moves the firm's tier cannot move the
+    instrument with it (law 42).
+    """
+    operator_ext = operator_tier / ".base-gbl" / "extensions"
+    before = _tier_bytes(operator_ext)
+    workspace, report, failure = found_through_the_hub(
+        src, root, FOUNDING_FIRM_ID, operator_tier, base)
+    out: dict = {"founding_failure": failure, "report": report}
+
+    # E1, DoD-1 through founding: the firm's own tier holds exactly cadre.toml,
+    # and the file is Cadre's by its parsed [extension] name.
+    tier_root = workspace / ".firm" / "base-home"
+    firm_ext = tier_root / ".base-gbl" / "extensions"
+    listing = sorted(p.name for p in firm_ext.iterdir()) if firm_ext.is_dir() else []
+    name = ""
+    if listing == ["cadre.toml"]:
+        try:
+            parsed = tomllib.loads((firm_ext / "cadre.toml").read_bytes().decode("utf-8"))
+            name = str((parsed.get("extension") or {}).get("name") or "")
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+            name = f"unreadable: {exc}"
+    out["E1"] = {"pass": listing == ["cadre.toml"] and name == "cadre",
+                 "listing": listing, "name": name}
+
+    # E2, DoD-2 through founding: the planted operator tier's extensions keep
+    # their bytes. Visiting nothing proves nothing, so zero visited fails.
+    after = _tier_bytes(operator_ext)
+    changed = sorted(n for n in set(before) | set(after)
+                     if before.get(n) != after.get(n))
+    out["E2"] = {"pass": bool(before) and not changed,
+                 "visited": len(before), "changed": changed}
+
+    # Two session starts, given exactly the way arms B and C give them.
+    env, detail = session_env_from_settings(workspace)
+    for i in (1, 2):
+        run([base, "hook", "session-start"], env, workspace,
+            stdin_text=session_payload(workspace, f"armE{i}"))
+
+    # E3, DoD-3: nothing foreign in the firm's graph, AND Cadre's own entities
+    # are there. "Present" counts the three entities the manifest ingests, not
+    # any subject under ext/cadre/, so the row cannot pass on something base
+    # writes for an installed extension whose state files are missing.
+    result = census_with(src, workspace)
+    seen: dict[str, set[str]] = {}
+    graph = workspace / ".base" / "graph.nq"
+    if graph.exists():
+        with graph.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                subject = line.split(" ", 1)[0]
+                m = _CADRE_SUBJECT.search(subject)
+                if m:
+                    seen.setdefault(m.group(1), set()).add(subject)
+    counts = {k: len(v) for k, v in sorted(seen.items())}
+    declared = sum(counts.get(e, 0) for e in _CADRE_ENTITIES)
+    clean = not result.get("reason") and result.get("foreign_lines", 1) == 0
+    out["E3"] = {"pass": clean and declared >= 1,
+                 "why": result.get("reason") or detail,
+                 "lines": graph_lines(workspace),
+                 "visited": result.get("visited", 0),
+                 "foreign": result.get("foreign", {}),
+                 "cadre_subjects": counts, "declared": declared,
+                 "tier": env.get("BASE_HOME", "")}
+
+    # E4, #118 DoD 4: `base cadre` runs in the firm's own tier straight after
+    # founding, with no manual install. The tier root is made first if it is
+    # missing, because a Member's spawn makes it (_base_env -> ensure_tier), and
+    # a BASE_HOME naming nothing asks about base's fallback, not about this firm.
+    tier_root.mkdir(parents=True, exist_ok=True)
+    member = dict(os.environ)
+    member["BASE_HOME"] = str(tier_root)
+    member["PATH"] = os.pathsep.join(
+        [str(base.parent), str(Path(sys.executable).parent), member.get("PATH") or ""])
+    ran = run([base, "cadre", "--help"], member, root, timeout=120)
+    said = [line.strip() for line in (ran.stderr or ran.stdout or "").splitlines()
+            if line.strip()]
+    out["E4"] = {"pass": ran.returncode == 0, "rc": ran.returncode,
+                 "said": said[0][:160] if said else ""}
+    return out
+
+
 # --- mutations --------------------------------------------------------------
 
 MUTATIONS = {
@@ -395,6 +608,18 @@ MUTATIONS = {
            '    return _as_path(workspace) / ".firm" / TIER_DIRNAME',
            '    import os as _os\n'
            '    return Path(_os.environ.get("BASE_HOME") or Path.home())'),
+    "M4": ("ensure calls install() with no workspace",
+           "src/firm/services/base_ready.py",
+           '        outcome = base_extension.install(workspace=workspace)',
+           '        outcome = base_extension.install()'),
+    "M5": ("ensure never calls install() (PR 127's shape)",
+           "src/firm/services/base_ready.py",
+           '        outcome = base_extension.install(workspace=workspace)',
+           '        outcome = {}'),
+    "M6": ("commit skips base_export.export",
+           "src/firm/dashboard/founding.py",
+           '    exported = base_export.export(workspace, fid)',
+           '    exported = {}'),
 }
 
 
@@ -438,7 +663,7 @@ def snapshot(files: list[Path], dirs: list[Path]) -> dict[str, str]:
 
 #: Strings that exist nowhere on this machine except because of this run.
 FINGERPRINTS = ("FOREIGNMARKER", "whimbrel-117-", "planted by the #117",
-                "hostile.toml", "second.toml", "third.toml")
+                "hostile.toml", "second.toml", "third.toml", FOUNDING_FIRM_ID)
 
 
 def attribute(drift: list[str], root: Path) -> tuple[list[str], list[str]]:
@@ -527,7 +752,7 @@ def main() -> int:
     details: list[str] = []
     failures: list[str] = []
 
-    columns = ["ORIG", "M1", "M2", "M3"]
+    columns = ["ORIG", "M1", "M2", "M3", "M4", "M5", "M6"]
     for column in columns:
         if column == "ORIG":
             src, problem = SRC, ""
@@ -543,14 +768,29 @@ def main() -> int:
                                          ["hostile"], 1)
         fat_tier = build_operator_tier(run_root / "fat", base,
                                        ["hostile", "second", "third"], 6)
+        # Arm E's own planted tier, in the fat shape: its E2 snapshot visits
+        # several files, and no other arm shares the directory E2 compares.
+        founding_tier = build_operator_tier(run_root / "founding", base,
+                                            ["hostile", "second", "third"], 6)
 
         a = arm_a(run_root, base, plain_tier)
         b = arm_isolated(src, run_root, base, plain_tier, "armB")
         c = arm_isolated(src, run_root, base, fat_tier, "armC")
         d = arm_d(src, run_root)
+        e = arm_e(src, run_root, base, founding_tier)
+        if e["founding_failure"]:
+            # A founding that did not complete reads F on every E row, which
+            # would MATCH a column predicted F for the wrong reason. So it
+            # fails the run outright, whatever the column predicts.
+            failures.append(f"{column}/E: the founding did not complete, so no "
+                            f"E row in this column is evidence: "
+                            f"{e['founding_failure']}")
 
         rows[column] = {"A": a["pass"], "B": b["pass"], "C": c["pass"],
-                        "D": d["pass"]}
+                        "D": d["pass"], "E1": e["E1"]["pass"],
+                        "E2": e["E2"]["pass"], "E3": e["E3"]["pass"],
+                        "E4": e["E4"]["pass"]}
+        r = e["report"]
         details.append(
             f"[{column}] A lines={a['lines']} planted={a['planted']} "
             f"foreign_domains={a['foreign_domains']} pass={a['pass']}\n"
@@ -559,7 +799,25 @@ def main() -> int:
             f"[{column}] C lines={c['lines']} visited={c['visited']} "
             f"foreign={c['foreign']} pass={c['pass']} {c['why']}\n"
             f"[{column}] D visited={d['visited']} foreign={d['foreign']} "
-            f"pass={d['pass']} {d['why']}")
+            f"pass={d['pass']} {d['why']}\n"
+            f"[{column}] E founded ok={r.get('ok')} "
+            f"base_cadre_runs={r.get('base_cadre_runs')} "
+            f"repaired={r.get('repaired')} exported={r.get('exported')} "
+            f"wire_live={r.get('wire_live')} firm={r.get('firm_file')} "
+            f"{e['founding_failure']}\n"
+            f"[{column}]   install ok={r.get('install_ok')} "
+            f"said={r.get('install_reason')!r} repair={r.get('repair')!r}\n"
+            f"[{column}] E1 listing={e['E1']['listing']} "
+            f"name={e['E1']['name']!r} pass={e['E1']['pass']}\n"
+            f"[{column}] E2 visited={e['E2']['visited']} "
+            f"changed={e['E2']['changed']} pass={e['E2']['pass']}\n"
+            f"[{column}] E3 lines={e['E3']['lines']} "
+            f"visited={e['E3']['visited']} foreign={e['E3']['foreign']} "
+            f"cadre_subjects={e['E3']['cadre_subjects']} "
+            f"declared={e['E3']['declared']} tier={e['E3']['tier']} "
+            f"pass={e['E3']['pass']} {e['E3']['why']}\n"
+            f"[{column}] E4 rc={e['E4']['rc']} said={e['E4']['said']!r} "
+            f"pass={e['E4']['pass']}")
 
         after = snapshot(watch_files, watch_dirs)
         drift = [k for k, v in before.items() if after.get(k) != v]
@@ -579,7 +837,7 @@ def main() -> int:
 
     print("\n=== the matrix (True = that arm's own claim held) ===")
     print(f"{'arm':4} " + " ".join(f"{c:>6}" for c in columns))
-    for arm in ("A", "B", "C", "D"):
+    for arm in ("A", "B", "C", "D", "E1", "E2", "E3", "E4"):
         print(f"{arm:4} " + " ".join(
             f"{str(rows.get(c, {}).get(arm, 'n/a')):>6}" for c in columns))
 
@@ -590,9 +848,18 @@ def main() -> int:
         return 91
 
     expected = {
-        "ORIG": {"A": True, "B": True, "C": True, "D": True},
-        "M1": {"A": True, "B": False, "C": False, "D": True},
-        "M2": {"A": True, "B": True, "C": True, "D": False},
+        "ORIG": {"A": True, "B": True, "C": True, "D": True,
+                 "E1": True, "E2": True, "E3": True, "E4": True},
+        # M1/E3 is False, and not for the reason first drafted. The firm's
+        # settings.local.json gets its BASE_HOME from write_session_env, not
+        # from _base_env, so M1 does not move the session's tier. It moves
+        # founding's install: that runs with the child's own BASE_HOME, the
+        # planted tier (E2), so no cadre.toml reaches the firm's tier (E1, E4)
+        # and the session starts find no Cadre extension to ingest (E3).
+        "M1": {"A": True, "B": False, "C": False, "D": True,
+               "E1": False, "E2": False, "E3": False, "E4": False},
+        "M2": {"A": True, "B": True, "C": True, "D": False,
+               "E1": True, "E2": True, "E3": True, "E4": True},
         # M3/D is False and that is a statement about the mutation, not a
         # softened expectation. M3 moves the TIER, and the tier is the one
         # thing both detectors read: the isolation writes into it and the
@@ -602,8 +869,24 @@ def main() -> int:
         # pair that does, and they are each required to fire exactly one side
         # above. M3 earns its place by being the failure that looks normal:
         # a firm quietly using the operator's tier, which is what B and C must
-        # go red over.
-        "M3": {"A": True, "B": False, "C": False, "D": False},
+        # go red over. Arm E under M3: founding installs into the planted tier
+        # (E2), the literal firm tier holds nothing (E1, E4), and the census,
+        # its allow-list moved to a home tier with neither Cadre nor the planted
+        # extensions, names the ingested lines foreign (E3).
+        "M3": {"A": True, "B": False, "C": False, "D": False,
+               "E1": False, "E2": False, "E3": False, "E4": False},
+        # Coupled by construction, never a discriminator: the manifest lands in
+        # the planted tier, so the firm's tier has none and nothing of Cadre's
+        # is ingested or runs.
+        "M4": {"A": True, "B": True, "C": True, "D": True,
+               "E1": False, "E2": False, "E3": False, "E4": False},
+        # E2 stays green while E1 goes red: E2 is a separate detector.
+        "M5": {"A": True, "B": True, "C": True, "D": True,
+               "E1": False, "E2": True, "E3": False, "E4": False},
+        # E3 alone: its "Cadre's entities are present" half is separate from
+        # the install rows.
+        "M6": {"A": True, "B": True, "C": True, "D": True,
+               "E1": True, "E2": True, "E3": False, "E4": True},
     }
     for column, wanted in expected.items():
         got = rows.get(column)
