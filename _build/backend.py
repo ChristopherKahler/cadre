@@ -12,6 +12,11 @@ commit the build is actually standing on, and ``firm.__version__`` is derived
 from it. Two commits therefore produce two versions, and pip's short-circuit
 stops firing.
 
+The stamp lives only for the length of a build hook. It is removed again when
+setuptools returns, and an editable install gets none at all: its commit is read
+live from the checkout, because a stamp names the commit it was written at and
+a checkout moves on (#120 G2 F1).
+
 When there is no git to ask -- a ``git archive`` tree, or a plain source copy
 -- the stamp is simply not written. That is not a failure path to be patched
 over: ``firm._build_info`` falls through to the commit git substituted into
@@ -20,6 +25,7 @@ the archive, and failing that reports ``unknown``. It never invents a commit.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import os
 import pathlib
@@ -116,12 +122,13 @@ def _remote_distance() -> str:
     return ""
 
 
-def _stamp() -> None:
+def _stamp() -> bool:
+    """Write the stamp. True when one was written, False when there is no git."""
     commit = _git("rev-parse", "HEAD")
     if commit is None:
         # No git. Leave no stamp; _build_info falls through to the archive
         # substitution, and then to an honest "unknown".
-        return
+        return False
     status = _git("status", "--porcelain")
     count = _git("rev-list", "--count", "HEAD")
     describe = _git("describe", "--tags", "--always") or ""
@@ -144,31 +151,58 @@ def _stamp() -> None:
         f'REMOTE_DISTANCE = {_remote_distance()!r}\n',
         encoding="utf-8",
     )
+    return True
+
+
+@contextlib.contextmanager
+def _stamped():
+    """Stamp for the length of one build hook, then put src/ back as it was.
+
+    A stamp that outlived its build kept naming the commit it was written at:
+    an editable install went on reporting that commit after the checkout moved,
+    and said everything agreed (#120 G2 F1). So the stamp exists only while
+    setuptools collects. Whatever was at that path before the hook, an older
+    build's leftover or nothing, is exactly what is there after it, even when
+    the build fails. An unpacked sdist has no git, so nothing is written there
+    and the stamp the sdist carries is left alone.
+    """
+    before = _STAMP.read_bytes() if _STAMP.exists() else None
+    wrote = _stamp()
+    try:
+        yield
+    finally:
+        if wrote:
+            if before is None:
+                _STAMP.unlink(missing_ok=True)
+            else:
+                _STAMP.write_bytes(before)
 
 
 def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
-    _stamp()
-    return _orig.build_wheel(wheel_directory, config_settings, metadata_directory)
+    with _stamped():
+        return _orig.build_wheel(wheel_directory, config_settings, metadata_directory)
 
 
 def build_sdist(sdist_directory, config_settings=None):
-    _stamp()
-    return _orig.build_sdist(sdist_directory, config_settings)
+    with _stamped():
+        return _orig.build_sdist(sdist_directory, config_settings)
 
 
 def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
-    _stamp()
-    return _orig.prepare_metadata_for_build_wheel(
-        metadata_directory, config_settings)
+    with _stamped():
+        return _orig.prepare_metadata_for_build_wheel(
+            metadata_directory, config_settings)
 
 
+# No stamp for an editable install. It runs the checkout's own files, so the true
+# commit is whatever the checkout is on when the question is asked, and
+# firm._build_info reads that live. A stamp written here named the commit the
+# install was made at for as long as the file survived (#120 G2 F1).
 def build_editable(wheel_directory, config_settings=None, metadata_directory=None):
-    _stamp()
     return _orig.build_editable(
         wheel_directory, config_settings, metadata_directory)
 
 
 def prepare_metadata_for_build_editable(metadata_directory, config_settings=None):
-    _stamp()
     return _orig.prepare_metadata_for_build_editable(
         metadata_directory, config_settings)

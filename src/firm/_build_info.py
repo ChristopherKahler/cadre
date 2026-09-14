@@ -1,8 +1,14 @@
 """Where this copy of Cadre came from.
 
 An install has to be able to answer "what commit are you?" and the answer has
-to be true, including when it is not knowable. Three sources, tried in order,
-and the third one is the honest failure rather than a guess:
+to be true, including when it is not knowable. Four sources, tried in order,
+and the last one is the honest failure rather than a guess:
+
+``checkout``
+    This package is running from a Cadre git checkout: an editable install, or
+    ``src`` on ``sys.path``. The commit is read live from git every time, and no
+    stamp file is consulted, because a stamp names the commit it was written at
+    and a checkout moves on (#120 G2 F1).
 
 ``git``
     The build ran inside a git checkout and the build backend wrote
@@ -28,7 +34,10 @@ commit and no caller can print it as one. Absent stays absent.
 from __future__ import annotations
 
 import importlib
+import os
 import re
+import subprocess
+from pathlib import Path
 
 #: Rewritten by git at ``git archive`` time. In a plain checkout this keeps the
 #: literal placeholder below, which is exactly what tells us we are not in an
@@ -49,6 +58,67 @@ def _is_sha(value: object) -> bool:
     whole reason the check is a shape test rather than a truthiness test.
     """
     return isinstance(value, str) and bool(_SHA_RE.match(value))
+
+
+#: The directory this module lives in. Tests point it at a scratch checkout.
+_PACKAGE_DIR = Path(__file__).resolve().parent
+
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _git(root: Path, *args: str) -> str | None:
+    """Run git in *root*. None on any failure, including no git.
+
+    UTF-8 and no window are spelled out here: this runs during ``import firm``,
+    before ``firm.core.proc`` can be imported, so it cannot use run_utf8.
+    """
+    try:
+        out = subprocess.run(
+            ("git", *args), cwd=root, capture_output=True, encoding="utf-8",
+            errors="replace", timeout=30, creationflags=_NO_WINDOW,
+        )
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip()
+
+
+def _same_path(a: object, b: object) -> bool:
+    """Resolved and case-folded the way the filesystem compares paths."""
+    return (os.path.normcase(os.path.realpath(str(a)))
+            == os.path.normcase(os.path.realpath(str(b))))
+
+
+def _from_checkout() -> dict | None:
+    """The commit of the Cadre checkout this package is running from, read now.
+
+    An editable install, or ``src`` on ``sys.path``, runs the checkout's own
+    files, so the only true commit is the one git reports at the moment of
+    asking. No stamp file is consulted: a stamp left by an older build named the
+    commit it was built at long after the checkout moved on, and the install
+    said everything agreed (#120 G2 F1). None when this is not a Cadre checkout:
+    no ``_build/backend.py`` beside ``src/``, no git, or git's top level is some
+    other repository the tree only sits inside (G2 F3).
+    """
+    root = _PACKAGE_DIR.parent.parent
+    if not (root / "_build" / "backend.py").is_file():
+        return None
+    answer = _git(root, "rev-parse", "--show-toplevel", "HEAD")
+    lines = answer.splitlines() if answer else []
+    if len(lines) != 2 or not _same_path(lines[0], root) or not _is_sha(lines[1]):
+        return None
+    count = _git(root, "rev-list", "--count", "HEAD")
+    return {
+        "commit": lines[1],
+        "tag": _git(root, "describe", "--tags", "--exact-match") or None,
+        "describe": None,
+        "dirty": bool(_git(root, "status", "--porcelain")),
+        "built_at": None,
+        "commit_count": int(count) if count and count.isdigit() else None,
+        "remote_distance": None,
+        "source": "checkout",
+    }
 
 
 def _from_stamp() -> dict | None:
@@ -96,7 +166,7 @@ def _from_archive() -> dict | None:
 
 def build_info() -> dict:
     """Resolve the build identity. Never raises, never invents a commit."""
-    for source in (_from_stamp, _from_archive):
+    for source in (_from_checkout, _from_stamp, _from_archive):
         found = source()
         if found is not None:
             return found

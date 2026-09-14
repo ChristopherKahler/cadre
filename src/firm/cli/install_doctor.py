@@ -74,12 +74,20 @@ def diagnose_install(identity: dict[str, Any] | None = None) -> list[dict[str, A
         checks.append(_card(
             "install-artifact", "The installed artifact is recorded", True,
             "nothing is installed; this is a source tree", state="undeterminable"))
+    elif wheel and wheel.get("kind") in ("editable", "directory"):
+        # pip DID write direct_url.json for an editable install; it records the
+        # directory under dir_info. Saying none was written was false (#120 G2 F4).
+        checks.append(_card(
+            "install-artifact", "The installed artifact is recorded", True,
+            f"{wheel['kind']} install of {wheel.get('dir') or wheel.get('url')}: pip "
+            "recorded the directory, so there are no wheel bytes to hash.",
+            state="undeterminable"))
     else:
         checks.append(_card(
             "install-artifact", "The installed artifact is recorded", True,
-            "not recorded — installed from an index or as an editable, so pip "
-            "wrote no direct_url.json. Not a fault, but this install cannot "
-            "prove which file it came from.",
+            "not recorded — installed from an index, so pip wrote no "
+            "direct_url.json. Not a fault, but this install cannot prove which "
+            "file it came from.",
             state="undeterminable"))
 
     return checks

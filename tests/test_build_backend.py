@@ -131,3 +131,82 @@ def test_the_repository_check_compares_normalised_paths(tmp_path, monkeypatch):
     assert backend._same_path(str(root), str(root) + os.sep)
     assert backend._same_path(str(root).replace(os.sep, "/"), str(root))
     assert not backend._same_path(str(root), str(root.parent))
+
+
+# ---------------------------------------------------------------------------
+# G2 F1: a build stamps only while setuptools collects, and leaves src/ as it
+# found it; an editable build writes no stamp at all
+# ---------------------------------------------------------------------------
+
+_STAMPING_HOOKS = ("build_wheel", "build_sdist", "prepare_metadata_for_build_wheel")
+_EDITABLE_HOOKS = ("build_editable", "prepare_metadata_for_build_editable")
+
+
+def _recording_hooks(backend: types.ModuleType, root: Path) -> dict:
+    """Stand-in setuptools hooks that record what the stamp held while they ran."""
+    seen: dict = {}
+    stamp = root / "src" / "firm" / "_build_stamp.py"
+
+    def make(name):
+        def hook(*args, **kwargs):
+            seen[name] = stamp.read_bytes() if stamp.exists() else None
+            return f"{name}-result"
+        return hook
+
+    for name in _STAMPING_HOOKS + _EDITABLE_HOOKS:
+        setattr(backend._orig, name, make(name))
+    return seen
+
+
+@pytest.mark.parametrize("hook", _STAMPING_HOOKS)
+def test_a_build_hook_stamps_while_it_runs_and_leaves_no_stamp_behind(tmp_path, monkeypatch, hook):
+    root = _source_tree(tmp_path / "cadre")
+    commit = _new_repo(root)
+    backend = _load_backend(root, monkeypatch)
+    seen = _recording_hooks(backend, root)
+
+    assert getattr(backend, hook)(str(tmp_path / "out")) == f"{hook}-result"
+
+    assert seen[hook] is not None and f"COMMIT = {commit!r}".encode() in seen[hook]
+    assert _stamp_text(root) is None, "the build left its stamp in src/"
+
+
+@pytest.mark.parametrize("hook", _STAMPING_HOOKS)
+def test_a_build_hook_puts_back_a_stamp_that_was_already_there(tmp_path, monkeypatch, hook):
+    root = _source_tree(tmp_path / "cadre")
+    _new_repo(root)
+    leftover = b"COMMIT = 'a leftover from an older build'\n"
+    (root / "src" / "firm" / "_build_stamp.py").write_bytes(leftover)
+    backend = _load_backend(root, monkeypatch)
+    _recording_hooks(backend, root)
+
+    getattr(backend, hook)(str(tmp_path / "out"))
+
+    assert (root / "src" / "firm" / "_build_stamp.py").read_bytes() == leftover
+
+
+@pytest.mark.parametrize("hook", _EDITABLE_HOOKS)
+def test_an_editable_build_writes_no_stamp(tmp_path, monkeypatch, hook):
+    root = _source_tree(tmp_path / "cadre")
+    _new_repo(root)
+    backend = _load_backend(root, monkeypatch)
+    seen = _recording_hooks(backend, root)
+
+    getattr(backend, hook)(str(tmp_path / "out"))
+
+    assert seen[hook] is None, "an editable build stamped the tree"
+    assert _stamp_text(root) is None
+
+
+def test_a_build_that_fails_still_leaves_no_stamp(tmp_path, monkeypatch):
+    root = _source_tree(tmp_path / "cadre")
+    _new_repo(root)
+    backend = _load_backend(root, monkeypatch)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("setuptools failed")
+
+    backend._orig.build_wheel = broken
+    with pytest.raises(RuntimeError):
+        backend.build_wheel(str(tmp_path / "out"))
+    assert _stamp_text(root) is None

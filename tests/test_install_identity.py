@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import sys
 import types
 import zipfile
@@ -51,6 +53,10 @@ def stamp(monkeypatch):
         mod.BUILT_AT = built_at
         mod.REMOTE_DISTANCE = remote_distance
         monkeypatch.setitem(sys.modules, "firm._build_stamp", mod)
+        # Running from a git checkout, the live commit is read first (G2 F1) and
+        # this synthetic stamp would never be reached. These tests are about the
+        # stamp, so the checkout source is switched off for them.
+        monkeypatch.setattr(_build_info, "_from_checkout", lambda: None, raising=False)
         return mod
 
     yield _set
@@ -61,6 +67,7 @@ def no_stamp(monkeypatch):
     """No stamp at all, and no archive substitution: the honest-unknown case."""
     monkeypatch.delitem(sys.modules, "firm._build_stamp", raising=False)
     monkeypatch.setattr(_build_info, "_ARCHIVE_COMMIT", "$Format:%H$")
+    monkeypatch.setattr(_build_info, "_from_checkout", lambda: None, raising=False)
 
     def _raise(name):
         raise ImportError(name)
@@ -354,3 +361,165 @@ def test_every_check_carries_the_keys_the_renderer_reads():
             assert key in card, f"card {card.get('key')!r} has no {key!r}"
     assert visited == len(checks)
     assert visited > 0, "visited zero cards, so this proved nothing"
+
+
+# ---------------------------------------------------------------------------
+# G2 F1 — running from a checkout reports the commit git reports NOW
+# ---------------------------------------------------------------------------
+
+def _scratch_git(cwd, *args):
+    return subprocess.run(
+        ["git", "-c", "user.email=test@cadre.invalid", "-c", "user.name=test", *args],
+        cwd=cwd, check=True, capture_output=True, encoding="utf-8", errors="replace",
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ).stdout.strip()
+
+
+def _cadre_shaped(root):
+    """The two things that make a directory a Cadre checkout: the build backend
+    beside ``src/``, and the package directory."""
+    (root / "_build").mkdir(parents=True)
+    (root / "_build" / "backend.py").write_text("# stand-in\n", encoding="utf-8")
+    (root / "src" / "firm").mkdir(parents=True)
+    return root
+
+
+@pytest.fixture
+def checkout(tmp_path, monkeypatch):
+    """A scratch Cadre checkout, treated as the home of the running package."""
+    if shutil.which("git") is None:
+        pytest.skip("needs git on PATH")
+    root = _cadre_shaped(tmp_path / "cadre")
+    _scratch_git(root, "init", "-q")
+    _scratch_git(root, "add", "-A")
+    _scratch_git(root, "commit", "-q", "-m", "A")
+    monkeypatch.setattr(_build_info, "_PACKAGE_DIR", root / "src" / "firm", raising=False)
+    return root
+
+
+def test_a_checkout_names_the_commit_it_is_on_now_not_the_one_a_leftover_stamp_names(checkout, monkeypatch):
+    """avocet's L8: an editable install kept naming the commit it was installed
+    at after the checkout moved, and said everything agreed. A stamp left behind
+    by an older build must not decide what a checkout reports."""
+    commit_a = _scratch_git(checkout, "rev-parse", "HEAD")
+    leftover = types.ModuleType("firm._build_stamp")
+    leftover.COMMIT, leftover.COMMIT_COUNT, leftover.DIRTY = commit_a, 1, False
+    leftover.TAG = leftover.DESCRIBE = leftover.BUILT_AT = leftover.REMOTE_DISTANCE = ""
+    monkeypatch.setitem(sys.modules, "firm._build_stamp", leftover)
+
+    (checkout / "src" / "firm" / "moved.py").write_text("X = 1\n", encoding="utf-8")
+    _scratch_git(checkout, "add", "-A")
+    _scratch_git(checkout, "commit", "-q", "-m", "B")
+    commit_b = _scratch_git(checkout, "rev-parse", "HEAD")
+
+    info = _build_info.build_info()
+
+    assert info["commit"] != commit_a, "reported the commit a leftover stamp names"
+    assert info["commit"] == commit_b
+    assert info["source"] == "checkout"
+    assert info["dirty"] is False
+    assert _build_info.version_string() == f"{_build_info.BASE_VERSION}.dev2+g{commit_b[:7]}"
+
+
+def test_a_checkout_reads_dirty_live(checkout):
+    assert _build_info.build_info()["dirty"] is False
+    (checkout / "src" / "firm" / "work_in_progress.py").write_text("", encoding="utf-8")
+    assert _build_info.build_info()["dirty"] is True
+
+
+def test_a_tree_inside_another_repository_is_not_read_as_a_checkout(tmp_path, monkeypatch):
+    if shutil.which("git") is None:
+        pytest.skip("needs git on PATH")
+    outer = tmp_path / "project"
+    outer.mkdir()
+    _scratch_git(outer, "init", "-q")
+    _scratch_git(outer, "commit", "-q", "--allow-empty", "-m", "outer")
+    inner = _cadre_shaped(outer / "vendor" / "cadre")
+    monkeypatch.setattr(_build_info, "_PACKAGE_DIR", inner / "src" / "firm", raising=False)
+    assert _build_info._from_checkout() is None
+
+
+def test_a_repository_without_the_build_backend_is_not_a_checkout(tmp_path, monkeypatch):
+    # An installed package that happens to sit inside some git repository (a
+    # virtualenv in a project folder) is not a Cadre checkout.
+    if shutil.which("git") is None:
+        pytest.skip("needs git on PATH")
+    root = tmp_path / "project"
+    (root / "src" / "firm").mkdir(parents=True)
+    _scratch_git(root, "init", "-q")
+    _scratch_git(root, "commit", "-q", "--allow-empty", "-m", "x")
+    monkeypatch.setattr(_build_info, "_PACKAGE_DIR", root / "src" / "firm", raising=False)
+    assert _build_info._from_checkout() is None
+
+
+@pytest.mark.parametrize("meta", ["0.1.0.dev9+gbbbbbbb", "0.1.0.dev1+gaaaaaaa"])
+def test_a_checkout_is_never_reported_as_agreeing_with_the_installer(meta):
+    """A checkout's commit is read live; the installer's version was recorded
+    once, at install time. Calling that agreement is how F1 said "agree" over a
+    moved checkout, so a checkout gets its own state whatever the two say."""
+    build = {"source": "checkout", "commit": COMMIT_B, "dirty": False}
+    ag = ident_mod._agreement("0.1.0.dev9+gbbbbbbb", meta, build)
+    assert ag["state"] == "checkout"
+    assert ag["ok"] is True
+    assert meta in ag["detail"]
+
+
+# ---------------------------------------------------------------------------
+# G2 F4 — an editable install is labelled as one, never as a wheel
+# ---------------------------------------------------------------------------
+
+_EDITABLE = {"url": "file:///home/someone/dev/cadre", "dir_info": {"editable": True}}
+
+
+def test_an_editable_install_is_labelled_editable_with_its_directory(monkeypatch):
+    raw = json.dumps(_EDITABLE)
+
+    class FakeDist:
+        def read_text(self, name):
+            return raw if name == "direct_url.json" else None
+
+    import importlib.metadata as md
+    monkeypatch.setattr(md, "distribution", lambda name: FakeDist())
+    out = ident_mod._direct_url()
+    assert out["filename"] is None, f"a directory was reported as a wheel: {out['filename']!r}"
+    assert out["sha256"] is None
+    assert out["kind"] == "editable"
+    assert out["dir"].replace("\\", "/").endswith("/home/someone/dev/cadre")
+
+
+def test_a_wheel_install_is_labelled_a_wheel(monkeypatch):
+    raw = json.dumps({"url": "file:///tmp/cadre-0.1.0-py3-none-any.whl",
+                      "archive_info": {"hashes": {"sha256": "abc123"}}})
+
+    class FakeDist:
+        def read_text(self, name):
+            return raw
+
+    import importlib.metadata as md
+    monkeypatch.setattr(md, "distribution", lambda name: FakeDist())
+    out = ident_mod._direct_url()
+    assert out["kind"] == "wheel"
+    assert out["filename"] == "cadre-0.1.0-py3-none-any.whl"
+
+
+def _editable_record():
+    return {"kind": "editable", "url": _EDITABLE["url"], "dir": "/home/someone/dev/cadre",
+            "filename": None, "sha256": None}
+
+
+def test_the_text_report_calls_an_editable_install_editable_and_prints_no_wheel_line(stamp, monkeypatch):
+    stamp()
+    monkeypatch.setattr(ident_mod, "_direct_url", _editable_record)
+    text = ident_mod.render_text(ident_mod.installed_identity())
+    assert "editable" in text
+    assert not [line for line in text.splitlines() if line.strip().startswith("wheel")]
+
+
+def test_doctor_reads_the_editable_record_instead_of_saying_none_was_written(stamp, monkeypatch):
+    stamp()
+    monkeypatch.setattr(ident_mod, "_direct_url", _editable_record)
+    monkeypatch.setattr(ident_mod, "_metadata_version", lambda: "0.1.0.dev419+g11c530b")
+    checks = install_doctor.diagnose_install(ident_mod.installed_identity())
+    card = next(c for c in checks if "install-artifact" in c.values())
+    assert "wrote no direct_url.json" not in card["detail"]
+    assert "editable" in card["detail"]

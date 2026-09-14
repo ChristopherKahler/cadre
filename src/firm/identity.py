@@ -27,7 +27,8 @@ import os
 import platform
 import sys
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 from typing import Any
 
 from firm import _build_info
@@ -51,7 +52,9 @@ def _direct_url() -> dict[str, Any] | None:
     is installed from a file or a URL rather than resolved from an index. It
     carries the source and its hash, so an install can prove WHICH FILE it came
     from without anyone having to add a mechanism for it. Absent for an index
-    install or an editable one, and absent is reported as absent.
+    install, and absent is reported as absent. An editable install DOES have
+    one: pip records the directory under ``dir_info`` with ``editable: true``,
+    and it is reported as the directory it is, never as a wheel (#120 G2 F4).
     """
     try:
         from importlib import metadata
@@ -66,6 +69,16 @@ def _direct_url() -> dict[str, Any] | None:
     except ValueError:
         return None
     url = parsed.get("url") or ""
+    dir_info = parsed.get("dir_info")
+    if isinstance(dir_info, dict):
+        path = url2pathname(urlparse(url).path) if url.startswith("file:") else url
+        return {
+            "kind": "editable" if dir_info.get("editable") else "directory",
+            "url": url,
+            "dir": path or None,
+            "filename": None,
+            "sha256": None,
+        }
     info = parsed.get("archive_info") or {}
     hashes = info.get("hashes") or {}
     digest = hashes.get("sha256") or ""
@@ -78,6 +91,7 @@ def _direct_url() -> dict[str, Any] | None:
     # "cadre-0.1.0.dev421%2Bg3392d00-py3-none-any.whl". Measured, not guessed.
     name = os.path.basename(unquote(url).rstrip("/"))
     return {
+        "kind": "wheel",
         "url": url,
         "filename": name or None,
         "sha256": digest or None,
@@ -145,6 +159,13 @@ def _agreement(version: str, meta: str | None, build: dict[str, Any]) -> dict[st
         never stamped. Comparing them is comparing answers to two different
         questions.
 
+    ``checkout``
+        The commit was read live from a git checkout (an editable install, or
+        ``src`` on ``sys.path``), while the installer's version was recorded
+        once, at install time. The two matching today says nothing about
+        tomorrow, and "agree" is what #120 G2 F1 printed over a checkout that
+        had moved on, so a checkout is its own state.
+
     ``agree`` / ``disagree``
         Both sides have a real identity. Now the comparison means something: a
         package that knows its commit, disagreeing with the version the
@@ -162,6 +183,14 @@ def _agreement(version: str, meta: str | None, build: dict[str, Any]) -> dict[st
             "detail": (f"imported from an unstamped source tree, so it reports "
                        f"the base version {version}; the installed "
                        f"distribution records {meta}"),
+        }
+    if build.get("source") == "checkout":
+        same = "the same" if meta == version else "different"
+        return {
+            "ok": True,
+            "state": "checkout",
+            "detail": (f"running a git checkout, commit read live: {version}; "
+                       f"the installer recorded {meta} when it installed ({same})"),
         }
     if meta == version:
         return {"ok": True, "state": "agree",
@@ -189,7 +218,8 @@ def render_text(identity: dict[str, Any]) -> str:
     if b["commit"]:
         commit = b["commit"]
         if b["dirty"]:
-            commit += "  (tree was dirty at build)"
+            commit += ("  (uncommitted changes now)" if b["source"] == "checkout"
+                       else "  (tree was dirty at build)")
         lines.append(_fmt("commit", f"{commit}   [{b['source']}]"))
     else:
         lines.append(_fmt("commit", "unknown — built from a source copy with "
@@ -200,11 +230,13 @@ def render_text(identity: dict[str, Any]) -> str:
         lines.append(_fmt("upstream", b["remote_distance"]))
     lines.append(_fmt("installed", m["version"] or "not installed "
                                                   "(running from a source tree)"))
-    if w:
+    if w and w.get("kind") in ("editable", "directory"):
+        lines.append(_fmt("install", f"{w['kind']}, from {w.get('dir') or w['url']}"))
+    elif w:
         lines.append(_fmt("wheel", w["filename"] or w["url"] or "unknown"))
         lines.append(_fmt("sha256", w["sha256"] or "not recorded"))
     else:
-        lines.append(_fmt("wheel", "not recorded (index or editable install)"))
+        lines.append(_fmt("wheel", "not recorded (installed from an index, or not installed)"))
     lines.append(_fmt("package", identity["package_path"] or "unknown"))
     lines.append(_fmt("python", f"{identity['python']['version']}  "
                                 f"{identity['python']['executable']}"))
