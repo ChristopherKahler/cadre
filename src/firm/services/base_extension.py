@@ -48,10 +48,12 @@ thing that can say the manifest actually landed.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import shutil
 import subprocess
 import tempfile
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -155,6 +157,141 @@ def _installed_path() -> Path:
     return root / ".base-gbl" / "extensions" / "cadre.toml"
 
 
+# ── The graph copy of a prompt domain, and why this check exists ─────────────
+# Issue #115. An extension's prompt domain has TWO homes, and they are not the
+# same store. base MATCHES the domain's keywords from the installed manifest,
+# but it SERVES the rule text from the GRAPH whenever the graph holds a copy of
+# that domain — and the graph copy wins outright. Measured on base 0.15.2,
+# 2026-09-14, with one generation of rules in the graph and a different
+# generation in this manifest: every session received the graph's rules and no
+# session received the manifest's. Not merged. Replaced.
+#
+# `base domain sync` is what puts a copy there. An install writes none and an
+# uninstall removes none, so a machine can serve a copy written months ago from
+# a manifest that no longer exists. That is what the maintainer's machine
+# carries today: three rules naming one firm's WSL paths, standing in for this
+# file's firm-neutral three, on a keyword this file declares.
+#
+# Cadre cannot clean that up, and saying otherwise would be F1's shape again.
+# base 0.15.2 exposes no verb that removes such a rule, measured one at a time:
+#
+#   base rule remove --index N   matches a stored `index` triple. Rules written
+#                                by domain sync carry none, so no N reaches
+#                                them. Control: a rule added by `base rule add`
+#                                into the same domain WAS removed by the same
+#                                command, at the index the listing showed for
+#                                a different row.
+#   base domain sync             appends on a populated graph instead of
+#                                replacing: three rules became six under one
+#                                name, and 26 domains were rewritten.
+#   base graph supersede         does not index rule records at all.
+#   base graph apply-ops         retires only facts carrying a sync fact id,
+#                                which these never had.
+#
+# So DoD 1 and 2 of issue #115 — actually removing them, and leaving exactly one
+# rule set after an install — are OWNED BY BASE, not by this file. What this
+# file can do, and what the code below is, is refuse to let a second rule set
+# sit there SILENTLY: read back what base will really serve and say so.
+
+RULE_LINE = re.compile(r"^ {2}(workspace|global) +(\d+)\. ?(.*)$")
+
+_HEADER = re.compile(r"^\[(?P<name>[^\]]+)\] (?P<count>\d+) rules? across both tiers:")
+_NO_RULES = "No rules for domain"
+
+
+class GraphReadFailed(RuntimeError):
+    """base's rule listing could not be read.
+
+    Raised instead of returning an empty list, because a zero that means "I
+    could not see" is indistinguishable from a zero that means "nothing is
+    there" — and only one of those is good news. A caller must report the
+    failure, never a count.
+    """
+
+
+def parse_rule_listing(text: str) -> list[str]:
+    """The rule texts in a `base rule list --domain <d>` listing.
+
+    Self-checking on purpose. The listing states its own total in the header,
+    so the parsed rows are reconciled against that number and a mismatch raises
+    rather than returning the short list. A parser that silently returns fewer
+    rules than the tool reported is a blind detector that reads CLEAN.
+    """
+    if _NO_RULES in text:
+        return []
+    header = None
+    for line in text.splitlines():
+        header = _HEADER.match(line.strip())
+        if header:
+            break
+    if header is None:
+        raise GraphReadFailed(
+            "base's rule listing has neither the "
+            f"{_NO_RULES!r} sentence nor a parseable header; refusing to "
+            f"report a rule count from it: {text.strip()[:300]!r}")
+    rules = [m.group(3) for m in
+             (RULE_LINE.match(line) for line in text.splitlines()) if m]
+    declared = int(header.group("count"))
+    if len(rules) != declared:
+        raise GraphReadFailed(
+            f"base reported {declared} rules for {header.group('name')!r} and "
+            f"{len(rules)} lines parsed as rules; refusing to report either "
+            "number")
+    return rules
+
+
+def manifest_domains(rendered: str) -> list[tuple[str, list[str]]]:
+    """(full domain name, rules) for every prompt domain this manifest declares.
+
+    The full name is what base calls the domain once it is installed:
+    `ext:<extension>:<domain>`. That namespacing is the whole reason two
+    generations can collide — the name is derived, so a domain cannot rename
+    itself out of a collision.
+    """
+    parsed = tomllib.loads(rendered)
+    ext = parsed.get("extension", {}).get("name", "")
+    blocks = (parsed.get("hooks", {}).get("user_prompt", {}).get("domains", []))
+    return [(f"ext:{ext}:{d['name']}", list(d.get("rules", []))) for d in blocks]
+
+
+def graph_rules(base: str, domain: str, env: dict[str, str]) -> list[str]:
+    """What base's graph will serve for this domain, from the CURRENT directory.
+
+    cwd is load-bearing and is the caller's to control. base resolves the
+    workspace tier by walking up from the working directory, so the identical
+    command answers "3 rules" in one directory and "No rules for domain" one
+    level down. A count reported without its directory is not a measurement.
+    """
+    listed = subprocess.run(
+        [base, "rule", "list", "--domain", domain],
+        capture_output=True, text=True, timeout=60,
+        env=env, stdin=subprocess.DEVNULL)
+    if listed.returncode != 0:
+        raise GraphReadFailed(
+            f"`base rule list --domain {domain}` exited {listed.returncode}: "
+            f"{(listed.stderr or listed.stdout).strip()[:300]}")
+    return parse_rule_listing(listed.stdout)
+
+
+def foreign_rules(rendered: str, base: str, env: dict[str, str]) -> list[dict[str, Any]]:
+    """Rules the graph will serve that this manifest did not write.
+
+    One entry per domain that carries any. An empty list means every domain
+    this manifest declares serves this manifest's own rules — either because
+    the graph holds no copy, or because the copy it holds still matches.
+    """
+    findings: list[dict[str, Any]] = []
+    for domain, mine in manifest_domains(rendered):
+        served = graph_rules(base, domain, env)
+        if not served:
+            continue
+        unknown = [r for r in served if r not in mine]
+        if unknown:
+            findings.append({"domain": domain, "serving": served,
+                             "foreign": unknown, "manifest": mine})
+    return findings
+
+
 def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
     """Render, validate, install, read back. Never raises.
 
@@ -173,8 +310,9 @@ def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
     # Prose is for the operator. The field is for the caller.
     result: dict[str, Any] = {"ok": False, "validated": False, "installed": False,
                               "read_back": False, "handler_runs": False,
-                              "skipped": False,
-                              "handler": "", "path": "", "reason": ""}
+                              "skipped": False, "collision": False,
+                              "graph_read": False, "foreign_rules": [],
+                              "handler": "", "path": "", "reason": "", "cwd": ""}
     base = which_base()
     if not base:
         from firm.sysconfig.service import base_absence_reason
@@ -297,7 +435,44 @@ def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
                 "not run: " + (detail[-1][:200] if detail else f"rc={ran.returncode}"))
             return result
         result["handler_runs"] = True
+
+        # THE GRAPH COPY, issue #115. Everything above proves the MANIFEST
+        # landed and its handler runs. None of it says a word about what a
+        # Member will actually be told, because base serves a domain's rule
+        # text from the graph when the graph holds a copy — see the block
+        # above `install`. So read that back too, from this directory, and
+        # report it.
+        #
+        # This never fails the install. The manifest did land, the handler
+        # does run, and refusing here would punish an operator for a defect
+        # base owns and has given them no verb to fix — on the exact machine
+        # the collision is blocking. The install's job is to stop this being
+        # SILENT. Whether it should also REFUSE is an open ruling; if it
+        # becomes one, it goes here and nowhere else.
+        result["cwd"] = os.getcwd()
+        try:
+            found = foreign_rules(rendered, base, env)
+        except GraphReadFailed as exc:
+            result["graph_read"] = False
+            result["reason"] = (
+                f"installed and read back from {landed}, but the graph copy "
+                f"could not be read, so it is UNKNOWN what will be served: {exc}")
+            result["ok"] = True
+            return result
+        result["graph_read"] = True
+        result["foreign_rules"] = found
+        result["collision"] = bool(found)
+
         result["ok"] = True
+        if found:
+            names = ", ".join(f["domain"] for f in found)
+            total = sum(len(f["foreign"]) for f in found)
+            result["reason"] = (
+                f"installed and read back from {landed}, but base's graph will "
+                f"serve {total} rule(s) this manifest did not write, under "
+                f"{names} — the graph copy wins, so those are what a Member "
+                f"receives. Workspace tier resolved from {result['cwd']}.")
+            return result
         result["reason"] = f"installed and read back from {landed}"
         return result
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -339,6 +514,32 @@ def run_install(framework_dir: Path | str | None = None) -> int:
         print(result.get("reason") or "installed")
         if result.get("handler_runs"):
             print(f"handler runs: {result['handler']}")
+        if result.get("graph_read") is False:
+            print("WARNING: the graph copy of this extension's prompt "
+                  "domain(s) could not be read, so what a Member will be told "
+                  "is unknown.", file=sys.stderr)
+        for finding in result.get("foreign_rules", []):
+            # Loud, and every rule printed in full. A report that says only
+            # "a collision exists" leaves the operator exactly where they
+            # started: unable to tell which of two rule sets is reaching
+            # their Members.
+            print("", file=sys.stderr)
+            print(f"COLLISION on domain {finding['domain']}:", file=sys.stderr)
+            print(f"  base's graph will serve {len(finding['serving'])} rule(s) "
+                  f"and this manifest declares {len(finding['manifest'])}. "
+                  "The graph wins.", file=sys.stderr)
+            print(f"  workspace tier resolved from: {result.get('cwd', '?')}",
+                  file=sys.stderr)
+            for rule in finding["foreign"]:
+                print(f"  NOT FROM THIS MANIFEST: {rule}", file=sys.stderr)
+            # NAME THE OWNER. Without this line the next reader spends a day
+            # inside Cadre looking for a bug that is not here.
+            print("  OWNER: base, not Cadre. base serves a domain's rules from "
+                  "its graph and gives no verb that removes one written by "
+                  "`base domain sync` (issue #115). Cadre installed correctly "
+                  "and cannot clean this up. See them yourself with: "
+                  f"base rule list --domain {finding['domain']}",
+                  file=sys.stderr)
         return 0
     reason = result.get("reason", "unknown")
     if result.get("skipped"):
