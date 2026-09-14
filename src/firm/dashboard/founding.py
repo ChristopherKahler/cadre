@@ -808,6 +808,12 @@ def readiness(root: Path, firm_id: str) -> dict[str, Any]:
     # pulse on those turned "you could have more" into "you may not start", which
     # is a different sentence and the wrong one.
     charter = (ws / "CLAUDE.md").is_file()
+    # Read-only, every time this screen is drawn. `check` installs nothing: a
+    # screen that repairs the machine while rendering makes it impossible to
+    # say afterwards what the machine looked like before anybody looked at it.
+    # The repair belongs to `commit`, which is where founding happens.
+    from firm.services import base_ready
+    base_state = base_ready.check(ws)
     checks = [
         {"key": "charter", "label": "A charter (CLAUDE.md) — the firm's law",
          "ok": charter, "blocking": True,
@@ -823,6 +829,29 @@ def readiness(root: Path, firm_id: str) -> dict[str, Any]:
         {"key": "protocols", "label": "Protocols — law injected into every member run",
          "ok": protocols.is_dir() and any(protocols.glob("*.md")), "blocking": False,
          "fix": "Train"},
+        # Both non-blocking. A firm with no base is an ordinary firm -- a
+        # licensee may not carry base at all -- which is the same ruling this
+        # screen already makes about MCP servers. What is not acceptable is
+        # silence: an absent base, or a `base cadre` that does not run, is
+        # named here rather than left for the Board to discover mid-run (#118).
+        {"key": "base", "label": "base — where the firm keeps what it learns",
+         "ok": bool(base_state.get("base_present") and base_state.get("base_runs")),
+         "blocking": False,
+         "detail": (f"base at {base_state.get('base_path')}"
+                    if base_state.get("base_runs")
+                    else str(base_state.get("reason") or "not found")),
+         "fix": "Equip"},
+        # The row follows check's OWN verdict, never `extension_runs` alone.
+        # `base cadre` exits 0 for a base that resolves the command from outside
+        # the firm's tier, with no manifest in it, and this row used to read
+        # "installed and runs" over exactly that (PR 127 G2, F2).
+        {"key": "base_cadre", "label": "base cadre — the command every Member runs",
+         "ok": bool(base_state.get("ok")),
+         "blocking": False,
+         "detail": ("the cadre extension is installed and runs"
+                    if base_state.get("ok")
+                    else str(base_state.get("reason") or "not installed")),
+         "fix": "Equip"},
     ]
     blocking = [c["key"] for c in checks if c["blocking"] and not c["ok"]]
     # The roster rides along so the readiness screen is reachable at any time —
@@ -1042,11 +1071,30 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
     if get_db_path(workspace).exists():
         return {"ok": False, "error": f"a firm already lives at {workspace}"}
 
+    # BEFORE ANY STATE IS WRITTEN: is base even on this machine? (#118, DoD 1)
+    #
+    # Above the mkdir on purpose. This reading is a fact about the host at the
+    # moment the firm was made, and taking it after the workspace exists would
+    # be taking it about a machine the founding had already started changing.
+    # It never refuses anything: base absent is degraded, never broken, and a
+    # firm founded without base is still a firm.
+    from firm.services import base_ready
+    base_before = base_ready.check()
+
     workspace.mkdir(parents=True, exist_ok=True)
     if run_init(workspace, force=False, demo=False, install_hooks_flag=False) != 0:
         return {"ok": False, "error": "could not initialize the firm workspace"}
     from firm.services import base_domain
     base_wire = base_domain.wire_workspace(workspace, fid, proposal)
+
+    # The firm has a base tier now, so ask the question a Member will ask:
+    # does `base cadre` run with THIS FIRM'S BASE_HOME (#117 spawns every
+    # Member into it). `ensure` reads the firm's tier and installs nothing --
+    # the only install that exists writes the operator's tier, which no Member
+    # reads, so it would report a repair while every Member still got 127
+    # (#118, measured). Never raises, never refuses: the gap is named in the
+    # result and on the readiness screen instead.
+    base_state = base_ready.ensure(workspace)
 
     conn = connect(get_db_path(workspace))
     try:
@@ -1185,4 +1233,17 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
         # whose domain injects nothing was reported as wired.
         "base_graph": bool(base_wire.get("live")),
         "base_wire": base_wire,
+        # Two readings, taken at two different moments on purpose.
+        # base_present is from BEFORE the workspace existed, which is the
+        # question DoD 1 asks: did founding know before it started making a
+        # firm. base_cadre_runs is read in the FIRM'S OWN TIER once it exists,
+        # which is the question a Member asks: does the command I am told to
+        # run actually run where I run it. It is check's own verdict -- the
+        # manifest is in that tier AND the command runs there AND the base may
+        # be run at all -- because the process reading alone is True for a base
+        # resolving `cadre` from somewhere else (PR 127 G2, F2). That reading
+        # is still reported, as base_ready["extension_runs"].
+        "base_present": bool(base_before.get("base_present")),
+        "base_cadre_runs": bool(base_state.get("ok")),
+        "base_ready": base_state,
     }
