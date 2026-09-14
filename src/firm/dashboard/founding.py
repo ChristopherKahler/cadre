@@ -29,6 +29,7 @@ from typing import Any
 
 from firm.core import repo
 from firm.core.db import connect, get_db_path
+from firm.core.proc import popen_utf8
 from firm.pulse.spawn import resolve_claude_bin
 
 # Mirrors the hardened Member spawn flags (firm/pulse/spawn.py). --strict-mcp-config
@@ -537,13 +538,12 @@ def _run_founding(job_id: str, brief: str) -> None:
     env.pop("CADRE_DB_TOKEN", None)
 
     try:
-        proc = subprocess.Popen(
+        proc = popen_utf8(
             argv,
             cwd=str(_framework_root()),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
-            text=True,
         )
     except OSError as exc:
         _finish(job_id, error=f"could not spawn the founding agent: {exc}")
@@ -651,9 +651,9 @@ def _run_reshuffle(job_id: str, proposal: dict[str, Any], note: str) -> None:
     env.pop("CADRE_DB_TOKEN", None)
 
     try:
-        proc = subprocess.Popen(argv, cwd=str(_framework_root()),
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                env=env, text=True)
+        proc = popen_utf8(argv, cwd=str(_framework_root()),
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          env=env)
     except OSError as exc:
         _finish(job_id, error=f"could not spawn the founding agent: {exc}")
         return

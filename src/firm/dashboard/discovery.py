@@ -20,6 +20,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from firm.core.proc import run_utf8
+
 # BASE is the engine. It is surveyed first, reported loudest, and its extension
 # list IS the CLI-tool registry — `tool_install` can only install what base can.
 
@@ -78,8 +80,8 @@ def _run(argv: list[str], timeout: int = 10) -> tuple[int, str]:
     env = dict(os.environ, GH_PROMPT_DISABLED="1", GH_NO_UPDATE_NOTIFIER="1",
                NO_COLOR="1")
     try:
-        p = subprocess.run(argv, capture_output=True, text=True,
-                           timeout=timeout, stdin=subprocess.DEVNULL, env=env)
+        p = run_utf8(argv, capture_output=True,
+                     timeout=timeout, stdin=subprocess.DEVNULL, env=env)
     except (OSError, subprocess.TimeoutExpired):
         return 1, ""
     return p.returncode, (p.stdout + p.stderr)

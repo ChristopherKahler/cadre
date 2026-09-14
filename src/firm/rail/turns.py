@@ -25,6 +25,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from firm.core.proc import popen_utf8, run_utf8
+
 APPROVE_TOOL = "mcp__cadre-rail__approve"
 
 _SCOPE_RE = re.compile(r"^@([A-Za-z0-9][A-Za-z0-9_-]*)\s+(.+)$", re.DOTALL)
@@ -252,11 +254,10 @@ def spawn_turn(
     must not kill the stream tap, so failures are swallowed here.
     """
     try:
-        proc = subprocess.Popen(
+        proc = popen_utf8(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
             cwd=cwd,
             env=env,
         )
@@ -342,9 +343,9 @@ def relay_register(session_id: str, title: str) -> bool:
     if not base:
         return False
     try:
-        done = subprocess.run(
+        done = run_utf8(
             [base, "relay", "register", "--as", title, "--session", session_id],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, timeout=10,
         )
         return done.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
@@ -379,9 +380,9 @@ def relay_steer(
     if not base:
         return None
     try:
-        listing = subprocess.run(
+        listing = run_utf8(
             [base, "relay", "sessions"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, timeout=10,
         ).stdout
         title = next(
             (line.split()[0] for line in listing.splitlines()
@@ -398,10 +399,10 @@ def relay_steer(
             f"(thread routing is already in your env). Then clear this "
             f"alert: {base} relay done {slug}"
         )
-        sent = subprocess.run(
+        sent = run_utf8(
             [base, "relay", "task", "--to", title, "--from", from_name,
              "--slug", slug, "--summary", summary],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, timeout=10,
         )
         return slug if sent.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired):
@@ -418,9 +419,9 @@ def relay_task_state(slug: str) -> str | None:
     if not base:
         return None
     try:
-        listing = subprocess.run(
+        listing = run_utf8(
             [base, "relay", "tasks"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, timeout=10,
         ).stdout
     except (OSError, subprocess.TimeoutExpired):
         return None

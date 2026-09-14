@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 from firm.core.db import connect, get_db_path, resolve_firm_id
+from firm.core.proc import run_utf8
 from firm.pulse.environment import read_env_file
 from firm.pulse.spawn import resolve_claude_bin
 from firm.sched import resolve_scheduler
@@ -118,10 +119,9 @@ WantedBy=timers.target
 def _systemctl(*args: str) -> tuple[int, str]:
     """Run ``systemctl --user`` with *args*. Returns (rc, combined output)."""
     try:
-        proc = subprocess.run(
+        proc = run_utf8(
             ["systemctl", "--user", *args],
             capture_output=True,
-            text=True,
             timeout=30,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError) as exc:

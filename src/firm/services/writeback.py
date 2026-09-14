@@ -39,6 +39,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from firm.core.proc import run_utf8
+
 WRITEBACK_DIRNAME = "writeback"
 
 #: The two verbs a Member is told to use, in one place because two surfaces name
@@ -160,10 +162,10 @@ def _base_learn(workspace: Path, domain: str, entity: str, text: str,
 
         return {"ok": True, "graph": "skipped", "detail": base_absence_reason()}
     try:
-        done = subprocess.run(
+        done = run_utf8(
             [base, "learn", "--domain", domain, "--entity", entity,
              "--type", note_type, "--text", text],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, timeout=60,
             cwd=str(workspace), env=_base_env(), stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"ok": False, "graph": "failed", "detail": str(exc)}

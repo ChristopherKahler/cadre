@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import firm.secrets.vault as vault_mod
+from firm.core.proc import run_utf8
 from firm.secrets.provider import (
     FIRM_TIER,
     GLOBAL_TIER,
@@ -406,8 +407,8 @@ def _base_ext_capable() -> bool:
     if not binary:
         return False
     try:
-        probe = subprocess.run(
-            [binary, "ext", "--help"], capture_output=True, text=True,
+        probe = run_utf8(
+            [binary, "ext", "--help"], capture_output=True,
             timeout=10, env=os.environ.copy(),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -420,8 +421,8 @@ def _base_ext_list() -> list[dict[str, str]]:
     """Parse `base ext list` extension rows — defensive; layout drift
     degrades to fewer rows, never an exception."""
     try:
-        proc = subprocess.run(
-            ["base", "ext", "list"], capture_output=True, text=True,
+        proc = run_utf8(
+            ["base", "ext", "list"], capture_output=True,
             timeout=15, env=os.environ.copy(),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -548,9 +549,9 @@ def tool_install(
         raise ValueError(f"manifest is not valid TOML: {exc}")
     verb = "add" if manifest.get("dist") else "install"
     try:
-        proc = subprocess.run(
+        proc = run_utf8(
             ["base", "ext", verb, str(local)],
-            capture_output=True, text=True, timeout=180,
+            capture_output=True, timeout=180,
             cwd=str(workspace), env=os.environ.copy(),
         )
     except subprocess.TimeoutExpired:

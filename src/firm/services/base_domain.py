@@ -25,6 +25,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from firm.core.proc import NoOutput, run_utf8
+
 BEGIN = "# >>> cadre:base-domain (generated — edit prompt_keywords freely, the"
 BEGIN2 = "# rest is rebuilt from the roster on every sync) >>>"
 END = "# <<< cadre:base-domain <<<"
@@ -163,9 +165,9 @@ def sync(workspace: Path, firm_id: str, *, conn: Any = None,
         changed = updated != body
         if changed:
             path.write_text(updated, encoding="utf-8")
-        seeded = _seed_rule(Path(workspace), firm_id)
+        seeded, why = _seed_rule_detail(Path(workspace), firm_id)
         return {"ok": True, "changed": changed, "keywords": words,
-                "rule_seeded": seeded, "path": str(path)}
+                "rule_seeded": seeded, "rule_reason": why, "path": str(path)}
     except OSError as exc:
         return {"ok": False, "reason": str(exc), "changed": False}
 
@@ -318,27 +320,60 @@ def rule_count(workspace: Path, firm_id: str) -> int | None:
     A machine without base has no ruleless domain to report, and reporting one
     would fail a firm for the operator's install. Absent, empty and zero are
     three different answers (honesty envelope).
+
+    The verdict only. :func:`_rule_count` carries the reason with it; this
+    signature is what ``assess`` and the tests around #62 are written against
+    and it does not change.
+    """
+    return _rule_count(workspace, firm_id)[0]
+
+
+def _rule_count(workspace: Path, firm_id: str) -> tuple[int | None, str]:
+    """``rule_count``, plus WHY when the answer is None.
+
+    Five different situations answer None here, and until #114 the operator
+    was told the same thing about all five: "carries no rules, run firm doctor
+    --fix" -- an instruction that is wrong for four of them and silent about
+    the fifth. The fifth was the new one: on Windows an undecodable byte in
+    base's UTF-8 banner killed subprocess's reader thread, ``run`` returned rc
+    0 with ``stdout`` None, and a firm whose domain could not be read at all
+    was reported as a firm whose domain was empty.
+
+    ``require_output=True`` is what makes that particular silence impossible
+    to mistake for data: ``base rule list`` exits 0 for a populated domain, an
+    empty one AND a domain that never existed, so its output is the only
+    signal there is, and a call that returns none of it has failed rather than
+    answered. The decode is fixed one layer down in ``firm.core.proc``; this
+    is the belt to that braces, and it is what keeps a FUTURE silence -- some
+    other cause, on some other host -- arriving named instead of dressed up as
+    an empty rule set.
     """
     import subprocess
     from firm.sysconfig.service import which_base
     base = which_base()
     if not base:
-        return None
+        return None, "base is not installed, so the domain cannot be read"
     try:
-        listed = subprocess.run(
+        listed = run_utf8(
             [base, "rule", "list", "--domain", firm_id],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, timeout=60, require_output=True,
             cwd=str(workspace), env=_base_env(), stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, f"base rule list did not run: {exc}"
+    except NoOutput as exc:
+        return None, str(exc)
     if listed.returncode != 0:
-        return None
+        said = (listed.stderr or listed.stdout or "").strip().splitlines()
+        return None, (f"base rule list exited {listed.returncode}: "
+                      + (said[-1][:200] if said else "and said nothing"))
     match = _COUNT_RE.search(listed.stdout or "")
     if match and match.group("domain") == firm_id:
-        return int(match.group("n"))
+        return int(match.group("n")), ""
     if _EMPTY_RE.search(listed.stdout or ""):
-        return 0
-    return None
+        return 0, ""
+    return None, ("base rule list printed something this version of cadre "
+                  "does not recognise, so the rule count is unknown -- not "
+                  "zero")
 
 
 def _seed_rule(workspace: Path, firm_id: str) -> bool:
@@ -350,28 +385,45 @@ def _seed_rule(workspace: Path, firm_id: str) -> bool:
     live wire. Idempotent: `base rule add` is only called when the domain has
     no rules yet. Never raises -- BASE may not be installed at all.
     """
+    return _seed_rule_detail(workspace, firm_id)[0]
+
+
+def _seed_rule_detail(workspace: Path, firm_id: str) -> tuple[bool, str]:
+    """``_seed_rule``, plus why it could not seed -- empty string on success.
+
+    The reason travels out through ``sync`` to ``wire_workspace``'s ``detail``,
+    which is the line an operator reads after founding a firm. An empty string
+    means the honest zero: the domain really does carry no rules, which is the
+    one case the old fixed sentence was right about.
+    """
     import subprocess
     from firm.sysconfig.service import which_base
     base = which_base()
     if not base:
-        return False
-    count = rule_count(workspace, firm_id)
+        return False, "base is not installed, so no rule could be seeded"
+    count, why = _rule_count(workspace, firm_id)
     if count is None:
-        return False              # cannot read the domain; do not claim a seed
+        return False, why         # cannot read the domain; do not claim a seed
     if count > 0:
-        return True               # already has rules; leave them alone
+        return True, ""           # already has rules; leave them alone
     try:
-        added = subprocess.run(
+        added = run_utf8(
             [base, "rule", "add", "--domain", firm_id, "--text", _SEED_RULE],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, timeout=60,
             cwd=str(workspace), env=_base_env(), stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"base rule add did not run: {exc}"
     if added.returncode != 0:
-        return False
+        said = (added.stderr or added.stdout or "").strip().splitlines()
+        return False, (f"base rule add exited {added.returncode}: "
+                       + (said[-1][:200] if said else "and said nothing"))
     # Read back. `base rule add` returning 0 is the writer's own opinion; the
     # only thing that proves the rule landed is asking for it again.
-    return (rule_count(workspace, firm_id) or 0) > 0
+    back, why = _rule_count(workspace, firm_id)
+    if (back or 0) > 0:
+        return True, ""
+    return False, (why or "base rule add exited 0 but the read-back still "
+                          "shows no rules, so nothing landed")
 
 
 def scaffold_tier(workspace: Path) -> dict[str, Any]:
@@ -436,9 +488,9 @@ def scaffold_tier(workspace: Path) -> dict[str, Any]:
 
     try:
         # Explicit env, never ambient — a systemd-spawned hub's PATH is bare.
-        proc = subprocess.run(
+        proc = run_utf8(
             [base, "scaffold", str(workspace)],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, timeout=120,
             env=_base_env(),
         )
         if proc.returncode != 0:
@@ -488,9 +540,18 @@ def wire_workspace(workspace: Path,
             f"no Member: {synced.get('reason') or 'unknown'}")
         return result
     if not result["rule_seeded"]:
+        # An unreadable rule set and an empty one are not the same finding, and
+        # the fixed sentence below used to be printed over both (#114). The
+        # route stays in either branch: `doctor --fix` is still where an
+        # operator goes next, whichever of the two it turns out to be.
+        why = str(synced.get("rule_reason") or "").strip()
         result["detail"] = (
             "the firm's domain block was written but carries no rules, so base "
-            "drops it whole and injects nothing — run firm doctor --fix")
+            "drops it whole and injects nothing — run firm doctor --fix"
+            if not why else
+            "the firm's domain block was written but its rule set could not be "
+            f"established, so base may be dropping it whole: {why} — run firm "
+            "doctor --fix")
         return result
     result["live"] = True
     result["detail"] = "the firm's graph reaches its Members"

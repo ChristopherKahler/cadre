@@ -12,6 +12,8 @@ import os
 import subprocess
 import sys
 
+from firm.core.proc import popen_utf8
+
 
 # ---------------------------------------------------------------------------
 # PID tracking (module-level, runtime-only)
@@ -421,11 +423,10 @@ def spawn_member_run(
         env.pop("BASE_RELAY_AS", None)
 
     try:
-        proc = subprocess.Popen(
+        proc = popen_utf8(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
             cwd=cwd,
             env=env,
         )
