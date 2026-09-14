@@ -160,7 +160,7 @@ def test_a_native_base_still_installs(monkeypatch, home, tmp_path):
     run = _CountingRun(0)
     monkeypatch.setattr(subprocess, "run", run)
     (home / ".base-gbl" / "extensions" / "cadre.toml").write_text(
-        'name = "cadre"\nframework_dir = "/opt/cadre"\n', encoding="utf-8")
+        '[extension]\nname = "cadre"\nframework_dir = "/opt/cadre"\n', encoding="utf-8")
 
     res = base_extension.install("/opt/cadre")
 
