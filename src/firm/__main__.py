@@ -514,6 +514,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--framework-dir", dest="framework_dir", default=None,
         help="Where Cadre is installed. Defaults to the package's own root, "
              "which is what a normal install wants.")
+    # Not the house sentence "(defaults to current directory)" the other
+    # --workspace flags carry, on purpose: this default is different. It walks
+    # up to the firm you are standing in, and outside any firm it names no
+    # workspace at all. Copying that sentence would tell the operator about a
+    # default this flag does not have.
+    ext_install.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to the firm you are "
+             "standing in). The manifest goes into that firm's own base tier. "
+             "Outside a firm, with no flag, it goes where it always went.")
 
     # ---- export subparser ----
     # The manifest declares `[[hooks.session_start.ingest]]` blocks that base
@@ -1077,7 +1087,30 @@ def main(argv: list[str] | None = None) -> int:
         if args.extension_command == "install":
             from firm.services.base_extension import run_install
 
-            return run_install(args.framework_dir)
+            # THE FIRM YOU ARE STANDING IN (#117), resolved here rather than
+            # inside run_install, which is also a Python API. An explicit
+            # --workspace wins. Otherwise walk up for .firm/firm.db, and outside
+            # any firm pass no workspace, which keeps today's tier. A Member
+            # runs `base cadre` in its firm's own tier, so a flag people forget
+            # would install where no Member looks.
+            if args.workspace is not None:
+                from firm.services.firm_relay import explicit_firm
+
+                named, why = explicit_firm(args.workspace)
+                if named is None:
+                    # Refused BEFORE run_install, so before anything exists on
+                    # disk: naming a workspace creates its tier. Exit 2, the
+                    # answer `cadre relay --firm` gives for the same mistake.
+                    print(f"Error: {why}", file=sys.stderr)
+                    return 2
+                # Absolute, because it becomes BASE_HOME, and a relative
+                # BASE_HOME means whatever directory base resolves it from.
+                workspace = named.absolute()
+            else:
+                from firm.services.firm_relay import resolve_firm
+
+                workspace = resolve_firm()
+            return run_install(args.framework_dir, workspace=workspace)
 
     if args.command == "learn":
         from firm.services.writeback import run_learn
