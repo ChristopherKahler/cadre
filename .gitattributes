@@ -1,0 +1,41 @@
+# Two separate jobs, both of which need this file to exist.
+#
+# 1. export-subst on _build_info.py.
+#
+# `git archive` emits tracked files only, which is what makes it a safe way to
+# build a clean artifact -- but it also strips the .git directory, so a build
+# from an archive has no way to ask git what commit it came from. The
+# export-subst attribute is git's own answer: it substitutes $Format: tokens
+# into the file's content at archive time, so the commit travels inside the
+# tree rather than beside it.
+#
+# Measured before this line was written, three arms plus a discriminator:
+# with this attribute, `git archive` rewrites the literal to the real 40-char
+# sha; WITHOUT it, under the identical archive command, the literal survives
+# untouched. The control is what makes the first arm mean anything -- it rules
+# out `git archive` substituting these tokens unconditionally.
+_build_info.py export-subst
+
+# 2. text eol=lf for anything a shell executes.
+#
+# This box has core.autocrlf true and the repository shipped no .gitattributes
+# at all, so a raw clone on Windows materialised every shell script with CRLF
+# line endings. A CRLF script is not a cosmetic problem: /bin/sh reads the \r
+# as part of the interpreter path or the argument and fails in ways that do not
+# name the cause. It also changes the file's hash, so two checkouts of the same
+# commit disagree -- avocet had to force LF by hand in its worktrees to make a
+# mutation script hash 4b95b510af4ebef1e30681937c241f84 and match this lane's
+# copy. That hand-forcing is the workaround this line removes.
+# Measured by avocet, 2026-09-14; closed here because this file had to exist
+# anyway.
+*.sh    text eol=lf
+*.bash  text eol=lf
+
+# Python and the packaging metadata are executed or parsed by tools that are
+# newline-agnostic, but pinning them keeps a diff from turning into a whole-file
+# rewrite on a Windows clone.
+*.py    text eol=lf
+*.toml  text eol=lf
+*.cfg   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
