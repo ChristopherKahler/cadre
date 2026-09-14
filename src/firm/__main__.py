@@ -577,12 +577,9 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="The id the receiver clears. Defaults to a "
                                  "timestamped one.")
 
-    # ---- doctor subparser ----
-    # `identity` deliberately takes no --workspace and no --firm-id. "What
-    # commit are you?" is a question about the INSTALL, and it has to be
-    # answerable on a machine that has Cadre installed and no firm yet. That is
-    # why it cannot live under `doctor`, which returns db-not-found and exits
-    # before any check runs when there is no .firm/firm.db.
+    # ---- install and identity subparsers ----
+    # Both are about the INSTALL rather than a firm, so neither takes
+    # --workspace. Issue #120.
     install_parser = subparsers.add_parser(
         "install",
         help="Install a Cadre wheel into this environment and PROVE it took.",
@@ -600,6 +597,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Machine-readable result.",
     )
 
+    # `identity` deliberately takes no --workspace and no --firm-id. "What
+    # commit are you?" is a question about the INSTALL, and it has to be
+    # answerable on a machine that has Cadre installed and no firm yet. That is
+    # why it cannot live under `doctor`, which returns db-not-found and exits
+    # before any check runs when there is no .firm/firm.db.
     identity_parser = subparsers.add_parser(
         "identity",
         help="What this install is: version, commit, wheel and hash. "
@@ -610,6 +612,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Machine-readable form.",
     )
 
+    # ---- doctor subparser ----
     doctor_parser = subparsers.add_parser(
         "doctor",
         help="Framework-drift report card for a firm; --fix repairs the "
