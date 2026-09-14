@@ -24,6 +24,7 @@ install too, which is exactly how a silent no-op passes a test.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -117,6 +118,20 @@ def _short(identity: dict[str, Any] | None) -> str:
     return f"{version} ({commit[:7]})" if commit else f"{version} (no commit)"
 
 
+def _recorded_sha256(identity: dict[str, Any] | None) -> str | None:
+    """The sha256 pip recorded for the installed wheel, or None when none was."""
+    wheel = ((identity or {}).get("sources") or {}).get("wheel") or {}
+    return wheel.get("sha256") or None
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def run_install(wheel: Path, *, python_bin: str | None = None,
                 as_json: bool = False) -> int:
     python_bin = python_bin or sys.executable
@@ -198,6 +213,12 @@ def run_install(wheel: Path, *, python_bin: str | None = None,
     if wanted["version"] and got_version != wanted["version"]:
         mismatches.append(f"version: wheel says {wanted['version']}, "
                           f"the environment reports {got_version}")
+    file_sha = _file_sha256(wheel)
+    result["wheel_sha256"] = file_sha
+    after_sha = _recorded_sha256(after)
+    if after_sha and after_sha != file_sha:
+        mismatches.append(f"sha256: the wheel file is {file_sha}, "
+                          f"the environment recorded {after_sha}")
 
     if mismatches:
         result["reason"] = "identity-did-not-take"
@@ -211,16 +232,35 @@ def run_install(wheel: Path, *, python_bin: str | None = None,
         return emit(1)
 
     result["ok"] = True
-    result["changed"] = result["before"] != result["after"]
+    before_sha = _recorded_sha256(before)
+    result["sha256_before"] = before_sha
+    result["sha256_after"] = after_sha
+    # Bytes are compared only when both sides were read. A label is a version
+    # and a short commit; two dirty builds of one commit share it and differ in
+    # every byte that matters. Claiming identical bytes from equal labels is #120
+    # turned around (G2 F2).
+    same_bytes = (before_sha == after_sha) if (before_sha and after_sha) else None
+    label_changed = result["before"] != result["after"]
+    result["bytes_verified"] = same_bytes is not None
+    result["changed"] = (True if (label_changed or same_bytes is False)
+                         else (False if same_bytes else None))
     if not as_json:
-        if result["changed"]:
-            print(f"installed {wheel.name}")
+        print(f"installed {wheel.name}")
+        if label_changed:
             print(f"  {result['before']}  ->  {result['after']}")
-        else:
+            if before_sha and after_sha:
+                print(f"  sha256 {before_sha}  ->  {after_sha}")
+        elif same_bytes is False:
+            print(f"  same label {result['after']}, DIFFERENT bytes:")
+            print(f"  sha256 {before_sha}  ->  {after_sha}")
+        elif same_bytes:
             # Not a failure, but it must be said out loud. Silence here is the
             # whole bug: an operator who reinstalls and sees nothing assumes
             # something happened.
-            print(f"installed {wheel.name}")
             print(f"  identity UNCHANGED: {result['after']}")
-            print("  the environment already held exactly these bytes.")
+            print(f"  the environment already held exactly these bytes (sha256 {after_sha}).")
+        else:
+            print(f"  label unchanged: {result['after']}")
+            print("  bytes not verified: the previous install recorded no wheel hash, "
+                  "so this cannot say whether the bytes changed.")
     return emit(0)

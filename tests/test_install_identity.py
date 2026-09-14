@@ -523,3 +523,75 @@ def test_doctor_reads_the_editable_record_instead_of_saying_none_was_written(sta
     card = next(c for c in checks if "install-artifact" in c.values())
     assert "wrote no direct_url.json" not in card["detail"]
     assert "editable" in card["detail"]
+
+
+# ---------------------------------------------------------------------------
+# G2 F2 — a byte-identity claim only when both hashes were read and are equal
+# ---------------------------------------------------------------------------
+
+_DIRTY_VERSION = "0.1.0.dev441+g21aba4f.dirty"
+
+
+def _installed(sha256, *, commit=COMMIT_A, version=_DIRTY_VERSION):
+    wheel = None if sha256 is None else {"kind": "wheel", "url": "file:///w.whl",
+                                         "filename": "w.whl", "sha256": sha256}
+    return {"version": version, "sources": {"build": {"commit": commit}, "wheel": wheel}}
+
+
+def _install_with(monkeypatch, before, after):
+    import hashlib
+    states = iter([before, after])
+    monkeypatch.setattr(install_mod, "_installed_identity", lambda python_bin: next(states))
+    monkeypatch.setattr(install_mod, "run_utf8",
+                        lambda *a, **k: types.SimpleNamespace(returncode=0, stdout="", stderr=""))
+    return hashlib
+
+
+def _file_sha(path):
+    import hashlib
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_install_never_claims_the_same_bytes_when_the_bytes_differ(tmp_path, capsys, monkeypatch):
+    """avocet's L7: two dirty builds of one commit share a label and differ in
+    bytes. The install used to print that the environment already held exactly
+    these bytes. It did not."""
+    wheel = _wheel(tmp_path, f"cadre-{_DIRTY_VERSION}-py3-none-any.whl", COMMIT_A, _DIRTY_VERSION)
+    old = "1" * 64
+    _install_with(monkeypatch, _installed(old), _installed(_file_sha(wheel)))
+
+    rc = install_mod.run_install(wheel)
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "exactly these bytes" not in out
+    assert old in out and _file_sha(wheel) in out
+
+
+def test_install_says_the_same_bytes_only_when_both_hashes_match(tmp_path, capsys, monkeypatch):
+    # Control: the same wheel twice. Here the claim is true and must still be made.
+    wheel = _wheel(tmp_path, f"cadre-{_DIRTY_VERSION}-py3-none-any.whl", COMMIT_A, _DIRTY_VERSION)
+    sha = _file_sha(wheel)
+    _install_with(monkeypatch, _installed(sha), _installed(sha))
+
+    assert install_mod.run_install(wheel) == 0
+    assert "exactly these bytes" in capsys.readouterr().out
+
+
+def test_install_says_bytes_not_verified_when_the_old_install_recorded_no_hash(tmp_path, capsys, monkeypatch):
+    wheel = _wheel(tmp_path, f"cadre-{_DIRTY_VERSION}-py3-none-any.whl", COMMIT_A, _DIRTY_VERSION)
+    _install_with(monkeypatch, _installed(None), _installed(_file_sha(wheel)))
+
+    assert install_mod.run_install(wheel) == 0
+    out = capsys.readouterr().out
+    assert "exactly these bytes" not in out
+    assert "not verified" in out
+
+
+def test_install_fails_when_the_environment_recorded_a_different_file(tmp_path, capsys, monkeypatch):
+    # The installed record must be THIS wheel file, not just its label.
+    wheel = _wheel(tmp_path, f"cadre-{_DIRTY_VERSION}-py3-none-any.whl", COMMIT_A, _DIRTY_VERSION)
+    _install_with(monkeypatch, _installed("1" * 64), _installed("2" * 64))
+
+    assert install_mod.run_install(wheel) == 1
+    assert "sha256" in capsys.readouterr().err
