@@ -21,6 +21,7 @@ the archive, and failing that reports ``unknown``. It never invents a commit.
 from __future__ import annotations
 
 import datetime
+import os
 import pathlib
 import subprocess
 
@@ -32,6 +33,40 @@ _STAMP = _ROOT / "src" / "firm" / "_build_stamp.py"
 
 
 def _git(*args: str) -> str | None:
+    """Ask git about THIS source tree. None on any failure, including no git.
+
+    Also None when the source root is not the top of its own repository. git
+    walks up from its working directory, so a Cadre tree unpacked inside some
+    other project's repository used to be stamped with that project's commit,
+    and the stamp outranks the commit the archive really carries (#120 G2 F3,
+    measured by avocet as leg L9).
+    """
+    if not _own_repository():
+        return None
+    return _run_git(*args)
+
+
+_OWN_REPOSITORY: bool | None = None
+
+
+def _own_repository() -> bool:
+    """True only when git's top level is the source root itself. Asked once."""
+    global _OWN_REPOSITORY
+    if _OWN_REPOSITORY is None:
+        top = _run_git("rev-parse", "--show-toplevel")
+        _OWN_REPOSITORY = top is not None and _same_path(top, _ROOT)
+    return _OWN_REPOSITORY
+
+
+def _same_path(a: object, b: object) -> bool:
+    """Compare paths the way the filesystem does: resolved, and case-folded on
+    Windows. git prints forward slashes there, and macOS temp directories sit
+    behind a symlink."""
+    return (os.path.normcase(os.path.realpath(str(a)))
+            == os.path.normcase(os.path.realpath(str(b))))
+
+
+def _run_git(*args: str) -> str | None:
     """Run git in the source root. None on any failure, including no git."""
     try:
         # encoding and errors spelled out as literals, not text=True. This runs
