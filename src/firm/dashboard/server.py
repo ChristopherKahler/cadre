@@ -2683,19 +2683,95 @@ def run_dashboard(
 _FIRM_PREFIX_RE = re.compile(r"^/f/([a-z0-9][a-z0-9_-]*)(/.*)?$")
 
 
-def discover_firms(root: Path) -> dict[str, dict[str, Any]]:
+def root_state(root: Path) -> str:
+    """Classify a firms root before anything tries to serve it.
+
+    Absent is not empty is not zero. The hub used to collapse every one of
+    these into a single ``no-firms-found`` refusal, so the operator who
+    mistyped a path, the operator whose root was unreadable, and the operator
+    on a brand new machine all read the same sentence — and none of them could
+    act on it, because the sentence did not describe what had happened.
+
+    Five answers:
+
+    - ``absent``      — not there, but its parent is. The ordinary fresh
+                        machine: ``~/firms`` on a box that has never run
+                        Cadre. The caller creates it.
+    - ``unreachable`` — not there and neither is its parent, or something
+                        that is not a directory sits in its place. The shape
+                        a typo'd ``--firms-root`` takes. The caller refuses.
+    - ``unreadable``  — there, and the process cannot list it.
+    - ``empty``       — there, listable, and no child holds ``.firm/firm.db``.
+    - ``populated``   — there, and at least one child looks like a firm.
+
+    "Looks like a firm" is deliberately weaker here than in
+    :func:`scan_firms_root`: a workspace whose database is corrupt still makes
+    the root populated rather than empty, because the operator has a firm on
+    disk and telling them the building is empty would be the same lie in a
+    different place.
+    """
+    if not root.exists():
+        return "absent" if root.parent.is_dir() else "unreachable"
+    if not root.is_dir():
+        return "unreachable"
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return "unreadable"
+    for d in entries:
+        try:
+            if (d / ".firm" / "firm.db").exists():
+                return "populated"
+        except OSError:
+            continue
+    return "empty"
+
+
+def scan_firms_root(
+    root: Path,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, str]]]:
     """Scan *root* for workspaces holding ``.firm/firm.db``.
 
-    The firm id comes from each db's firm row (folder names are the
-    operator's business; ids are the runtime's). New firm = new folder —
-    no registration step.
+    Returns ``(firms, skipped)``. The firm id comes from each db's firm row
+    (folder names are the operator's business; ids are the runtime's). New
+    firm = new folder — no registration step.
+
+    Every workspace that LOOKS like a firm and is NOT served comes back in
+    *skipped*, carrying the path and the reason. That half used to be dropped
+    on the floor: a corrupt database, a database with no firm row, and a
+    database the process could not read all produced the same silent nothing,
+    and the operator was then told "no firms found" while their firm sat on
+    disk in front of them.
+
+    The read-a-byte probe before ``connect`` is what separates "cannot read
+    this file" from "read it, and it is not a database". Both arrive as a
+    ``sqlite3.Error`` otherwise, and reporting a permissions problem as
+    corruption sends the operator to fix the wrong thing.
     """
     firms: dict[str, dict[str, Any]] = {}
+    skipped: list[dict[str, str]] = []
     if not root.is_dir():
-        return firms
-    for d in sorted(root.iterdir()):
+        return firms, skipped
+    try:
+        entries = sorted(root.iterdir())
+    except OSError as exc:
+        # run_hub classifies an unreadable root before it ever gets here, so
+        # this is the race where it becomes unreadable in between.
+        return firms, [{"path": str(root), "reason": "unreadable-root",
+                        "detail": str(exc)}]
+    for d in entries:
         db = d / ".firm" / "firm.db"
-        if not db.exists():
+        try:
+            if not db.exists():
+                continue
+        except OSError:
+            continue
+        try:
+            with open(db, "rb") as fh:
+                fh.read(16)
+        except OSError as exc:
+            skipped.append({"path": str(d), "reason": "unreadable-db",
+                            "detail": str(exc)})
             continue
         try:
             conn = connect(db)
@@ -2704,9 +2780,16 @@ def discover_firms(root: Path) -> dict[str, dict[str, Any]]:
                 row = conn.execute("SELECT id, name FROM firm LIMIT 1").fetchone()
             finally:
                 conn.close()
-        except sqlite3.Error:
-            continue  # unreadable db — skip, don't take the hub down
+        except sqlite3.Error as exc:
+            skipped.append({"path": str(d), "reason": "corrupt-db",
+                            "detail": str(exc)})
+            continue
         if not row:
+            skipped.append({
+                "path": str(d), "reason": "no-firm-row",
+                "detail": "the database has no firm row — founding never "
+                          "finished in this workspace",
+            })
             continue
         if row["id"] in firms:
             # Duplicate firm id (usually a backup copy left inside the scan
@@ -2733,7 +2816,18 @@ def discover_firms(root: Path) -> dict[str, dict[str, Any]]:
             "db_path": db.resolve(),
             "name": row["name"] or row["id"],
         }
-    return firms
+    return firms, skipped
+
+
+def discover_firms(root: Path) -> dict[str, dict[str, Any]]:
+    """The firms under *root*, keyed by the id in each db's firm row.
+
+    A thin wrapper over :func:`scan_firms_root` for the callers that only
+    resolve a firm and have no operator to report to. Anything that answers a
+    human — the startup line, ``/api/hub``, the founding screen — calls
+    ``scan_firms_root`` and reports the skipped half too.
+    """
+    return scan_firms_root(root)[0]
 
 
 # --- Board prefs — floor order + the desk pad ------------------------------
@@ -2775,8 +2869,13 @@ def _floor_sort(cards: list[dict[str, Any]],
 
 
 def hub_summary(firms: dict[str, dict[str, Any]],
-                prefs: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Portfolio payload: one health card per firm."""
+                prefs: dict[str, Any] | None = None,
+                skipped: list[dict[str, str]] | None = None) -> dict[str, Any]:
+    """Portfolio payload: one health card per firm, plus what was NOT served.
+
+    *skipped* defaults to empty rather than being omitted, so a reader can
+    always tell "nothing was skipped" from "this payload predates the field".
+    """
     now = datetime.now(tz=timezone.utc)
     cards = []
     for fid, info in firms.items():
@@ -2835,7 +2934,8 @@ def hub_summary(firms: dict[str, dict[str, Any]],
                       for v in load_custom_views(info["workspace"])],
         })
     _floor_sort(cards, (prefs or {}).get("floor_order") or [])
-    return {"generated_at": now.isoformat(), "firms": cards}
+    return {"generated_at": now.isoformat(), "firms": cards,
+            "skipped": list(skipped or [])}
 
 
 _HUB_HTML = """<!doctype html>
@@ -2950,12 +3050,29 @@ load(); setInterval(load, 10000);
 
 
 def make_hub_handler(root: Path) -> type[BaseHTTPRequestHandler]:
-    registry: dict[str, dict[str, Any]] = discover_firms(root)
+    registry: dict[str, dict[str, Any]] = {}
+    skipped: list[dict[str, str]] = []
+
+    def _rescan() -> None:
+        """Re-read the root into BOTH halves at once.
+
+        One seam rather than five ``registry.update(discover_firms(...))``
+        calls, because firms and skipped are two halves of one scan: a site
+        that refreshed only the firms would serve a live registry beside a
+        stale list of what was skipped, and the operator would be told about
+        a broken firm that had since been repaired, or not told about one
+        that had just broken.
+        """
+        firms, skips = scan_firms_root(root)
+        registry.clear()
+        registry.update(firms)
+        skipped[:] = skips
+
+    _rescan()
 
     def _resolve(fid: str) -> dict[str, Any] | None:
         if fid not in registry:
-            registry.clear()
-            registry.update(discover_firms(root))  # lazy rescan — new firms appear live
+            _rescan()  # lazy rescan — new firms appear live
         return registry.get(fid)
 
     class HubHandler(BaseHTTPRequestHandler):
@@ -2967,22 +3084,34 @@ def make_hub_handler(root: Path) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:
             path = self.path
             if path in ("/", "/index.html"):
+                # A hub with no firms sends the operator to the one screen
+                # that can do anything about it. The portfolio landing says
+                # "No firms found." and offers no way forward, so a cold
+                # start used to end on a page that was a statement and not a
+                # door. Only when the registry is empty: with firms present
+                # this is the portfolio and stays the portfolio.
+                if not registry:
+                    _rescan()
+                if not registry:
+                    self.send_response(302)
+                    self.send_header("Location", "/next/")
+                    self.end_headers()
+                    return
                 _http_send(self, 200, _HUB_HTML.encode(), "text/html; charset=utf-8")
                 return
             if path == "/api/hub":
-                registry.clear()
-                registry.update(discover_firms(root))
-                _http_send(self, 200, hub_summary(registry, load_prefs(root)))
+                _rescan()
+                _http_send(self, 200,
+                           hub_summary(registry, load_prefs(root), skipped))
                 return
             if path in ("/next", "/next/", "/next/index.html"):
                 _http_send(self, 200, _NEXT_HTML.read_bytes(), "text/html; charset=utf-8")
                 return
             if path == "/api/next/hub":
                 from firm.dashboard import boardroom
-                registry.clear()
-                registry.update(discover_firms(root))
+                _rescan()
                 prefs = load_prefs(root)
-                summary = hub_summary(registry, prefs)
+                summary = hub_summary(registry, prefs, skipped)
                 summary["firms"] = boardroom.enrich(summary["firms"], registry)
                 summary["prefs"] = prefs
                 _http_send(self, 200, summary)
@@ -3185,8 +3314,7 @@ def make_hub_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 elif verb == "commit":
                     result = founding.commit(root, body.get("proposal") or {})
                     if result.get("ok"):
-                        registry.clear()   # the new floor appears without a restart
-                        registry.update(discover_firms(root))
+                        _rescan()   # the new floor appears without a restart
                     _http_send(self, 200, result)
                 elif verb == "pulse":
                     fid = str(body.get("firm_id") or "")
@@ -3275,6 +3403,120 @@ def make_hub_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     return HubHandler
 
 
+def build_hub_server(
+    root: Path,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8484,
+) -> tuple[ThreadingHTTPServer | None, dict[str, Any]]:
+    """Everything up to and including bind. Returns ``(server, payload)``.
+
+    Split out of :func:`run_hub` for two reasons, and the second is the one
+    that matters.
+
+    The first is that a hub must be able to start with no firms at all. It
+    used to refuse — ``discover_firms`` came back empty and the function
+    returned 1 before it ever constructed the server — and the only screen
+    that can found a firm is served by that server. So a new operator could
+    not found their first firm without a hub, and could not start a hub
+    without a firm. Nothing in the founding flow needed fixing; it had simply
+    never been reachable.
+
+    The second is that ``run_hub`` blocks in ``serve_forever``, so nothing
+    could test any of this. The one path that returned instead of blocking
+    was the refusal, which is why the test for the ``CADRE_DB_URL`` strip was
+    written against an empty root: not because the strip has anything to do
+    with empty roots, but because that was the only way to get the function
+    to come back. Everything above the bind now returns a value, so the
+    behaviour can be asserted without a server ever being served.
+
+    Refusal returns ``(None, {"ok": False, "reason": ...})``; the caller
+    prints the payload and exits non-zero.
+
+    The hub is multi-firm by definition, so the single-firm CADRE_DB_URL
+    override is actively stripped here — inheriting it (e.g. from a shell
+    that sourced a firm's .env) would silently point EVERY firm's card at
+    one shared database. Remote-backed firms get their own dedicated
+    ``cadre dashboard`` process with the env set.
+    """
+    dropped = [k for k in ("CADRE_DB_URL", "CADRE_DB_TOKEN") if os.environ.pop(k, None)]
+    warning = ("hub ignores " + "/".join(dropped)
+               + " — remote-backed firms need their own dashboard process"
+               ) if dropped else None
+
+    def _refuse(reason: str, detail: str) -> tuple[None, dict[str, Any]]:
+        """Every refusal carries the strip warning too.
+
+        A hub that dropped CADRE_DB_URL and then refused the root would
+        otherwise report only the refusal, and the operator would never learn
+        that the override they were relying on had been discarded — which is
+        exactly what they need to know before they run it again.
+        """
+        out: dict[str, Any] = {"ok": False, "reason": reason,
+                               "root": str(root), "detail": detail}
+        if warning:
+            out["warning"] = warning
+        return None, out
+
+    root = root.expanduser()
+    state = root_state(root)
+    if state == "unreachable":
+        return _refuse(
+            "firms-root-unreachable",
+            f"neither {root} nor its parent {root.parent} exists — check the "
+            f"path before anything is created",
+        )
+    if state == "unreadable":
+        return _refuse(
+            "firms-root-unreadable",
+            f"{root} exists but cannot be listed — check its permissions. "
+            f"Nothing was read and nothing was changed.",
+        )
+
+    created = False
+    if state == "absent":
+        # The default root is ~/firms, which does not exist on a machine that
+        # has never run Cadre. Refusing here would be the old lockout wearing
+        # a new reason string. parents=False on purpose: root_state has
+        # already established the parent exists, and a mistyped path with a
+        # missing parent is refused above rather than built.
+        try:
+            root.mkdir()
+        except OSError as exc:
+            return _refuse("firms-root-uncreatable", str(exc))
+        created = True
+
+    root = root.resolve()
+    firms, skipped = scan_firms_root(root)
+
+    from firm.dashboard import launch
+    launch.ensure_boardroom_claude(root)   # the Co-Board's loadout, laid once
+    handler = make_hub_handler(root)
+    server = ThreadingHTTPServer((host, port), handler)
+    board_auth.board_token()   # minted before first use so the path is live
+    # The BOUND port, never the requested one. With --port 0 the kernel picks,
+    # and a payload echoing the argument would advertise ":0" — unusable to a
+    # human and worse to a harness, which would then talk to whatever else
+    # happened to be listening.
+    bound = server.server_address[1]
+    url = f"http://{host}:{bound}"
+    payload: dict[str, Any] = {
+        "ok": True,
+        "url": url,
+        # Named separately so a cold start does not depend on the operator
+        # knowing that founding lives under /next/.
+        "founding_url": f"{url}/next/",
+        "root": str(root),
+        "created": created,
+        "firms": sorted(firms),
+        "skipped": skipped,
+    }
+    if warning:
+        payload["warning"] = warning
+    payload["board_token"] = str(board_auth.board_token_path())
+    return server, payload
+
+
 def run_hub(
     root: Path,
     *,
@@ -3288,27 +3530,10 @@ def run_hub(
     that sourced a firm's .env) would silently point EVERY firm's card at
     one shared database. Remote-backed firms get their own dedicated
     ``cadre dashboard`` process with the env set."""
-    dropped = [k for k in ("CADRE_DB_URL", "CADRE_DB_TOKEN") if os.environ.pop(k, None)]
-    if dropped:
-        print(json.dumps({"warning": "hub ignores " + "/".join(dropped)
-                          + " — remote-backed firms need their own dashboard process"}))
-    root = root.expanduser().resolve()
-    firms = discover_firms(root)
-    if not firms:
-        print(json.dumps({"ok": False, "reason": "no-firms-found", "root": str(root)}))
+    server, payload = build_hub_server(root, host=host, port=port)
+    print(json.dumps(payload))
+    if server is None:
         return 1
-    from firm.dashboard import launch
-    launch.ensure_boardroom_claude(root)   # the Co-Board's loadout, laid once
-    handler = make_hub_handler(root)
-    server = ThreadingHTTPServer((host, port), handler)
-    board_auth.board_token()   # minted before first use so the path is live
-    print(json.dumps({
-        "ok": True,
-        "url": f"http://{host}:{port}",
-        "root": str(root),
-        "firms": sorted(firms),
-        "board_token": str(board_auth.board_token_path()),
-    }))
     try:
         server.serve_forever()
     except KeyboardInterrupt:
