@@ -21,6 +21,7 @@ doctor ran, not that the firm is healthy — read the card.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -313,6 +314,70 @@ def diagnose(workspace: Path, firm_id: str, *,
                 not charter_path.is_file(), "train",
                 "no proving unit — the wiring predates verified equipping"
                 if charter_path.is_file() else "firm not yet wired"))
+
+        # 12. the graph copy of this extension's prompt domain — OPERATOR, and
+        #     deliberately NOT mechanical. Issue #115: base matches a domain's
+        #     keywords from the installed manifest but SERVES its rule text
+        #     from the graph, and the graph copy wins. A copy written by an
+        #     older `base domain sync` therefore stands in front of the
+        #     shipped manifest and Members are told the old thing.
+        #
+        #     The route is "operator" because `fix()` acts on route ==
+        #     "mechanical" and THERE IS NO FIX HERE TO MAKE. base 0.15.2
+        #     exposes no verb that removes such a rule — `rule remove --index`
+        #     matches an `index` triple these rules do not carry, `domain sync`
+        #     appends rather than replaces, `graph supersede` does not index
+        #     rules, `graph apply-ops` retires only facts with a sync id. The
+        #     owner of the repair is base. Routing it mechanical would have
+        #     `--fix` report a repair nobody can perform.
+        from firm.services import base_extension as _base_extension
+        from firm.sysconfig.service import which_base as _which_base
+
+        _base_bin = _which_base()
+        if not _base_bin:
+            checks.append(_check(
+                "base-extension-rules",
+                "Members are told what the manifest says", True, "operator",
+                "base is not on this machine, so no domain is injected at all"))
+        else:
+            try:
+                _rendered = _base_extension.render()
+                _foreign = _base_extension.foreign_rules(
+                    _rendered, _base_bin, _base_extension._base_env())
+            except _base_extension.GraphReadFailed as _exc:
+                # A zero here would mean "I could not see", which reads
+                # identically to "nothing is wrong". Say undeterminable.
+                checks.append(_check(
+                    "base-extension-rules",
+                    "Members are told what the manifest says", False,
+                    "operator", f"could not read base's graph copy: {_exc}",
+                    state="undeterminable"))
+            except (OSError, ValueError, subprocess.SubprocessError) as _exc:
+                checks.append(_check(
+                    "base-extension-rules",
+                    "Members are told what the manifest says", False,
+                    "operator", f"the check could not run: {_exc}",
+                    state="undeterminable"))
+            else:
+                _n = sum(len(f["foreign"]) for f in _foreign)
+                _names = ", ".join(f["domain"] for f in _foreign)
+                # PRINT THE RULES, not just how many. A card that says a
+                # collision exists without showing what is being served leaves
+                # the operator exactly where they started: unable to tell which
+                # of two rule sets is reaching their Members.
+                _texts = "; ".join(
+                    _r for _f in _foreign for _r in _f["foreign"])
+                checks.append(_check(
+                    "base-extension-rules",
+                    "Members are told what the manifest says", not _foreign,
+                    "operator",
+                    (f"{_n} rule(s) under {_names} come from base's graph, not "
+                     "from Cadre's manifest, and the graph copy is what a "
+                     f"Member receives: {_texts} — OWNER: base, which offers "
+                     "no verb that removes them (issue #115). Cadre installed "
+                     f"correctly. See them with: base rule list --domain {_names}")
+                    if _foreign else
+                    "every rule served under Cadre's domain is Cadre's own"))
     finally:
         conn.close()
     return checks
