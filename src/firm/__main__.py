@@ -578,6 +578,21 @@ def _build_parser() -> argparse.ArgumentParser:
                                  "timestamped one.")
 
     # ---- doctor subparser ----
+    # `identity` deliberately takes no --workspace and no --firm-id. "What
+    # commit are you?" is a question about the INSTALL, and it has to be
+    # answerable on a machine that has Cadre installed and no firm yet. That is
+    # why it cannot live under `doctor`, which returns db-not-found and exits
+    # before any check runs when there is no .firm/firm.db.
+    identity_parser = subparsers.add_parser(
+        "identity",
+        help="What this install is: version, commit, wheel and hash. "
+             "Needs no firm and no workspace.",
+    )
+    identity_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="Machine-readable form.",
+    )
+
     doctor_parser = subparsers.add_parser(
         "doctor",
         help="Framework-drift report card for a firm; --fix repairs the "
@@ -1215,6 +1230,10 @@ def main(argv: list[str] | None = None) -> int:
         from firm.cli.relay import run_relay
 
         return run_relay(args)
+    if args.command == "identity":
+        from firm.identity import run_identity
+
+        return run_identity(as_json=args.as_json)
 
     if args.command == "doctor":
         from firm.cli.doctor import run_doctor
