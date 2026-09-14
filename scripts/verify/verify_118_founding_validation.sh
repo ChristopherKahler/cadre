@@ -18,6 +18,7 @@
 #   M-F4c  base row ok constant False                         (F4)
 #   M-F6a  the helper quotes the last line                    (F6)
 #   M-F6b  the --version site quotes its last line inline     (F6)
+#   M-F6c  the helper quotes the FIRST unindented line        (F6, added: see below)
 #   M-F5   unused from-import of _installed_path in _tier     (F5)
 #
 # PREDICTED BEFORE ANY CODE, in the brief's pre-registration (R red, . green),
@@ -26,6 +27,10 @@
 #   M-D  ...R.......   M-E1/M-E2/M-F3b/M-F3c .....R.....
 #   M-F2a/M-F2b/M-F2c/M-F3a .......R...   M-F4a/M-F4b/M-F4c ........R..
 #   M-F6a/M-F6b .........R.   M-F5 ..........R
+#   M-F6c .........R. (only through the [traceback] leg). Added after the first
+#   run and predicted before this row ran, in the brief's ADDENDUM: under M-F6a
+#   the traceback leg stayed green, because a traceback's last line is its last
+#   unindented line, so no row proved "last unindented" over "first unindented".
 #
 # THE INSTRUMENT. One pytest run per row over both files, with a JUnit report.
 # Every result is attributed to its arm by TEST NAME, never by position (law 33).
@@ -233,14 +238,16 @@ row M-F6a "$READY" 'return (flush[-1] if flush else lines[-1]).strip()[:200]' \
                    'return lines[-1].strip()[:200]  # MUTANT M-F6a' ".........R."
 row M-F6b "$READY" '+ _names_the_failure(probe))' \
                    '+ (probe.stderr or probe.stdout).strip().splitlines()[-1][:200])  # MUTANT M-F6b' ".........R."
+row M-F6c "$READY" 'return (flush[-1] if flush else lines[-1]).strip()[:200]' \
+                   'return (flush[0] if flush else lines[-1]).strip()[:200]  # MUTANT M-F6c' ".........R."
 row M-F5 "$READY" 'from firm.services.graph_isolation import tier_extensions_dir' \
                   'from firm.services.base_extension import _installed_path  # MUTANT M-F5
     from firm.services.graph_isolation import tier_extensions_dir' "..........R"
 
 LEFT=$(grep -rn "MUTANT" src tests | wc -l)
 echo
-echo "ROWS VISITED = $ROWS (want 19); MUTANT markers left in src and tests = $LEFT"
-if [ "$ROWS" -ne 19 ] || [ "$LEFT" -ne 0 ]; then
+echo "ROWS VISITED = $ROWS (want 20); MUTANT markers left in src and tests = $LEFT"
+if [ "$ROWS" -ne 20 ] || [ "$LEFT" -ne 0 ]; then
   echo "VERDICT: VOID — the matrix did not run whole, or a mutation survived restore"
   exit 2
 fi
