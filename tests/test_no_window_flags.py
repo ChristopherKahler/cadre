@@ -363,3 +363,60 @@ def test_the_console_probe_reads_both_states_on_real_windows():
         f"CONOUT$ opened in a process with no console: {detached}")
     assert detached["probe"] is False, (
         f"the probe said console where there is none: {detached}")
+
+
+# ---------------------------------------------------------------------------
+# PART TWO -- spawn_detached, the Board-fired pulse (design D1c)
+# ---------------------------------------------------------------------------
+#
+# The hub fires a Board pulse through WindowsScheduler.spawn_detached and
+# returns. It used to pass DETACHED_PROCESS, which gives the pulse wrapper no
+# console at all, so every console program the wrapper started -- the pulse's
+# python, then each claude.exe -- got a window of its own. It now goes through
+# firm.core.proc with CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP: a hidden
+# console of its own that the pulse and its Members inherit, and that is not
+# the hub's console, so Ctrl+C in the hub's terminal does not reach the pulse.
+#
+# The flag values are set on the subprocess module for the arm, because the
+# names exist there only on Windows and spawn_detached reads them by name.
+
+_WIN32_FLAG_NAMES = {
+    "CREATE_NO_WINDOW": CREATE_NO_WINDOW,
+    "CREATE_NEW_PROCESS_GROUP": CREATE_NEW_PROCESS_GROUP,
+    "CREATE_NEW_CONSOLE": CREATE_NEW_CONSOLE,
+    "DETACHED_PROCESS": DETACHED_PROCESS,
+}
+
+
+@pytest.mark.parametrize("hub_console", [3, 0, OSError("no answer")],
+                         ids=["hub in a terminal", "hub with no console",
+                              "console question fails"])
+def test_a_board_fired_pulse_gets_a_hidden_console_of_its_own(
+        monkeypatch, spawned, tmp_path, hub_console):
+    from firm.sched.winsched import WindowsScheduler
+
+    _on(monkeypatch, "win32")
+    _console(monkeypatch, hub_console)
+    for name, value in _WIN32_FLAG_NAMES.items():
+        monkeypatch.setattr(subprocess, name, value, raising=False)
+
+    out = WindowsScheduler(launcher_dir=tmp_path).spawn_detached(
+        ["pulse-wrapper"], workdir=tmp_path, env={"CADRE_PROBE": "d1c"})
+
+    assert len(spawned) == 1, f"{len(spawned)} spawns for one pulse"
+    kw = spawned[0]
+    flags = kw.get("creationflags") or 0
+    assert not flags & DETACHED_PROCESS, (
+        f"creationflags {flags:#x} carries DETACHED_PROCESS: the pulse has no "
+        "console, so every console program it starts opens a window")
+    assert flags == CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP, f"{flags:#x}"
+    assert kw.get("encoding") == "utf-8", (
+        "spawned outside firm.core.proc, so neither the window rule nor the "
+        "refusal applies to it")
+    for stream in ("stdin", "stdout", "stderr"):
+        assert kw.get(stream) is subprocess.DEVNULL, (
+            f"{stream} is {kw.get(stream)!r}; a detached pulse holds no handle "
+            "to the hub's console")
+    assert kw.get("cwd") == str(tmp_path)
+    assert kw.get("env", {}).get("CADRE_PROBE") == "d1c"
+    assert out == {"via": "detached-popen", "pid": 4242}

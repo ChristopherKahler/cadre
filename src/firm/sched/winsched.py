@@ -22,6 +22,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from firm.core.proc import popen_utf8
 from firm.sched.base import SchedulerError, interval_to_seconds, run_cmd
 
 _TASK_FOLDER = "Cadre"
@@ -268,11 +269,18 @@ class WindowsScheduler:
                        unit: str | None = None) -> dict[str, Any]:
         full_env = dict(os.environ)
         full_env.update(env)
-        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | \
+        # A hidden console of its own (#119). The pulse and the Members it
+        # starts inherit that console, so none of them opens a window, and it is
+        # not the hub's console, so Ctrl+C in the hub's terminal does not reach
+        # the pulse. DETACHED_PROCESS used to give the pulse no console at all,
+        # and then every console program it started got a window of its own.
+        # stdin is closed rather than inherited: the pulse reads nothing, and a
+        # handle to the hub's console input is not something it should hold.
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | \
             getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        proc = subprocess.Popen(
+        proc = popen_utf8(
             argv, cwd=str(workdir), env=full_env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            creationflags=flags, close_fds=True,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, creationflags=flags, close_fds=True,
         )
         return {"via": "detached-popen", "pid": proc.pid}
