@@ -8,11 +8,16 @@ is the part that breaks in the field: the artifacts each backend writes
 
 from __future__ import annotations
 
+import json
 import plistlib
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from firm.sched import resolve_scheduler
+from firm.sched import resolve_scheduler, winlaunch
 from firm.sched.base import interval_to_seconds
 from firm.sched.launchd import LaunchdScheduler
 from firm.sched.systemd import SystemdScheduler
@@ -20,6 +25,9 @@ from firm.sched.winsched import WindowsScheduler
 import firm.sched.launchd as launchd_mod
 import firm.sched.systemd as systemd_mod
 import firm.sched.winsched as winsched_mod
+
+# The pythonw.exe an install resolves, wherever a test needs one to exist.
+_PYTHONW = "C:\\Users\\operator\\cadre\\.venv\\Scripts\\pythonw.exe"
 
 
 @pytest.fixture
@@ -32,10 +40,14 @@ def ok_cmd(monkeypatch):
 
     for mod in (systemd_mod, launchd_mod, winsched_mod):
         monkeypatch.setattr(mod, "run_cmd", fake)
-    # "Every command succeeds" includes the headless self-test a Windows install
-    # runs first (#119 A7). Tests that exercise that self-test replace this.
-    monkeypatch.setattr(winsched_mod, "_headless_self_test",
-                        lambda: (True, ""), raising=False)
+    # "Every command succeeds" includes the two things a Windows install checks
+    # before it writes anything (#119, R3 and R4): a pythonw.exe beside the
+    # installing Python, and the self-test that runs the launcher on it. Tests
+    # that exercise either replace it.
+    monkeypatch.setattr(winsched_mod, "_resolve_pythonw",
+                        lambda: Path(_PYTHONW), raising=False)
+    monkeypatch.setattr(winsched_mod, "_pythonw_self_test",
+                        lambda pythonw: (True, ""), raising=False)
     return calls
 
 
@@ -135,16 +147,21 @@ def test_launchd_service_keeps_alive_on_failure(tmp_path, ok_cmd):
 # ---------------------------------------------------------------------------
 
 
+def _launcher_spec(directory, stem="cadre-heartbeat-lab"):
+    return json.loads((directory / f"{stem}.json").read_text(encoding="utf-8"))
+
+
 def test_winsched_timer_launcher_and_flags(tmp_path, ok_cmd):
     s = WindowsScheduler(launcher_dir=tmp_path)
     s.install_timer("cadre-heartbeat-lab", description="d", workdir=tmp_path,
                     env={"FIRM_ID": "lab"}, argv=["py", "-m", "firm", "pulse"],
                     interval="30m")
-    launcher = (tmp_path / "cadre-heartbeat-lab.cmd").read_text(encoding="utf-8")
-    assert 'set "FIRM_ID=lab"' in launcher
-    assert "rem interval=30m" in launcher
-    assert f'cd /d "{tmp_path}"' in launcher
-    assert ":loop" not in launcher                      # timers don't supervise
+    assert _launcher_spec(tmp_path) == {
+        "stem": "cadre-heartbeat-lab", "argv": ["py", "-m", "firm", "pulse"],
+        "env": {"FIRM_ID": "lab"}, "cwd": str(tmp_path),
+        "supervise": False,                             # timers don't supervise
+        "interval": "30m"}
+    assert (tmp_path / "cadre-heartbeat-lab.pyw").is_file()
     create = next(c for c in ok_cmd if "/Create" in c)
     assert "/SC" in create and "MINUTE" in create and "30" in create
 
@@ -164,24 +181,28 @@ def test_winsched_service_launcher_supervises(tmp_path, ok_cmd):
     s.install_service("cadre-rail", description="d", workdir=tmp_path,
                       env={"CADRE_CLAUDE_BIN": "C:/claude"},
                       argv=["py", "-m", "firm", "slack", "serve"])
-    launcher = (tmp_path / "cadre-rail.cmd").read_text(encoding="utf-8")
-    assert ":loop" in launcher and "goto loop" in launcher
+    spec = _launcher_spec(tmp_path, "cadre-rail")
+    assert spec["supervise"] is True and "interval" not in spec, spec
+    assert spec["env"] == {"CADRE_CLAUDE_BIN": "C:/claude"}
     create = next(c for c in ok_cmd if "/Create" in c)
     assert "ONLOGON" in create
 
 
 # ---------------------------------------------------------------------------
-# D1a (#119): the task runs its launcher under a console nobody can see
+# D1a (#119, as ruled): the task runs pythonw.exe on the launcher's stub
 # ---------------------------------------------------------------------------
 #
-# A task pointed straight at a .cmd gets a console, and a console gets a
+# A task pointed at a console program gets a console, and a console gets a
 # window: every pulse drew one on the operator's desktop and closing it killed
-# the pulse. The task command is now conhost.exe --headless running cmd.exe on
-# the launcher. Before a single file is written, the install proves the flag
-# works on this machine (A7) and that the command fits schtasks' cap; the
-# launcher sends every byte of output to a log file so a headless console is
-# never left full (A6). Nothing here starts conhost: the self-test is faked.
-# The real run belongs to M-W1, on a private desktop first (verdict A1).
+# the pulse. conhost.exe --headless hid the window but was measured throwing
+# the exit code away, so the task command is now the pythonw.exe beside the
+# installing Python, on a stub written by firm.sched.winlaunch (whose own
+# tests are tests/test_winlaunch.py). Before a single file is written, an
+# install refuses when there is no pythonw.exe (R4), runs the launcher on this
+# machine and requires exit code 7 and the command's marker back (R3), and
+# refuses a task command past schtasks' cap (R7). Nothing here starts pythonw:
+# the self-test's runner is faked. The real run belongs to the window
+# instrument, on a private desktop first.
 
 _ROOT = "C:\\Windows"
 
@@ -199,40 +220,28 @@ def _tr(create):
 
 
 @pytest.mark.parametrize("kind", ["timer", "service"])
-def test_winsched_task_runs_its_launcher_under_a_headless_console(
-        tmp_path, ok_cmd, monkeypatch, kind):
-    monkeypatch.setenv("SystemRoot", _ROOT)
+def test_winsched_task_runs_its_stub_on_pythonw(tmp_path, ok_cmd, kind):
     s = WindowsScheduler(launcher_dir=tmp_path)
     _install(kind, s, tmp_path)
-    launcher = tmp_path / "cadre-heartbeat-lab.cmd"
     create = next(c for c in ok_cmd if "/Create" in c)
-    # The root comes from the same SystemRoot lookup; every other character of
-    # the command is this test's own. (On Linux the join is a forward slash.)
-    sys32 = winsched_mod._system32()
-    assert str(sys32).startswith(_ROOT), sys32
-    assert _tr(create) == (f'"{sys32 / "conhost.exe"}" --headless '
-                           f'"{sys32 / "cmd.exe"}" /d /c "{launcher}"'), _tr(create)
+    stub = tmp_path / "cadre-heartbeat-lab.pyw"
+    assert _tr(create) == f'"{_PYTHONW}" "{stub}"', _tr(create)
 
 
 @pytest.mark.parametrize("kind", ["timer", "service"])
-def test_winsched_launcher_sends_every_command_line_to_its_log(
-        tmp_path, ok_cmd, monkeypatch, kind):
-    monkeypatch.setenv("SystemRoot", _ROOT)
+def test_winsched_writes_the_launchers_own_stub_beside_its_spec_and_log(
+        tmp_path, ok_cmd, kind):
     s = WindowsScheduler(launcher_dir=tmp_path)
     _install(kind, s, tmp_path)
-    text = (tmp_path / "cadre-heartbeat-lab.cmd").read_text(encoding="utf-8")
-    runs = [ln for ln in text.splitlines() if "firm pulse" in ln]
-    log = tmp_path / "cadre-heartbeat-lab.log"
-    assert runs, text
-    for ln in runs:
-        assert ln.endswith(f'> "{log}" 2>&1'), (
-            f"a command line writes to the console, not the log: {ln!r}")
+    stub = tmp_path / "cadre-heartbeat-lab.pyw"
+    assert stub.read_text(encoding="utf-8") == winlaunch.stub_text(
+        tmp_path / "cadre-heartbeat-lab.json",
+        tmp_path / "cadre-heartbeat-lab.log")
 
 
 @pytest.mark.parametrize("kind", ["timer", "service"])
 def test_winsched_refuses_a_task_command_past_the_schtasks_cap(
-        tmp_path, ok_cmd, monkeypatch, kind):
-    monkeypatch.setenv("SystemRoot", _ROOT)
+        tmp_path, ok_cmd, kind):
     deep = tmp_path / ("d" * 200)
     s = WindowsScheduler(launcher_dir=deep)
     with pytest.raises(winsched_mod.SchedulerError) as caught:
@@ -242,92 +251,168 @@ def test_winsched_refuses_a_task_command_past_the_schtasks_cap(
     assert not deep.exists(), "a launcher was written for a task never created"
 
 
+def test_winsched_task_command_fits_the_cap_on_a_long_real_path():
+    """R7 by computation; the cap itself is for a live schtasks leg to measure.
+
+    A venv under an account name of 20 characters, the longest a local
+    account's logon name can be, and a firm id of 64 characters: 197
+    characters, under the 261 schtasks takes."""
+    user = "u" * 20
+    pythonw = Path(f"C:\\Users\\{user}\\cadre-win\\.venv\\Scripts\\pythonw.exe")
+    stub = Path(f"C:\\Users\\{user}\\.cadre\\sched\\"
+                f"cadre-heartbeat-{'f' * 64}.pyw")
+    tr = winsched_mod._task_command(pythonw, stub)
+    assert tr == f'"{pythonw}" "{stub}"'
+    assert len(tr) == 197 and len(tr) <= winsched_mod._TR_CAP, len(tr)
+
+
 @pytest.mark.parametrize("kind", ["timer", "service"])
-def test_winsched_refuses_to_install_when_the_headless_self_test_fails(
+def test_winsched_refuses_to_install_when_the_pythonw_self_test_fails(
         tmp_path, ok_cmd, monkeypatch, kind):
-    monkeypatch.setenv("SystemRoot", _ROOT)
-    monkeypatch.setattr(
-        winsched_mod, "_headless_self_test",
-        lambda: (False, "conhost.exe --headless returned 0, expected 7"))
+    why = (f"{_PYTHONW} returned 0, expected 7; the test command never ran; "
+           "the launcher's log: no log was written")
+    monkeypatch.setattr(winsched_mod, "_pythonw_self_test",
+                        lambda pythonw: (False, why))
     s = WindowsScheduler(launcher_dir=tmp_path / "sched")
     with pytest.raises(winsched_mod.SchedulerError) as caught:
         _install(kind, s, tmp_path)
-    message = str(caught.value)
-    assert "returned 0, expected 7" in message, message
-    assert "pythonw" in message, "the named fallback is missing from the refusal"
+    assert why in str(caught.value), str(caught.value)
     assert not [c for c in ok_cmd if "/Create" in c], "a task was created anyway"
     assert not (tmp_path / "sched").exists(), "files were written anyway"
 
 
-def test_winsched_remove_takes_the_launcher_log_too(tmp_path, ok_cmd):
+def _a_python_install(tmp_path, *names):
+    scripts = tmp_path / "venv" / "Scripts"
+    scripts.mkdir(parents=True)
+    for name in names:
+        (scripts / name).write_bytes(b"MZ")
+    return scripts
+
+
+@pytest.mark.parametrize("kind", ["timer", "service"])
+def test_winsched_refuses_to_install_without_pythonw_beside_the_installing_python(
+        tmp_path, monkeypatch, kind):
+    scripts = _a_python_install(tmp_path, "python.exe")
+    monkeypatch.setattr(sys, "executable", str(scripts / "python.exe"))
+    commands, self_tests = [], []
+    monkeypatch.setattr(winsched_mod, "run_cmd",
+                        lambda argv, timeout=30: commands.append(argv) or (0, ""))
+    monkeypatch.setattr(winsched_mod, "_pythonw_self_test",
+                        lambda pythonw: self_tests.append(pythonw) or (True, ""),
+                        raising=False)
     s = WindowsScheduler(launcher_dir=tmp_path / "sched")
-    (tmp_path / "sched").mkdir()
-    (tmp_path / "sched" / "cadre-heartbeat-lab.cmd").write_text("@echo off\r\n")
-    (tmp_path / "sched" / "cadre-heartbeat-lab.log").write_text("pulse output\n")
-    s.remove("cadre-heartbeat-lab")
-    assert not (tmp_path / "sched" / "cadre-heartbeat-lab.log").exists()
+    with pytest.raises(winsched_mod.SchedulerError) as caught:
+        _install(kind, s, tmp_path)
+    assert str(scripts / "pythonw.exe") in str(caught.value), str(caught.value)
+    assert self_tests == [], "the self-test ran with no pythonw.exe to run"
+    assert commands == [], f"scheduler commands ran anyway: {commands}"
+    assert not (tmp_path / "sched").exists(), "files were written anyway"
 
 
-class _SelfTestRun:
-    def __init__(self, result):
-        self.result = result
+def test_resolve_pythonw_is_the_one_beside_the_installing_python(tmp_path,
+                                                                 monkeypatch):
+    scripts = _a_python_install(tmp_path, "python.exe", "pythonw.exe")
+    monkeypatch.setattr(sys, "executable", str(scripts / "python.exe"))
+    assert winsched_mod._resolve_pythonw() == scripts / "pythonw.exe"
+
+
+def test_winsched_remove_takes_every_launcher_file(tmp_path, ok_cmd):
+    launchers = tmp_path / "sched"
+    launchers.mkdir()
+    mine = ["cadre-heartbeat-lab.pyw", "cadre-heartbeat-lab.json",
+            "cadre-heartbeat-lab.log",
+            # What cadre wrote before #119, still there on an upgraded install.
+            "cadre-heartbeat-lab.cmd"]
+    theirs = ["cadre-heartbeat-other.json", "cadre-heartbeat-other.pyw"]
+    for name in mine + theirs:
+        (launchers / name).write_text("x", encoding="utf-8")
+
+    out = WindowsScheduler(launcher_dir=launchers).remove("cadre-heartbeat-lab")
+
+    for name in mine:
+        assert not (launchers / name).exists(), f"{name} was left behind"
+        assert name in out["removed"], out["removed"]
+    assert sorted(p.name for p in launchers.iterdir()) == theirs
+
+
+class _FakeLauncher:
+    """pythonw.exe running the self-test's stub, faked.
+
+    It does what the stub's command would do, as far as the self-test can see:
+    it carries out the batch file's own marker line in the command's working
+    directory, then exits with the code it was given. What it saw is kept,
+    including the directory, so a test can check the self-test cleans up.
+    """
+
+    def __init__(self, returncode=7, marker=True, raises=None):
+        self.returncode, self.marker, self.raises = returncode, marker, raises
         self.calls = []
 
     def __call__(self, argv, **kwargs):
-        self.calls.append((argv, kwargs))
-        if isinstance(self.result, BaseException):
-            raise self.result
-        return type("P", (), {"returncode": self.result})()
+        stub = Path(argv[1])
+        spec = json.loads(stub.with_suffix(".json").read_text(encoding="utf-8"))
+        batch = Path(spec["argv"][-1]).read_bytes()
+        self.calls.append({"argv": argv, "kwargs": kwargs, "spec": spec,
+                           "batch": batch, "dir": stub.parent,
+                           "stub_text": stub.read_text(encoding="utf-8")})
+        if self.raises is not None:
+            raise self.raises
+        if self.marker:
+            for line in batch.decode("ascii").splitlines():
+                if line.startswith("echo ran> "):
+                    target = Path(spec["cwd"]) / line[len("echo ran> "):]
+                    target.write_text("ran", encoding="utf-8")
+        return SimpleNamespace(returncode=self.returncode)
 
 
-def _system32_with_conhost(tmp_path, monkeypatch, present=True):
-    sys32 = tmp_path / "System32"
-    sys32.mkdir()
-    if present:
-        (sys32 / "conhost.exe").write_bytes(b"MZ")
-    monkeypatch.setattr(winsched_mod, "_system32", lambda: sys32,
-                        raising=False)
-    return sys32
-
-
-def test_headless_self_test_passes_only_when_the_exit_code_comes_back(
+def test_pythonw_self_test_runs_the_launcher_hidden_and_needs_7_and_the_marker(
         tmp_path, monkeypatch):
-    import subprocess as sp
+    monkeypatch.setenv("SystemRoot", _ROOT)
+    run = _FakeLauncher()
+    pythonw = tmp_path / "pythonw.exe"
 
-    sys32 = _system32_with_conhost(tmp_path, monkeypatch)
-    run = _SelfTestRun(7)
-    assert winsched_mod._headless_self_test(run=run) == (True, "")
-    argv, kwargs = run.calls[0]
-    assert argv == [str(sys32 / "conhost.exe"), "--headless",
-                    str(sys32 / "cmd.exe"), "/d", "/c", "exit 7"]
+    assert winsched_mod._pythonw_self_test(pythonw, run=run) == (True, "")
+
+    [call] = run.calls
+    stub = Path(call["argv"][1])
+    assert call["argv"] == [str(pythonw), str(stub)] and stub.suffix == ".pyw"
+    # The launcher a task runs, on the command shape M-W1 measured (arm P1):
+    # cmd.exe on a batch file that exits 7.
+    assert call["stub_text"] == winlaunch.stub_text(stub.with_suffix(".json"),
+                                                    stub.with_suffix(".log"))
+    cmd = str(winsched_mod._system32() / "cmd.exe")
+    assert call["spec"]["argv"][:3] == [cmd, "/d", "/c"], call["spec"]["argv"]
+    assert call["spec"]["supervise"] is False
+    # ASCII, and naming no path, so an account name outside ASCII cannot break
+    # the batch file cmd.exe reads in the console code page.
+    text = call["batch"].decode("ascii")
+    assert text.splitlines()[-1] == "exit /b 7", text
+    assert str(call["dir"]) not in text, text
     for stream in ("stdin", "stdout", "stderr"):
-        assert kwargs.get(stream) is sp.DEVNULL, (stream, kwargs.get(stream))
-    assert kwargs.get("timeout"), "a self-test that can hang the install"
-    if hasattr(sp, "STARTUPINFO"):
-        si = kwargs.get("startupinfo")
-        assert si is not None and si.dwFlags & sp.STARTF_USESHOWWINDOW \
+        assert call["kwargs"].get(stream) is subprocess.DEVNULL, stream
+    assert call["kwargs"].get("timeout"), "a self-test that can hang the install"
+    if hasattr(subprocess, "STARTUPINFO"):
+        si = call["kwargs"].get("startupinfo")
+        assert si is not None and si.dwFlags & subprocess.STARTF_USESHOWWINDOW \
             and si.wShowWindow == 0, "the self-test is not started hidden"
+    assert not call["dir"].exists(), "the self-test left its files behind"
 
 
-@pytest.mark.parametrize("result, words", [
-    (0, "returned 0, expected 7"),
-    (1, "returned 1, expected 7"),
-    (OSError("not found"), "could not start"),
-    (__import__("subprocess").TimeoutExpired("conhost", 30), "did not finish"),
-])
-def test_headless_self_test_fails_on_anything_but_the_exit_code(
-        tmp_path, monkeypatch, result, words):
-    _system32_with_conhost(tmp_path, monkeypatch)
-    ok, why = winsched_mod._headless_self_test(run=_SelfTestRun(result))
+@pytest.mark.parametrize("run, words", [
+    (_FakeLauncher(returncode=0), "returned 0, expected 7"),
+    (_FakeLauncher(returncode=1), "returned 1, expected 7"),
+    (_FakeLauncher(returncode=7, marker=False), "the test command never ran"),
+    (_FakeLauncher(raises=OSError("planted: cannot start")), "could not start"),
+    (_FakeLauncher(raises=subprocess.TimeoutExpired("pythonw", 60)),
+     "did not finish"),
+], ids=["exit 0", "exit 1", "exit 7 without the marker", "cannot start",
+        "timeout"])
+def test_pythonw_self_test_fails_on_anything_but_7_with_the_marker(
+        tmp_path, monkeypatch, run, words):
+    monkeypatch.setenv("SystemRoot", _ROOT)
+    ok, why = winsched_mod._pythonw_self_test(tmp_path / "pythonw.exe", run=run)
     assert ok is False and words in why, why
-
-
-def test_headless_self_test_fails_when_conhost_is_missing(tmp_path, monkeypatch):
-    sys32 = _system32_with_conhost(tmp_path, monkeypatch, present=False)
-    run = _SelfTestRun(7)
-    ok, why = winsched_mod._headless_self_test(run=run)
-    assert ok is False and str(sys32 / "conhost.exe") in why, why
-    assert run.calls == [], "ran a conhost that is not there"
+    assert not run.calls[0]["dir"].exists(), "the self-test left its files behind"
 
 
 # A real `schtasks /Query /TN <task> /FO LIST /V` block, captured on Windows 10
@@ -433,6 +518,23 @@ def test_winsched_status_unreadable_result_fails_toward_failed(tmp_path,
     assert st["last_result"] == "not-a-number"
 
 
+def test_winsched_status_reads_workdir_and_interval_from_the_launcher_spec(
+        tmp_path, monkeypatch):
+    """`heartbeat disable` reads the firm's workspace back from here before it
+    removes the task, and `heartbeat status` lists it."""
+    block = _WINSCHED_V_BLOCK.format(status="Ready",
+                                     last_run="9/14/2026 12:51:00 PM",
+                                     last_result="0")
+    monkeypatch.setattr(winsched_mod, "run_cmd",
+                        lambda argv, timeout=30: (0, block))
+    winlaunch.write_launcher(tmp_path, "cadre-heartbeat-lab", argv=["py"],
+                             env={}, cwd="C:\\firms\\lab", supervise=False,
+                             interval="30m")
+    st = WindowsScheduler(launcher_dir=tmp_path).status("cadre-heartbeat-lab")
+    assert st.get("workdir") == "C:\\firms\\lab", st
+    assert st.get("interval") == "30m", st
+
+
 # remove() and the shared Task Scheduler folder. Every firm's task lives in the
 # same folder, so the folder may only go when nothing is left in it. Measured
 # during #119: schtasks /Delete cannot remove a folder at all (rc 1, folder
@@ -461,7 +563,9 @@ def test_winsched_remove_deletes_the_folder_when_it_is_empty(tmp_path,
     calls = _scripted_remove(monkeypatch, folder_reply=(0, "deleted"))
     launchers = tmp_path / "sched"
     launchers.mkdir()
-    (launchers / "cadre-heartbeat-lab.cmd").write_text("x", encoding="utf-8")
+    for suffix in (".pyw", ".json"):
+        (launchers / f"cadre-heartbeat-lab{suffix}").write_text(
+            "x", encoding="utf-8")
 
     out = WindowsScheduler(launcher_dir=launchers).remove("cadre-heartbeat-lab")
 
@@ -477,14 +581,16 @@ def test_winsched_remove_keeps_a_folder_another_firm_still_uses(tmp_path,
     calls = _scripted_remove(monkeypatch, folder_reply=(0, "kept 1"))
     launchers = tmp_path / "sched"
     launchers.mkdir()
-    (launchers / "cadre-heartbeat-lab.cmd").write_text("x", encoding="utf-8")
-    (launchers / "cadre-heartbeat-other.cmd").write_text("x", encoding="utf-8")
+    for stem in ("cadre-heartbeat-lab", "cadre-heartbeat-other"):
+        for suffix in (".pyw", ".json"):
+            (launchers / f"{stem}{suffix}").write_text("x", encoding="utf-8")
 
     out = WindowsScheduler(launcher_dir=launchers).remove("cadre-heartbeat-lab")
 
     assert out["folder"] == {"path": _CADRE_FOLDER, "action": "kept",
                              "tasks_remaining": 1}
-    assert (launchers / "cadre-heartbeat-other.cmd").exists()
+    assert (launchers / "cadre-heartbeat-other.pyw").exists()
+    assert (launchers / "cadre-heartbeat-other.json").exists()
     assert not any(c[0] == "schtasks" and "/Query" in c for c in calls)
 
 
