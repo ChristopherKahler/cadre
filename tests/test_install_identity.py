@@ -595,3 +595,81 @@ def test_install_fails_when_the_environment_recorded_a_different_file(tmp_path, 
 
     assert install_mod.run_install(wheel) == 1
     assert "sha256" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# G2 F5 — tests that can see the surfaces the DoD rows cite. Each one is proven
+# by avocet's own mutation anchors (M1, M2, M4, M5 in its mut132.py): the
+# mutation turns it red.
+# ---------------------------------------------------------------------------
+
+def _shared_identity_as_served():
+    return json.loads(json.dumps(ident_mod.installed_identity(), default=str))
+
+
+def test_heartbeat_status_embeds_the_shared_identity(stamp, monkeypatch, tmp_path, capsys):
+    from firm.cli import heartbeat as hb
+    stamp(commit=COMMIT_A, count=419)
+    monkeypatch.setattr(ident_mod, "_metadata_version", lambda: "0.1.0.dev419+g11c530b")
+    monkeypatch.setattr(ident_mod, "_direct_url", lambda: None)
+    (tmp_path / "units").mkdir()
+
+    assert hb.run_status(unit_dir=tmp_path / "units") == 0
+    out = json.loads(capsys.readouterr().out)
+
+    assert out["cadre"] == _shared_identity_as_served()
+
+
+def test_the_hub_route_serves_the_shared_identity(stamp, monkeypatch, tmp_path):
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    from firm.dashboard.server import make_hub_handler
+
+    stamp(commit=COMMIT_A, count=419)
+    monkeypatch.setattr(ident_mod, "_metadata_version", lambda: "0.1.0.dev419+g11c530b")
+    monkeypatch.setattr(ident_mod, "_direct_url", lambda: None)
+    monkeypatch.setenv("CADRE_HOME", str(tmp_path / "cadre-home"))
+    root = tmp_path / "firms"
+    root.mkdir()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_hub_handler(root))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}/api/identity"
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            served = json.loads(resp.read())
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    shared = _shared_identity_as_served()
+    for key, value in shared.items():
+        assert served.get(key) == value, f"the route changed or dropped {key!r}"
+    assert "reaches" in served
+
+
+def test_install_fails_when_the_environment_does_not_take_the_wheel_identity(tmp_path, capsys, monkeypatch):
+    wheel = _wheel(tmp_path, f"cadre-{_DIRTY_VERSION}-py3-none-any.whl", COMMIT_A, _DIRTY_VERSION)
+    _install_with(monkeypatch, _installed(None), _installed(_file_sha(wheel), commit=COMMIT_B))
+
+    assert install_mod.run_install(wheel) == 1
+    assert f"commit: wheel says {COMMIT_A}" in capsys.readouterr().err
+
+
+def test_install_makes_pip_reinstall_even_when_the_version_matches(tmp_path, capsys, monkeypatch):
+    wheel = _wheel(tmp_path, f"cadre-{_DIRTY_VERSION}-py3-none-any.whl", COMMIT_A, _DIRTY_VERSION)
+    states = iter([_installed(None), _installed(_file_sha(wheel))])
+    monkeypatch.setattr(install_mod, "_installed_identity", lambda python_bin: next(states))
+    calls = []
+
+    def spy(argv, **kwargs):
+        calls.append(list(argv))
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(install_mod, "run_utf8", spy)
+
+    assert install_mod.run_install(wheel) == 0
+    pip = [argv for argv in calls if "pip" in argv]
+    assert len(pip) == 1
+    assert "--force-reinstall" in pip[0] and "--no-deps" in pip[0]
