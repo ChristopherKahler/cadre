@@ -165,7 +165,8 @@ jobs:
       # That is the right thing to compare: it is the tree CI actually tested.
       - name: The wheel must be built from the commit under test
         run: |
-          python - <<'PY'
+          gate="$RUNNER_TEMP/provenance_gate.py"
+          cat > "$gate" <<'PY'
           import glob, os, re, sys, zipfile
 
           wheels = sorted(glob.glob("dist/*.whl"))
@@ -238,6 +239,44 @@ jobs:
               sys.exit(1)
           print("every wheel was built from the commit under test")
           PY
+
+          # End-to-end control, through the gate's own entry point. A wheel stamped
+          # with one commit, checked while GITHUB_SHA names another, must be refused,
+          # and refused because the commits differ. The controls inside the gate test
+          # its comparison; only this one tests where the gate gets the commit it
+          # compares against. If the gate ever took that commit from the wheel itself,
+          # every wheel would match its own stamp, and this is the check that goes red.
+          # The stamp is forty 1s, not the forty 0s the inner controls use, so neither
+          # control can pass or fail because of the other.
+          control="$RUNNER_TEMP/provenance_control"
+          rm -rf "$control"
+          mkdir -p "$control/dist"
+          other=$(python - "$control/dist" <<'PY'
+          import os, sys, zipfile
+          other = "1" * 40
+          wheel = os.path.join(sys.argv[1], f"cadre-0+g{other[:7]}-py3-none-any.whl")
+          with zipfile.ZipFile(wheel, "w") as zf:
+              zf.writestr("firm/_build_stamp.py", f"COMMIT = {other!r}\n")
+          print(other)
+          PY
+          )
+          if [ "${#other}" != 40 ]; then
+            echo "control could not build its wheel; this step proved NOTHING"
+            exit 1
+          fi
+          if (cd "$control" && python "$gate") > "$control/out.txt" 2>&1; then
+            cat "$control/out.txt"
+            echo "control failed: a wheel stamped with another commit passed the gate"
+            exit 1
+          fi
+          cat "$control/out.txt"
+          if ! grep -q "built from $other, not $GITHUB_SHA" "$control/out.txt"; then
+            echo "control failed: the gate refused, but not because the commits differ"
+            exit 1
+          fi
+          echo "control: a wheel stamped with another commit is refused through the gate itself"
+
+          python "$gate"
 
       - name: Install the wheel into an empty environment
         run: |
