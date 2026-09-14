@@ -258,7 +258,11 @@ def run_install(wheel: Path, *, python_bin: str | None = None,
             # whole bug: an operator who reinstalls and sees nothing assumes
             # something happened.
             print(f"  identity UNCHANGED: {result['after']}")
-            print(f"  the environment already held exactly these bytes (sha256 {after_sha}).")
+            # What was compared is pip's RECORDED wheel hash, before and after.
+            # Equal hashes do not show the installed files were unchanged: a
+            # hand-edited install reinstalled from the same wheel records the same
+            # one (#120 G2 re-grade N2). So the line names the record, not bytes.
+            print(f"  pip's record already named this exact wheel (sha256 {after_sha}).")
         else:
             print(f"  label unchanged: {result['after']}")
             print("  bytes not verified: the previous install recorded no wheel hash, "

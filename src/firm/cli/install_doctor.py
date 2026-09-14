@@ -46,16 +46,24 @@ def diagnose_install(identity: dict[str, Any] | None = None) -> list[dict[str, A
     else:
         checks.append(_card(
             "install-commit", "The install knows its commit", False,
+            (f"not verified: {build['checkout_error']}, so this install cannot "
+             "say what code it is running") if build.get("checkout_error") else
             "no commit: built from a source copy with neither git metadata "
             "nor a git-archive stamp, so this install cannot say what code it "
             "is running",
             state="undeterminable"))
 
-    # 2. Was the tree clean when it was built?
+    # 2. Was the tree clean when it was built? A live checkout has no build
+    #    time: its changes are there now (#120 G2 re-grade N1).
     if build["commit"]:
+        live = build.get("source") == "checkout"
         checks.append(_card(
-            "install-clean", "Built from a committed tree", not build["dirty"],
+            "install-clean",
+            "The checkout has no uncommitted changes" if live else "Built from a committed tree",
+            not build["dirty"],
             "clean" if not build["dirty"]
+            else ("the checkout has uncommitted changes now, so the commit above "
+                  "does not fully describe the code running") if live
             else "the working tree had uncommitted changes at build time, so "
                  "the commit above does not fully describe these bytes"))
 
@@ -63,7 +71,9 @@ def diagnose_install(identity: dict[str, Any] | None = None) -> list[dict[str, A
     ag = ident["agreement"]
     checks.append(_card("install-agreement", "Imported code matches what was installed",
                         ag["ok"], ag["detail"],
-                        state=None if ag["ok"] else "mismatch"))
+                        state=("mismatch" if not ag["ok"]
+                               else "undeterminable" if ag["state"] == "unverified"
+                               else None)))
 
     # 4. Is there a record of WHICH artifact was installed?
     if wheel and wheel.get("sha256"):

@@ -18,7 +18,21 @@ import os
 import sys
 from pathlib import Path
 
-from firm import __version__
+class _VersionOnRequest(argparse._VersionAction):
+    """``--version``, resolved only when the flag is given.
+
+    The version reads git in a checkout (#120). Handing it to argparse while the
+    parser was built ran that for every command, the timer's pulse and every
+    Member's CLI call among them, although only this flag prints it (#120 G2
+    re-grade N3).
+    """
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        # One attribute read. `from firm import __version__` asks the module
+        # twice (the import machinery checks hasattr first), which ran git twice.
+        import firm
+        self.version = f"{parser.prog} {firm.__version__}"
+        super().__call__(parser, namespace, values, option_string)
 
 
 def _force_utf8_streams() -> None:
@@ -61,11 +75,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog=prog_name,
         description="Cadre — Coordinated Agent Deployment Runtime Engine. Orchestrates a Firm of AI Members.",
     )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"{prog_name} {__version__}",
-    )
+    parser.add_argument("--version", action=_VersionOnRequest)
 
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
 

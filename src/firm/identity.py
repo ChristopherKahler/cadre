@@ -122,6 +122,7 @@ def installed_identity() -> dict[str, Any]:
             "commit_count": build["commit_count"],
             "tag": build["tag"],
             "remote_distance": build["remote_distance"],
+            "checkout_error": build.get("checkout_error"),
         },
         "metadata": {"version": meta},
         "wheel": wheel,
@@ -166,6 +167,11 @@ def _agreement(version: str, meta: str | None, build: dict[str, Any]) -> dict[st
         tomorrow, and "agree" is what #120 G2 F1 printed over a checkout that
         had moved on, so a checkout is its own state.
 
+    ``unverified``
+        A git checkout whose git could not answer: not on PATH, refusing the
+        repository, timing out. Its commit is unknown, so there is nothing to
+        compare, and a stamp left beside it is never read in its place.
+
     ``agree`` / ``disagree``
         Both sides have a real identity. Now the comparison means something: a
         package that knows its commit, disagreeing with the version the
@@ -176,6 +182,15 @@ def _agreement(version: str, meta: str | None, build: dict[str, Any]) -> dict[st
     if meta is None:
         return {"ok": True, "state": "not-installed",
                 "detail": "running from a source tree; nothing is installed"}
+    if build["source"] == "unknown" and build.get("checkout_error"):
+        # Nothing was compared, so nothing agrees. Not a fault in the install,
+        # and not a pass either (#120 G2 re-grade R1).
+        return {
+            "ok": True,
+            "state": "unverified",
+            "detail": (f"not verified: {build['checkout_error']}, so the commit this "
+                       f"checkout runs is unknown; the installer recorded {meta}"),
+        }
     if build["source"] == "unknown":
         return {
             "ok": True,
@@ -222,8 +237,10 @@ def render_text(identity: dict[str, Any]) -> str:
                        else "  (tree was dirty at build)")
         lines.append(_fmt("commit", f"{commit}   [{b['source']}]"))
     else:
-        lines.append(_fmt("commit", "unknown — built from a source copy with "
-                                    "no git metadata and no archive stamp"))
+        lines.append(_fmt("commit", f"unknown — {b['checkout_error']}"
+                          if b.get("checkout_error") else
+                          "unknown — built from a source copy with "
+                          "no git metadata and no archive stamp"))
     if b["built_at"]:
         lines.append(_fmt("built", b["built_at"]))
     if b["remote_distance"]:
@@ -245,7 +262,7 @@ def render_text(identity: dict[str, Any]) -> str:
     if not ag["ok"]:
         lines.append("")
         lines.append(f"  MISMATCH: {ag['detail']}")
-    elif ag["state"] in ("source-tree", "not-installed"):
+    elif ag["state"] in ("source-tree", "not-installed", "unverified"):
         lines.append("")
         lines.append(f"  note: {ag['detail']}")
     return "\n".join(lines)

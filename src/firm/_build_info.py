@@ -8,7 +8,10 @@ and the last one is the honest failure rather than a guess:
     This package is running from a Cadre git checkout: an editable install, or
     ``src`` on ``sys.path``. The commit is read live from git every time, and no
     stamp file is consulted, because a stamp names the commit it was written at
-    and a checkout moves on (#120 G2 F1).
+    and a checkout moves on (#120 G2 F1). When git cannot answer there -- not on
+    PATH, refusing the repository, timing out -- the source is ``unknown`` and
+    ``checkout_error`` says why; a stamp beside a checkout is still never read
+    (#120 G2 re-grade R1).
 
 ``git``
     The build ran inside a git checkout and the build backend wrote
@@ -66,22 +69,33 @@ _PACKAGE_DIR = Path(__file__).resolve().parent
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def _git(root: Path, *args: str) -> str | None:
-    """Run git in *root*. None on any failure, including no git.
+_GIT_TIMEOUT = 30
 
-    UTF-8 and no window are spelled out here: this runs during ``import firm``,
-    before ``firm.core.proc`` can be imported, so it cannot use run_utf8.
+
+def _git_answer(root: Path, *args: str) -> tuple[str | None, str | None]:
+    """Run git in *root*: ``(output, None)`` when it answered, ``(None, why)`` when not.
+
+    UTF-8 and no window are spelled out here: ``import firm`` imports this
+    module before ``firm.core.proc`` can be imported, so it cannot use run_utf8.
     """
     try:
         out = subprocess.run(
             ("git", *args), cwd=root, capture_output=True, encoding="utf-8",
-            errors="replace", timeout=30, creationflags=_NO_WINDOW,
+            errors="replace", timeout=_GIT_TIMEOUT, creationflags=_NO_WINDOW,
         )
-    except Exception:
-        return None
+    except subprocess.TimeoutExpired:
+        return None, f"git did not answer within {_GIT_TIMEOUT} s"
+    except Exception as exc:
+        return None, f"git could not be started ({type(exc).__name__}: {exc})"
     if out.returncode != 0:
-        return None
-    return out.stdout.strip()
+        said = (out.stderr or "").strip().splitlines()
+        return None, f"git exited {out.returncode}" + (f": {said[0]}" if said else "")
+    return out.stdout.strip(), None
+
+
+def _git(root: Path, *args: str) -> str | None:
+    """Run git in *root*. None on any failure, including no git."""
+    return _git_answer(root, *args)[0]
 
 
 def _same_path(a: object, b: object) -> bool:
@@ -97,27 +111,46 @@ def _from_checkout() -> dict | None:
     files, so the only true commit is the one git reports at the moment of
     asking. No stamp file is consulted: a stamp left by an older build named the
     commit it was built at long after the checkout moved on, and the install
-    said everything agreed (#120 G2 F1). None when this is not a Cadre checkout:
-    no ``_build/backend.py`` beside ``src/``, no git, or git's top level is some
-    other repository the tree only sits inside (G2 F3).
+    said everything agreed (#120 G2 F1).
+
+    None when this is not a Cadre checkout: no ``_build/backend.py`` beside
+    ``src/``, or no repository of its own at that root. An unpacked sdist and a
+    git archive have none, even when they sit inside some other project's
+    repository (G2 F3), so their own stamp or archive commit is their answer.
+
+    A tree that DOES have its own repository is a checkout whether or not git
+    answers. When git cannot, the answer is unknown with the reason, never a
+    stamp: with git hidden or refusing the repository, a stamp left in
+    ``src/firm/`` made an editable install name the commit it was installed at
+    and report agree while the checkout ran other code (#120 G2 re-grade R1).
     """
     root = _PACKAGE_DIR.parent.parent
     if not (root / "_build" / "backend.py").is_file():
         return None
-    answer = _git(root, "rev-parse", "--show-toplevel", "HEAD")
-    lines = answer.splitlines() if answer else []
-    if len(lines) != 2 or not _same_path(lines[0], root) or not _is_sha(lines[1]):
+    if not (root / ".git").exists():   # a directory, or the file a worktree has
         return None
+    answer, why = _git_answer(root, "rev-parse", "--show-toplevel", "HEAD")
+    lines = answer.splitlines() if answer else []
+    if why is None and (len(lines) != 2 or not _same_path(lines[0], root)
+                        or not _is_sha(lines[1])):
+        why = f"git gave no commit of this checkout ({answer!r})"
+    if why is not None:
+        return _unknown(checkout_error=f"{root} is a git checkout and {why}")
     count = _git(root, "rev-list", "--count", "HEAD")
     return {
         "commit": lines[1],
         "tag": _git(root, "describe", "--tags", "--exact-match") or None,
         "describe": None,
-        "dirty": bool(_git(root, "status", "--porcelain")),
+        # --no-optional-locks: a status that finds a stat-stale entry refreshes
+        # it and writes the index back when it can take the lock, which can
+        # collide with a commit running in the same checkout. Reading must not
+        # write (#120 G2 re-grade N3).
+        "dirty": bool(_git(root, "--no-optional-locks", "status", "--porcelain")),
         "built_at": None,
         "commit_count": int(count) if count and count.isdigit() else None,
         "remote_distance": None,
         "source": "checkout",
+        "checkout_error": None,
     }
 
 
@@ -145,6 +178,7 @@ def _from_stamp() -> dict | None:
         "commit_count": getattr(stamp, "COMMIT_COUNT", None),
         "remote_distance": getattr(stamp, "REMOTE_DISTANCE", "") or None,
         "source": "git",
+        "checkout_error": None,
     }
 
 
@@ -161,15 +195,12 @@ def _from_archive() -> dict | None:
         "commit_count": None,
         "remote_distance": None,
         "source": "archive",
+        "checkout_error": None,
     }
 
 
-def build_info() -> dict:
-    """Resolve the build identity. Never raises, never invents a commit."""
-    for source in (_from_checkout, _from_stamp, _from_archive):
-        found = source()
-        if found is not None:
-            return found
+def _unknown(checkout_error: str | None = None) -> dict:
+    """No commit. ``checkout_error`` is set only for a checkout git could not read."""
     return {
         "commit": None,
         "tag": None,
@@ -179,7 +210,17 @@ def build_info() -> dict:
         "commit_count": None,
         "remote_distance": None,
         "source": "unknown",
+        "checkout_error": checkout_error,
     }
+
+
+def build_info() -> dict:
+    """Resolve the build identity. Never raises, never invents a commit."""
+    for source in (_from_checkout, _from_stamp, _from_archive):
+        found = source()
+        if found is not None:
+            return found
+    return _unknown()
 
 
 def version_string() -> str:
