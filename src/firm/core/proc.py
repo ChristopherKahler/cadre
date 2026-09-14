@@ -53,16 +53,96 @@ one and a domain that never existed, so its exit code discriminates nothing --
 silence must be a failure carrying a reason, never data. Opt in per call with
 ``require_output=True``; it is off by default because most callers already
 have a returncode worth trusting.
+
+NO WINDOW (issue #119). On Windows, a console program started by a process
+that has no console of its own gets a new console, and a new console has a
+window: every scheduled pulse drew one on the operator's desktop, and closing
+it killed the pulse. So both wrappers ask, at every spawn, whether this process
+is attached to a console. Attached, the child inherits that console and opens
+nothing, and Ctrl+C typed in a terminal still reaches it. Not attached, or no
+answer, the child is started with ``CREATE_NO_WINDOW``. The question is put to
+``GetConsoleProcessList``; ``GetConsoleWindow`` was measured returning 0 in
+attached processes too, so it cannot tell the two apart. ``CREATE_NEW_CONSOLE``
+and ``DETACHED_PROCESS`` defeat ``CREATE_NO_WINDOW``, so a caller passing
+either is refused, on every platform, before anything starts. The measurements
+behind this are in ``tests/test_no_window_flags.py``.
 """
 
 from __future__ import annotations
 
 import subprocess
+import sys
 from typing import Any
 
 # What a silence report quotes back. Long enough to carry a stack trace's last
 # line, short enough to sit inside a dashboard job's error field.
 _REASON_TAIL = 300
+
+# Win32 process creation flags, as numbers: the named constants exist on the
+# subprocess module only on Windows, and this module is imported everywhere.
+_CREATE_NO_WINDOW = 0x08000000
+# The two that defeat it. Win32 ignores CREATE_NO_WINDOW beside either one. The
+# first gives the child a new console, window included; the second gives it no
+# console, so every console program the child starts gets a window of its own.
+_WINDOW_OPENING = ((0x00000010, "CREATE_NEW_CONSOLE"),
+                   (0x00000008, "DETACHED_PROCESS"))
+
+
+class WindowFlagRefused(ValueError):
+    """A caller asked for a creation flag that lets a child open a window.
+
+    Raised by both wrappers before anything starts, on every platform, so the
+    mistake fails on a developer's machine and in CI instead of as a window on
+    an operator's desktop. Never stripped: a caller that asked for a new
+    console expected one, and a hidden console handed over in silence would
+    turn a design mistake into a mystery.
+    """
+
+    def __init__(self, refused: list[str], flags: int) -> None:
+        self.refused = refused
+        super().__init__(
+            f"creationflags {flags:#010x} carries {' and '.join(refused)}, "
+            "which lets a child open a console window, and cadre never opens "
+            "one (issue #119). Leave it out: firm.core.proc keeps a child "
+            "windowless on Windows.")
+
+
+def _has_console() -> bool:
+    """Is this process attached to a console right now?
+
+    Asked at every spawn and never cached, because a process can gain or lose
+    a console while it runs. Any failure to answer reads as no, because the
+    caller then adds ``CREATE_NO_WINDOW``: a child that misses Ctrl+C is the
+    lesser harm, and a window is the one the operator ruled out.
+    """
+    try:
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        attached = kernel32.GetConsoleProcessList
+        attached.argtypes = (ctypes.POINTER(ctypes.c_uint32), ctypes.c_uint32)
+        attached.restype = ctypes.c_uint32
+        pids = (ctypes.c_uint32 * 64)()
+        return attached(pids, 64) > 0
+    except Exception:  # no answer is treated as no console, on purpose
+        return False
+
+
+def _window_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Refuse the flags that open a window; add ``CREATE_NO_WINDOW`` where a
+    child would otherwise get one.
+
+    The caller's other flags are kept. A caller that wants a hidden console of
+    its own even when this process has one passes ``CREATE_NO_WINDOW`` itself,
+    and it stays.
+    """
+    flags = kwargs.get("creationflags") or 0
+    refused = [name for bit, name in _WINDOW_OPENING if flags & bit]
+    if refused:
+        raise WindowFlagRefused(refused, flags)
+    if sys.platform == "win32" and not _has_console():
+        kwargs["creationflags"] = flags | _CREATE_NO_WINDOW
+    return kwargs
 
 
 class NoOutput(RuntimeError):
@@ -115,7 +195,7 @@ def run_utf8(argv: Any, *, require_output: bool = False,
     zero, absent or clean.
     """
     proc = subprocess.run(argv, encoding="utf-8", errors="replace",
-                          **_owned_kwargs(kwargs))
+                          **_window_kwargs(_owned_kwargs(kwargs)))
     if require_output and not (proc.stdout or "").strip():
         raise NoOutput(_silence_reason(argv, proc))
     return proc
@@ -130,4 +210,4 @@ def popen_utf8(argv: Any, **kwargs: Any) -> subprocess.Popen[str]:
     iteration is where #114 killed the run.
     """
     return subprocess.Popen(argv, encoding="utf-8", errors="replace",
-                            **_owned_kwargs(kwargs))
+                            **_window_kwargs(_owned_kwargs(kwargs)))
