@@ -583,6 +583,23 @@ def _build_parser() -> argparse.ArgumentParser:
     # answerable on a machine that has Cadre installed and no firm yet. That is
     # why it cannot live under `doctor`, which returns db-not-found and exits
     # before any check runs when there is no .firm/firm.db.
+    install_parser = subparsers.add_parser(
+        "install",
+        help="Install a Cadre wheel into this environment and PROVE it took.",
+    )
+    install_parser.add_argument(
+        "wheel", type=Path,
+        help="Path to a .whl file. A path only: this is not a package manager.",
+    )
+    install_parser.add_argument(
+        "--python", dest="python_bin", default=None,
+        help="Interpreter to install into (defaults to the running one).",
+    )
+    install_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="Machine-readable result.",
+    )
+
     identity_parser = subparsers.add_parser(
         "identity",
         help="What this install is: version, commit, wheel and hash. "
@@ -1230,6 +1247,12 @@ def main(argv: list[str] | None = None) -> int:
         from firm.cli.relay import run_relay
 
         return run_relay(args)
+    if args.command == "install":
+        from firm.cli.install import run_install
+
+        return run_install(args.wheel, python_bin=args.python_bin,
+                           as_json=args.as_json)
+
     if args.command == "identity":
         from firm.identity import run_identity
 
