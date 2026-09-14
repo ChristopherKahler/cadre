@@ -18,7 +18,21 @@ import os
 import sys
 from pathlib import Path
 
-from firm import __version__
+class _VersionOnRequest(argparse._VersionAction):
+    """``--version``, resolved only when the flag is given.
+
+    The version reads git in a checkout (#120). Handing it to argparse while the
+    parser was built ran that for every command, the timer's pulse and every
+    Member's CLI call among them, although only this flag prints it (#120 G2
+    re-grade N3).
+    """
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        # One attribute read. `from firm import __version__` asks the module
+        # twice (the import machinery checks hasattr first), which ran git twice.
+        import firm
+        self.version = f"{parser.prog} {firm.__version__}"
+        super().__call__(parser, namespace, values, option_string)
 
 
 def _force_utf8_streams() -> None:
@@ -61,11 +75,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog=prog_name,
         description="Cadre — Coordinated Agent Deployment Runtime Engine. Orchestrates a Firm of AI Members.",
     )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"{prog_name} {__version__}",
-    )
+    parser.add_argument("--version", action=_VersionOnRequest)
 
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
 
@@ -587,6 +597,41 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="The id the receiver clears. Defaults to a "
                                  "timestamped one.")
 
+    # ---- install and identity subparsers ----
+    # Both are about the INSTALL rather than a firm, so neither takes
+    # --workspace. Issue #120.
+    install_parser = subparsers.add_parser(
+        "install",
+        help="Install a Cadre wheel into this environment and PROVE it took.",
+    )
+    install_parser.add_argument(
+        "wheel", type=Path,
+        help="Path to a .whl file. A path only: this is not a package manager.",
+    )
+    install_parser.add_argument(
+        "--python", dest="python_bin", default=None,
+        help="Interpreter to install into (defaults to the running one).",
+    )
+    install_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="Machine-readable result.",
+    )
+
+    # `identity` deliberately takes no --workspace and no --firm-id. "What
+    # commit are you?" is a question about the INSTALL, and it has to be
+    # answerable on a machine that has Cadre installed and no firm yet. That is
+    # why it cannot live under `doctor`, which returns db-not-found and exits
+    # before any check runs when there is no .firm/firm.db.
+    identity_parser = subparsers.add_parser(
+        "identity",
+        help="What this install is: version, commit, wheel and hash. "
+             "Needs no firm and no workspace.",
+    )
+    identity_parser.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="Machine-readable form.",
+    )
+
     # ---- doctor subparser ----
     doctor_parser = subparsers.add_parser(
         "doctor",
@@ -594,6 +639,11 @@ def _build_parser() -> argparse.ArgumentParser:
              "mechanical findings (migrations, policy gate, ghosts). "
              "Judgment stays with Train; authority stays with the Board.",
     )
+    doctor_parser.add_argument(
+        "--install", dest="install_only", action="store_true",
+        help="Report on the INSTALL rather than a firm: version, commit, "
+             "artifact and whether the three agree. Needs no workspace and no "
+             "firm database.")
     doctor_parser.add_argument(
         "--fix", action="store_true",
         help="Apply mechanical fixes (never touches loadouts, models, or goals).")
@@ -1248,8 +1298,27 @@ def main(argv: list[str] | None = None) -> int:
         from firm.cli.relay import run_relay
 
         return run_relay(args)
+    if args.command == "install":
+        from firm.cli.install import run_install
+
+        return run_install(args.wheel, python_bin=args.python_bin,
+                           as_json=args.as_json)
+
+    if args.command == "identity":
+        from firm.identity import run_identity
+
+        return run_identity(as_json=args.as_json)
 
     if args.command == "doctor":
+        if args.install_only:
+            # Ahead of run_doctor deliberately: that function returns
+            # db-not-found and exits before a single check runs when there is
+            # no .firm/firm.db, and the install question has to be answerable
+            # on a machine with no firm on it at all.
+            from firm.cli.install_doctor import run_install_doctor
+
+            return run_install_doctor(as_json=args.as_json)
+
         from firm.cli.doctor import run_doctor
 
         workspace = args.workspace if args.workspace is not None else Path.cwd()
