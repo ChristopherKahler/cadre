@@ -359,6 +359,28 @@ def test_an_unrendered_placeholder_does_not_count_as_installed(monkeypatch, mach
     assert base_ready.check(firm)["extension_installed"] is False
 
 
+def test_a_command_resolved_from_outside_the_firms_tier_is_not_an_install(
+        monkeypatch, machine):
+    """G2 F3: the third reason branch, reached. Before this leg no test did.
+
+    The firm's tier is EMPTY and `base cadre` still exits 0 -- the command is
+    coming from somewhere this check cannot see. Both readings are reported
+    as they are, and the verdict is not ok.
+    Control: `test_l2_control_the_manifest_in_the_firms_tier_reads_every_key_true`,
+    where the same command runs over a manifest that IS in the firm's tier.
+    """
+    _, firm = machine
+    monkeypatch.setattr(subprocess, "run", _Base(anywhere=True))
+
+    state = base_ready.check(firm)
+
+    assert state["extension_runs"] is True, "the command does run"
+    assert state["extension_installed"] is False, "and nothing is in the firm's tier"
+    assert state["ok"] is False
+    assert state["missing"] == [base_ready.MISSING_EXTENSION]
+    assert "somewhere this check cannot see" in state["reason"], state["reason"]
+
+
 # ---------------------------------------------------------------------------
 # Nothing here writes
 # ---------------------------------------------------------------------------
