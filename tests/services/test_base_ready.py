@@ -382,6 +382,101 @@ def test_a_command_resolved_from_outside_the_firms_tier_is_not_an_install(
 
 
 # ---------------------------------------------------------------------------
+# G2 F6 — the reason quotes the line that names the failure
+# ---------------------------------------------------------------------------
+
+#: Copied line for line from real output, never typed from memory (law 38).
+#: The first two: base 0.15.2 (ELF md5 b9043abf2e4b7baed539148ce55dee43),
+#: `base cadre --help`, rc 127, stderr, 2026-09-14 -- an empty extensions
+#: directory, and a manifest naming a handler that does not exist. The third:
+#: CPython 3.12.3 `raise ValueError("boom")`, stderr. Each entry is
+#: (lines, the line that names the failure, a line that must NOT be quoted).
+SHAPES = {
+    "unknown_command": (
+        ["base: unknown command 'cadre'",
+         "  No plugin commands installed. Run `base ext list` to see extensions.",
+         "  Run `base --help` for core commands."],
+        "base: unknown command 'cadre'",
+        "Run `base --help` for core commands."),
+    "handler_not_found": (
+        ["base: command 'cadre' (ext:cadre) — handler not found: /nonexistent/lapwing127/cadre",
+         "  Check the extension's [[commands]] handler path."],
+        "base: command 'cadre' (ext:cadre) — handler not found: /nonexistent/lapwing127/cadre",
+        "Check the extension's [[commands]] handler path."),
+    "traceback": (
+        ["Traceback (most recent call last):",
+         '  File "<string>", line 1, in <module>',
+         "ValueError: boom"],
+        "ValueError: boom",
+        "Traceback (most recent call last):"),
+}
+
+
+class _Says:
+    """A base whose streams are the measured ones: `--version` exits
+    `version_rc` printing `version_err`, `cadre --help` exits 127 printing
+    `cadre_err`, in any tier. Real output is several lines on stderr; the
+    `_Base` fake's single stdout line could never show which one was quoted."""
+
+    def __init__(self, *, cadre_err: str = "", version_rc: int = 0,
+                 version_err: str = "") -> None:
+        self.cadre_err = cadre_err
+        self.version_rc = version_rc
+        self.version_err = version_err
+
+    def __call__(self, cmd, **kwargs):
+        rest = [str(c) for c in cmd][1:]
+        rc, out, err = 0, "", ""
+        if rest[:1] == ["--version"]:
+            rc, err = self.version_rc, self.version_err
+            out = "" if rc else "base 0.15.2"
+        elif rest[:2] == ["cadre", "--help"]:
+            rc, err = 127, self.cadre_err
+
+        class R:
+            returncode = rc
+            stdout = out
+            stderr = err
+        return R()
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+def test_the_reason_quotes_the_line_that_names_the_failure(monkeypatch, machine, shape):
+    """G2 F6. Quoting the last line quoted base's advice instead of its error:
+    "...failing:   Run `base --help` for core commands." The handler shape
+    has its manifest in the firm's tier, so it reaches the installed-and-dead
+    branch; the other two reach the not-installed branch."""
+    _, firm = machine
+    lines, names, advice = SHAPES[shape]
+    if shape == "handler_not_found":
+        _install_into(tier_extensions_dir(firm))
+    monkeypatch.setattr(subprocess, "run", _Says(cadre_err="\n".join(lines) + "\n"))
+
+    state = base_ready.check(firm)
+
+    assert state["extension_runs"] is False
+    assert names in state["reason"], state["reason"]
+    assert advice not in state["reason"], state["reason"]
+
+
+def test_a_base_that_does_not_run_is_quoted_by_the_line_that_names_it(monkeypatch, machine):
+    """G2 F6 at the other quoting site. base's own output convention is the
+    subject here, not the verb: the measured unknown-command lines stand in
+    for whatever a failing `--version` prints, because both sites share one
+    rule and this leg pins that the `--version` site uses it."""
+    _, firm = machine
+    lines, names, advice = SHAPES["unknown_command"]
+    monkeypatch.setattr(subprocess, "run",
+                        _Says(version_rc=1, version_err="\n".join(lines) + "\n"))
+
+    state = base_ready.check(firm)
+
+    assert state["base_runs"] is False
+    assert names in state["reason"], state["reason"]
+    assert advice not in state["reason"], state["reason"]
+
+
+# ---------------------------------------------------------------------------
 # Nothing here writes
 # ---------------------------------------------------------------------------
 

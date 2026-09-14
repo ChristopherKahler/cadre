@@ -153,6 +153,30 @@ def _env(workspace: Path | str | None) -> dict[str, str]:
     return _base_env(workspace)
 
 
+def _names_the_failure(proc: Any) -> str:
+    """The line of a probe's output that NAMES the failure, not the advice under it.
+
+    Measured 2026-09-14 on base 0.15.2, `base cadre --help`, rc 127, all on
+    stderr. An empty extensions directory prints ``base: unknown command
+    'cadre'`` and then two lines indented by two spaces ("No plugin commands
+    installed. ..." and "Run `base --help` for core commands."). A manifest whose
+    handler is missing prints ``base: command 'cadre' (ext:cadre) — handler not
+    found: <path>`` and one indented line ("Check the extension's [[commands]]
+    handler path."). The failure is the unindented line and the advice is
+    indented, and quoting the LAST line quoted the advice (PR 127 G2, F6).
+
+    The LAST unindented line rather than the first: a handler that dies in
+    Python ends on its exception line, below an unindented "Traceback (most
+    recent call last):" (CPython 3.12, measured the same day).
+    """
+    text = proc.stderr or proc.stdout or ""
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return f"rc={proc.returncode}"
+    flush = [line for line in lines if not line[:1].isspace()]
+    return (flush[-1] if flush else lines[-1]).strip()[:200]
+
+
 def check(workspace: Path | str | None = None) -> dict[str, Any]:
     """Read base, and read `base cadre` in the firm's own tier. Writes nothing.
 
@@ -200,11 +224,9 @@ def check(workspace: Path | str | None = None) -> dict[str, Any]:
             result["reason"] = f"base is at {base} but it could not be run: {exc}"
             return result
         if probe.returncode != 0:
-            detail = (probe.stderr or probe.stdout or "").strip().splitlines()
             result["missing"] = [MISSING_BASE]
-            result["reason"] = (
-                f"base is at {base} but it does not run: "
-                + (detail[-1][:200] if detail else f"rc={probe.returncode}"))
+            result["reason"] = (f"base is at {base} but it does not run: "
+                                + _names_the_failure(probe))
             return result
         result["base_runs"] = True
 
@@ -259,8 +281,7 @@ def check(workspace: Path | str | None = None) -> dict[str, Any]:
             return result
 
         result["missing"] = [MISSING_EXTENSION]
-        detail = (ran.stderr or ran.stdout or "").strip().splitlines()
-        said = detail[-1][:200] if detail else f"rc={ran.returncode}"
+        said = _names_the_failure(ran)
         if not result["extension_runs"] and result["extension_installed"]:
             result["reason"] = (
                 f"the cadre extension is in the firm's tier but `base cadre` does "
