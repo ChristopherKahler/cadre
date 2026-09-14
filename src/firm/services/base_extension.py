@@ -460,7 +460,17 @@ def install(framework_dir: Path | str | None = None,
             result["reason"] = (f"base reported success but {landed} does not exist")
             return result
         on_disk = landed.read_text(encoding="utf-8")
-        if 'name = "cadre"' not in on_disk:
+        # The [extension] NAME, parsed, never a substring of the file. Cadre's
+        # manifest carries `name = "cadre"` twice: once under [extension] and once
+        # under [[commands]]. A substring search therefore read back ANY landed
+        # manifest that declares a `cadre` command as Cadre's own, whatever
+        # extension it belonged to.
+        try:
+            declared = tomllib.loads(on_disk).get("extension")
+        except tomllib.TOMLDecodeError as exc:
+            result["reason"] = f"{landed} exists but is not a readable manifest: {exc}"
+            return result
+        if not isinstance(declared, dict) or declared.get("name") != "cadre":
             result["reason"] = f"{landed} exists but is not Cadre's manifest"
             return result
         if PLACEHOLDER in on_disk:

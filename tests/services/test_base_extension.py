@@ -623,7 +623,8 @@ def fake_base(monkeypatch, tmp_path):
     return tmp_path
 
 
-def _land(home: Path, text: str = 'name = "cadre"\nframework_dir = "/opt/cadre"\n') -> None:
+def _land(home: Path,
+          text: str = '[extension]\nname = "cadre"\nframework_dir = "/opt/cadre"\n') -> None:
     (home / ".base-gbl" / "extensions" / "cadre.toml").write_text(text, encoding="utf-8")
 
 
@@ -677,7 +678,7 @@ def test_install_does_not_claim_success_it_did_not_read_back(monkeypatch, fake_b
 def test_install_refuses_a_landed_file_that_still_has_the_placeholder(monkeypatch, fake_base):
     run = _Run(0, 0)
     monkeypatch.setattr(subprocess, "run", run)
-    _land(fake_base, 'name = "cadre"\nframework_dir = "{{framework_dir}}"\n')
+    _land(fake_base, '[extension]\nname = "cadre"\nframework_dir = "{{framework_dir}}"\n')
     res = base_extension.install("/opt/cadre")
     assert res["ok"] is False
     assert "never got filled in" in res["reason"]
@@ -1327,6 +1328,28 @@ def test_a2_honest_report_the_path_reported_is_the_file_really_read(
         "read_back is True over a landed manifest that still carries its placeholder")
     assert corrupt["ok"] is False
     assert Path(corrupt["path"]) == want
+
+    # Leg (c): base lands ANOTHER extension's manifest that still declares a
+    # `cadre` command. Cadre's manifest carries `name = "cadre"` twice, under
+    # [extension] and under [[commands]], so a substring read-back cannot tell
+    # this file from Cadre's. Must catch the read-back going back to a
+    # substring match (M12).
+    renamed = _TierBase(landed_text=lambda staged: staged.replace(
+        '[extension]\nname = "cadre"', '[extension]\nname = "somethingelse"', 1))
+    monkeypatch.setattr(subprocess, "run", renamed)
+    other = base_extension.install("/opt/cadre", workspace=two_tiers.firm)
+    landed = want.read_text(encoding="utf-8")
+    assert tomllib.loads(landed)["extension"]["name"] == "somethingelse", (
+        "precondition: the stub did not land a manifest of another extension, "
+        "so leg (c) tests nothing")
+    assert 'name = "cadre"' in landed, (
+        "precondition: the landed file no longer carries the [[commands]] name, "
+        "so leg (c) cannot reach the shape a substring check misreads")
+    assert other["read_back"] is False, (
+        "read_back is True over a manifest whose [extension] is not cadre, "
+        "because its [[commands]] block says name = \"cadre\"")
+    assert other["ok"] is False
+    assert Path(other["path"]) == want
 
 
 def test_a3_no_workspace_control_installs_where_it_always_did(two_tiers, monkeypatch):
