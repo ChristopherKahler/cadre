@@ -300,3 +300,83 @@ def test_founding_with_a_refused_base_never_reports_the_command_running(
     assert result.get("ok") is True, result
     assert result["base_present"] is True
     assert result["base_cadre_runs"] is False, result["base_ready"]
+
+
+MANIFEST = 'name = "cadre"\nframework_dir = "/opt/cadre"\n'
+
+
+def test_a_command_resolved_elsewhere_is_not_shown_as_installed(monkeypatch, tmp_path):
+    """G2 F2. A native base, an EMPTY firm tier, and `base cadre` exiting 0
+    anyway. The command resolved from somewhere the check cannot see, so the
+    row must not say installed. The `base` row is deliberately not asserted:
+    base does run here, and that row is the TRUE leg's subject.
+    Control: `test_a_healthy_firm_tier_reads_healthy_on_both_readiness_rows`."""
+    _bare_firm(tmp_path, "zqelsewhere")
+    _point_at_stub(monkeypatch, tmp_path, native=True)
+    monkeypatch.setattr(subprocess, "run", _Machine(anywhere=True))
+
+    rows = _rows(founding.readiness(tmp_path, "zqelsewhere"))
+
+    assert rows["base_cadre"]["ok"] is False, rows["base_cadre"]
+    assert "installed" not in rows["base_cadre"]["detail"], rows["base_cadre"]
+
+
+def test_founding_does_not_report_a_command_resolved_elsewhere_as_running(
+        monkeypatch, tmp_path):
+    """G2 F2 on the result. `extension_runs` True is asserted too: it proves
+    the probe ran in the firm's tier, so the False key is the verdict and not
+    a probe that never happened."""
+    _point_at_stub(monkeypatch, tmp_path, native=True)
+    monkeypatch.setattr(subprocess, "run", _Machine(anywhere=True))
+
+    result = founding.commit(tmp_path, _proposal("zqelsecommit"))
+
+    assert result.get("ok") is True, result
+    assert result["base_ready"]["extension_runs"] is True, result["base_ready"]
+    assert result["base_ready"]["extension_installed"] is False, result["base_ready"]
+    assert result["base_cadre_runs"] is False, result["base_ready"]
+
+
+def test_a_healthy_firm_tier_reads_healthy_on_both_readiness_rows(monkeypatch, tmp_path):
+    """G2 F4: the TRUE direction of both rows, pinned. Before this leg every
+    base-row assertion was an ok-False one, so a row stuck at False passed."""
+    from firm.services.graph_isolation import tier_extensions_dir
+
+    ws = _bare_firm(tmp_path, "zqhealthyrows")
+    (tier_extensions_dir(ws) / "cadre.toml").write_text(MANIFEST, encoding="utf-8")
+    _point_at_stub(monkeypatch, tmp_path, native=True)
+    monkeypatch.setattr(subprocess, "run", _Machine())
+
+    rows = _rows(founding.readiness(tmp_path, "zqhealthyrows"))
+
+    assert rows["base"]["ok"] is True, rows["base"]
+    assert rows["base"]["detail"].startswith("base at "), rows["base"]
+    assert rows["base_cadre"]["ok"] is True, rows["base_cadre"]
+    assert rows["base_cadre"]["detail"] == "the cadre extension is installed and runs", (
+        rows["base_cadre"])
+
+
+def test_founding_reports_the_command_running_when_the_firms_tier_is_healthy(
+        monkeypatch, tmp_path):
+    """G2 F4: the TRUE direction of `base_cadre_runs`, pinned.
+
+    Nothing in founding installs into the firm's tier yet (DoD 4, parked with
+    gadwall), so the manifest is placed there BEFORE the commit -- the state
+    that install will produce -- and the real check and ensure read it. The
+    manifest surviving the founding is asserted, so a run_init that wiped the
+    tier would show up as that, not as a False key."""
+    from firm.services.graph_isolation import tier_extensions_dir
+
+    manifest = tier_extensions_dir(tmp_path / "zqhealthy") / "cadre.toml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(MANIFEST, encoding="utf-8")
+    _point_at_stub(monkeypatch, tmp_path, native=True)
+    monkeypatch.setattr(subprocess, "run", _Machine())
+
+    result = founding.commit(tmp_path, _proposal("zqhealthy"))
+
+    assert result.get("ok") is True, result
+    assert manifest.is_file(), "the founding removed the firm tier's manifest"
+    assert result["base_present"] is True
+    assert result["base_ready"]["ok"] is True, result["base_ready"]
+    assert result["base_cadre_runs"] is True, result["base_ready"]

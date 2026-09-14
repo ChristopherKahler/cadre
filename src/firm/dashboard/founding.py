@@ -841,11 +841,15 @@ def readiness(root: Path, firm_id: str) -> dict[str, Any]:
                     if base_state.get("base_runs")
                     else str(base_state.get("reason") or "not found")),
          "fix": "Equip"},
+        # The row follows check's OWN verdict, never `extension_runs` alone.
+        # `base cadre` exits 0 for a base that resolves the command from outside
+        # the firm's tier, with no manifest in it, and this row used to read
+        # "installed and runs" over exactly that (PR 127 G2, F2).
         {"key": "base_cadre", "label": "base cadre — the command every Member runs",
-         "ok": bool(base_state.get("extension_runs")),
+         "ok": bool(base_state.get("ok")),
          "blocking": False,
          "detail": ("the cadre extension is installed and runs"
-                    if base_state.get("extension_runs")
+                    if base_state.get("ok")
                     else str(base_state.get("reason") or "not installed")),
          "fix": "Equip"},
     ]
@@ -1234,8 +1238,12 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
         # question DoD 1 asks: did founding know before it started making a
         # firm. base_cadre_runs is read in the FIRM'S OWN TIER once it exists,
         # which is the question a Member asks: does the command I am told to
-        # run actually run where I run it.
+        # run actually run where I run it. It is check's own verdict -- the
+        # manifest is in that tier AND the command runs there AND the base may
+        # be run at all -- because the process reading alone is True for a base
+        # resolving `cadre` from somewhere else (PR 127 G2, F2). That reading
+        # is still reported, as base_ready["extension_runs"].
         "base_present": bool(base_before.get("base_present")),
-        "base_cadre_runs": bool(base_state.get("extension_runs")),
+        "base_cadre_runs": bool(base_state.get("ok")),
         "base_ready": base_state,
     }
