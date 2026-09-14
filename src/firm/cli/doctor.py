@@ -33,6 +33,7 @@ from firm.core.migrate import (
     applied_migration_names,
     discover_migrations,
 )
+from firm.sched.base import interval_to_seconds
 
 # "operator" is the route for a finding the firm cannot fix, because
 # the firm is not what is broken: the machine could not establish an
@@ -66,6 +67,22 @@ def _parse_json_col(row: dict[str, Any] | None, col: str) -> dict[str, Any]:
     except (json.JSONDecodeError, TypeError):
         return {}
     return val if isinstance(val, dict) else {}
+
+
+def _interval_in(value: Any) -> str | None:
+    """The pulse interval *value* holds, stripped, or None when it holds none.
+
+    The grammar is the one `heartbeat enable` validates with, so the card
+    below and the writer that caused what it reports agree on what an
+    interval is.
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        interval_to_seconds(value)
+    except ValueError:
+        return None
+    return value.strip()
 
 
 def diagnose(workspace: Path, firm_id: str, *,
@@ -285,21 +302,43 @@ def diagnose(workspace: Path, firm_id: str, *,
             "a firm with no number cannot fail, only be busy"))
 
         # 7 + 8. schedule truth and scheduler ghosts — mechanical
+        #
+        # The cadence is firm.pulse_interval (#134). firm.schedule is business
+        # hours: reading it here called a firm with hours and no timer out of
+        # sync, and --fix then wrote NULL over the hours. The card keeps its
+        # key, because fix() and `firm doctor --json` readers select on it.
         stem = f"{_UNIT_PREFIX}{firm_id}"
         st = sched.status(stem)
-        schedule = firm.get("schedule")
-        in_sync = bool(schedule) == bool(st.get("installed"))
+        pulse_interval = firm.get("pulse_interval")
+        in_sync = bool(pulse_interval) == bool(st.get("installed"))
         checks.append(_check(
-            "schedule", "firm.schedule matches the timer", in_sync,
+            "schedule", "firm.pulse_interval matches the timer", in_sync,
             "mechanical",
-            f"schedule={schedule!r}, timer installed: {bool(st.get('installed'))} "
-            f"({sched.name})",
+            f"pulse_interval={pulse_interval!r}, timer installed: "
+            f"{bool(st.get('installed'))} ({sched.name})",
             fix="reconcile the row to timer truth"))
         ghost = bool(st.get("failed")) and not st.get("installed")
         checks.append(_check(
             "ghost-units", "No failed scheduler ghosts", not ghost, "mechanical",
             f"{stem} sits failed with its files gone" if ghost else "clean",
             fix="clear the scheduler's failure residue"))
+
+        # 8b. business hours an interval overwrote — board (#134)
+        #
+        # Before migration 015 the interval was written into firm.schedule,
+        # over whatever hours the firm had. 015 copied it to pulse_interval and
+        # left schedule as it was, because the hours cannot be read back:
+        # nothing keeps a field's history. Only the Board knows its hours, so
+        # the card routes to the Board and --fix has nothing to do.
+        lost_to = _interval_in(firm.get("schedule"))
+        checks.append(_check(
+            "business-hours", "firm.schedule holds business hours, not an interval",
+            lost_to is None, "board",
+            f"firm.schedule holds the pulse interval {lost_to!r}, written there "
+            "before #134. Any business hours this firm had were overwritten and "
+            "cannot be read back; the business-hours gate reads always open "
+            "until the Board sets them again" if lost_to is not None
+            else "no pulse interval in firm.schedule"))
 
         # 9. credential liveness — board (a re-login is a human act)
         dead = preflight.dead_tools(conn, firm_id)
@@ -479,8 +518,9 @@ def fix(workspace: Path, firm_id: str, checks: list[dict[str, Any]], *,
         if "schedule" in failed:
             st = sched.status(f"{_UNIT_PREFIX}{firm_id}")
             interval = st.get("interval") if st.get("installed") else None
-            repo.update(conn, "firm", firm_id, {"schedule": interval})
-            did.append(f"schedule: reconciled to {interval!r}")
+            # The interval's own column, never the business hours (#134).
+            repo.update(conn, "firm", firm_id, {"pulse_interval": interval})
+            did.append(f"pulse_interval: reconciled to {interval!r}")
         if "ghost-units" in failed:
             sched.clear_failed(f"{_UNIT_PREFIX}{firm_id}")
             did.append("ghost-units: failure residue cleared")
