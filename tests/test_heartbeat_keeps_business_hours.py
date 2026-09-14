@@ -21,7 +21,9 @@ before the fix; the C arms are controls that pass on both trees.
 
 from __future__ import annotations
 
+import argparse
 import json
+import re
 import shutil
 import sqlite3
 from datetime import datetime, timezone
@@ -45,6 +47,7 @@ from firm.pulse.orchestrator import check_business_hours
 from firm.pulse.prompt import _render_system_context
 from firm.sched.base import interval_to_seconds
 from firm.sched.systemd import SystemdScheduler
+from tests.test_prompt_verbs_resolve import extract_invocations
 
 FIRM = "hourly"
 
@@ -347,6 +350,56 @@ def test_r6_doctor_names_business_hours_lost_to_the_interval(tmp_path, units):
         assert named in card["detail"], (label, card)
         checked += 1
     assert checked == 2
+
+
+#: The issue that asks for a way to set business hours, which the card names instead of a command.
+HOURS_ISSUE = 139
+
+_CODE_OR_FLAG = re.compile(r"`|--[a-z][a-z0-9-]+")
+_PROGRAM_WORD = re.compile(r"\b(cadre|firm) ([a-z][a-z0-9-]*)")
+
+
+def _cli_verbs() -> set[str]:
+    from firm.__main__ import _build_parser
+    sub = next(a for a in _build_parser()._actions if isinstance(a, argparse._SubParsersAction))
+    return set(sub.choices)
+
+
+def _names_a_command(text: str, verbs: set[str]) -> bool:
+    """A command named anywhere in a card.
+
+    extract_invocations, the repo's one definition, anchors on a line or a code span that
+    STARTS with `firm `. A card is one sentence, so this also counts any code span, any long
+    flag, lowercase cadre followed by a word, and firm followed by a real CLI verb. Not
+    counted: firm followed by an ordinary word, because prose says "this firm had" all the
+    time (that exact sentence failed the first version of this check); so an invented verb
+    written after firm with no backticks is not seen. Doctor cards write commands in backticks.
+    """
+    if extract_invocations(text) or _CODE_OR_FLAG.search(text):
+        return True
+    return any(program == "cadre" or word in verbs for program, word in _PROGRAM_WORD.findall(text))
+
+
+def test_r6_business_hours_card_names_no_command_and_points_at_the_issue(tmp_path, units):
+    """osprey's ruling on #134 (the #28 rule): a card never points at a command that does not
+    exist. Nothing in Cadre sets business hours yet, so the card states the fact and its effect
+    and names the issue that asks for one."""
+    ws = _firm(tmp_path / FIRM, schedule="30m")
+    card = _card(ws, units, "business-hours")
+    verbs = _cli_verbs()
+    assert {"doctor", "heartbeat"} <= verbs, f"CONTROL: the CLI verbs were not read: {sorted(verbs)}"
+
+    for text in (card["label"], card["detail"]):
+        assert not _names_a_command(text, verbs), text
+    assert "always open" in card["detail"], card["detail"]
+    assert f"#{HOURS_ISSUE}" in card["detail"], card["detail"]
+    # CONTROLS: the same card naming a command, in each shape, is caught, so the pass above was
+    # able to fail; and the prose sentence that fooled the first version is not.
+    for poisoned in (card["detail"] + " Run cadre hours set to fix it.",
+                     card["detail"] + " Then `firm doctor --fix`.",
+                     card["detail"] + " Then firm doctor names it."):
+        assert _names_a_command(poisoned, verbs), poisoned
+    assert not _names_a_command("Any business hours this firm had were overwritten.", verbs)
 
 
 def test_r6_doctor_business_hours_card_passes_real_hours_and_none(tmp_path, units):

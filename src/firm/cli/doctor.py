@@ -334,10 +334,12 @@ def diagnose(workspace: Path, firm_id: str, *,
         checks.append(_check(
             "business-hours", "firm.schedule holds business hours, not an interval",
             lost_to is None, "board",
-            f"firm.schedule holds the pulse interval {lost_to!r}, written there "
-            "before #134. Any business hours this firm had were overwritten and "
-            "cannot be read back; the business-hours gate reads always open "
-            "until the Board sets them again" if lost_to is not None
+            # The fact and its effect only. A card never names a command that does
+            # not exist (the #28 rule), and nothing in Cadre sets business hours
+            # yet, so it names the issue that asks for one.
+            f"the schedule column holds the pulse interval {lost_to!r} where business "
+            "hours belong, so the business-hours gate reads always open. Cadre has no "
+            "command to set business hours yet; see issue #139" if lost_to is not None
             else "no pulse interval in firm.schedule"))
 
         # 9. credential liveness — board (a re-login is a human act)
