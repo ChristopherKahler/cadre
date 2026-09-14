@@ -454,7 +454,8 @@ Repeat: Stop If Still Running:        Disabled
 
 
 # (Status, Last Run Time, Last Result) exactly as schtasks printed them, each
-# read off a live task in lane F arms B and E, then what status() must say.
+# read off a live task in lane F arms B and E, or in the fork doc's M-W2 arms
+# A4b-1 and A4b-2, then what status() must say.
 _WINSCHED_STATUS_CASES = [
     pytest.param("Ready", "11/30/1999 12:00:00 AM", "267011",
                  {"failed": False, "never_run": True, "dropped_tick": False,
@@ -476,6 +477,32 @@ _WINSCHED_STATUS_CASES = [
                  {"failed": True, "dropped_tick": False,
                   "last_result": 0xC000013A},
                  None, id="console-closed-is-a-failure"),
+    # M-W2 A4b-1: `schtasks /End` on a running task. The run was ended by hand,
+    # not failed by the pulse, so it gets a state of its own and keeps its code.
+    pytest.param("Ready", "9/14/2026 6:29:45 PM", "267014",
+                 {"failed": False, "state": "terminated", "never_run": False,
+                  "dropped_tick": False, "last_result": 0x41306,
+                  "last_fire": "9/14/2026 6:29:45 PM"},
+                 None, id="ended-by-hand-is-not-a-failure"),
+    # M-W2 A4b-2: a disabled task that never ran. It never reported 0x41302 as
+    # its Last Result; disabled is read from Status, the task's own state.
+    pytest.param("Disabled", "11/30/1999 12:00:00 AM", "267011",
+                 {"failed": False, "state": "disabled", "never_run": True,
+                  "dropped_tick": False, "last_result": 0x41303},
+                 "last_fire", id="disabled-comes-from-the-task-state"),
+    # The control for the row above that stopped reading as failed: a process
+    # that really fails still does. Copied out of the R9 record (a command that
+    # exited 7 through the launcher, fired by Task Scheduler), never retyped.
+    pytest.param("Ready", "9/14/2026 5:29:24 PM", "7",
+                 {"failed": True, "state": "ready", "never_run": False,
+                  "dropped_tick": False, "last_result": 7,
+                  "last_fire": "9/14/2026 5:29:24 PM"},
+                 None, id="real-exit-7-is-a-failure"),
+    # Synthetic on purpose: no live task has recorded Last Result 1 yet. status()
+    # gives 1 no meaning of its own, so it must read exactly as the real 7 does.
+    pytest.param("Ready", "9/14/2026 5:29:24 PM", "1",
+                 {"failed": True, "state": "ready", "last_result": 1},
+                 None, id="exit-1-is-a-failure"),
 ]
 
 

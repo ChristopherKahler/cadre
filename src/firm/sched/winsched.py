@@ -63,11 +63,17 @@ _LR_NEVER_RUN = 0x00041303      # the task has never run
 # trigger, and the NEXT finish overwrites this code with the finish's own, so
 # a dropped tick is visible only between the two. It is not a task failure.
 _LR_REFUSED = 0x800710E0
+# The last run was ended by hand (`schtasks /End`, or End in the Task Scheduler
+# window). Captured in the fork doc's M-W2 arm A4b-1. Someone stopping a run is
+# not the pulse failing, so it reads as its own state with the code kept beside
+# it. A disabled task never reports 0x41302 here (arm A4b-2): disabled is read
+# from Status, the task's state, never from Last Result.
+_LR_TERMINATED = 0x00041306
 # Documented, NOT captured: an Interactive-only trigger while the user is logged
 # out. Skipping then is the design (logged out means no pulse), not a failure.
 _LR_NOT_LOGGED_ON = 0x800704DD
 _NOT_FAILURES = frozenset({_LR_OK, _LR_RUNNING, _LR_NEVER_RUN, _LR_REFUSED,
-                           _LR_NOT_LOGGED_ON})
+                           _LR_TERMINATED, _LR_NOT_LOGGED_ON})
 # A never-run task reports `Last Run Time: 11/30/1999 12:00:00 AM` (en-US).
 # Matched on the year so another date order still reads as "never", not as
 # a pulse that fired in 1999.
@@ -362,6 +368,8 @@ class WindowsScheduler:
                     out["never_run"] = True
                 if code not in _NOT_FAILURES:
                     out["failed"] = True
+        if out.get("last_result") == _LR_TERMINATED and out["state"] == "ready":
+            out["state"] = "terminated"
         spec = self._spec(stem)
         if spec.exists():
             recorded = json.loads(spec.read_text(encoding="utf-8"))

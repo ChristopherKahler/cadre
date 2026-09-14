@@ -46,7 +46,9 @@ exited ``0xFFFFFFFF``, while ``sys.exit(-1073741510)`` exited ``0xC000013A``.
 
 SUPERVISION. Task Scheduler cannot restart an interactive user's task when it
 fails, so a service runs its command again 5 seconds after every exit, as the
-``.cmd`` loop did, until the task ends with the user's logon session.
+``.cmd`` loop did, for as long as this launcher runs. Ending the launcher does
+not end a command it has already started: on Windows ``schtasks /End`` left the
+command and its console running (#119 fork doc, M-W2 arm A4b-1).
 """
 
 from __future__ import annotations
