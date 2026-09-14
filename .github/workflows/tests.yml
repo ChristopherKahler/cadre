@@ -174,8 +174,6 @@ jobs:
               sys.exit("no wheel in dist/ — this step proved NOTHING")
 
           want = os.environ["GITHUB_SHA"]
-          checked = 0
-          failures = []
 
           def baked_commit(path):
               with zipfile.ZipFile(path) as zf:
@@ -186,30 +184,53 @@ jobs:
                           return m.group(1) if m else None
               return None
 
+          def refusal(wheel, got):
+              """Why this wheel was not built from `want`, or None if it was.
+
+              The real wheels and the controls below go through this same function,
+              so a control that passes says something about the real check.
+              """
+              if got is None:
+                  return f"{wheel}: carries no build stamp at all"
+              if got != want:
+                  return f"{wheel}: built from {got}, not {want}"
+              if got[:7] not in os.path.basename(wheel):
+                  return f"{wheel}: filename does not carry the commit {got[:7]}"
+              return None
+
+          checked = 0
+          failures = []
           for wheel in wheels:
               checked += 1
               got = baked_commit(wheel)
               print(f"  {os.path.basename(wheel)}")
               print(f"    baked commit: {got}")
               print(f"    GITHUB_SHA:   {want}")
-              if got is None:
-                  failures.append(f"{wheel}: carries no build stamp at all")
-              elif got != want:
-                  failures.append(f"{wheel}: built from {got}, not {want}")
-              elif got[:7] not in os.path.basename(wheel):
-                  failures.append(
-                      f"{wheel}: filename does not carry the commit {got[:7]}")
+              reason = refusal(wheel, got)
+              if reason:
+                  failures.append(reason)
 
           print(f"wheels checked: {checked}")
           if checked == 0:
               sys.exit("checked zero wheels — a pass here would mean nothing")
 
-          # Control: the comparison must be able to say NO. If a deliberately
-          # wrong sha compares equal, every green above was an instrument that
-          # cannot fail.
-          if baked_commit(wheels[0]) == "0" * 40:
-              sys.exit("control failed: a bogus sha compared equal")
-          print("control: a bogus sha is correctly rejected")
+          # Controls. The check has to be able to say NO, and the only way to show
+          # that is to send wrong input through the same refusal() the wheels went
+          # through. Each control is built so exactly one clause can decide it: a
+          # wrong commit in a filename that carries that same wrong commit can only
+          # be refused by the commit comparison, and the right commit in a filename
+          # with no commit in it can only be refused by the filename check. The first
+          # version of this control compared the baked commit to forty zeros. That is
+          # unequal on every run whether or not the comparison works, so it could
+          # never go red.
+          bogus = "0" * 40
+          if refusal(f"dist/cadre-0+g{want[:7]}-py3-none-any.whl", want) is not None:
+              sys.exit("control failed: a wheel built from the commit under test was refused")
+          if refusal(f"dist/cadre-0+g{bogus[:7]}-py3-none-any.whl", bogus) is None:
+              sys.exit("control failed: a wheel built from a wrong commit was accepted")
+          if refusal("dist/cadre-0-py3-none-any.whl", want) is None:
+              sys.exit("control failed: a filename that does not carry the commit was accepted")
+          print("control: the comparison accepts a matching commit and refuses a wrong commit and a wrong filename")
 
           if failures:
               for line in failures:
