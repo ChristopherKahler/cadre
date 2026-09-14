@@ -262,10 +262,35 @@ def graph_rules(base: str, domain: str, env: dict[str, str]) -> list[str]:
     command answers "3 rules" in one directory and "No rules for domain" one
     level down. A count reported without its directory is not a measurement.
     """
-    listed = subprocess.run(
-        [base, "rule", "list", "--domain", domain],
-        capture_output=True, text=True, timeout=60,
-        env=env, stdin=subprocess.DEVNULL)
+    # run_utf8, never a bare `subprocess.run(text=True)`. This is #114 and I
+    # put it back in my own code before catching it: `text=True` decodes with
+    # the host locale, which is cp1252 on the operator's Windows install. The
+    # rule text being read here is full of what that mangles -- the shipped
+    # rules carry backticks and an em dash, the stale ones carry `§`. Two
+    # consequences, and the second is worse than the crash:
+    #
+    #   a rule carrying a character whose UTF-8 uses 0x81/0x8D/0x8F/0x90/0x9D
+    #   (`═`, `←`, a ZWJ) KILLS the call outright;
+    #
+    #   and everything else decodes to a DIFFERENT string, so every graph rule
+    #   compares unequal to the manifest rule it is a copy of, and a clean
+    #   machine reports a collision on every domain. A false-positive
+    #   generator on every Windows box, from a decode nobody would look at.
+    #
+    # require_output=True because the output IS the answer: base always prints
+    # either a listing or the "No rules" sentence, so an empty stdout is a
+    # failed read, and without this it would parse to [] and read as CLEAN.
+    from firm.core.proc import NoOutput
+
+    try:
+        listed = run_utf8(
+            [base, "rule", "list", "--domain", domain],
+            capture_output=True, timeout=60, require_output=True,
+            env=env, stdin=subprocess.DEVNULL)
+    except NoOutput as exc:
+        raise GraphReadFailed(
+            f"`base rule list --domain {domain}` printed nothing, so what the "
+            f"graph serves is unknown: {exc}") from exc
     if listed.returncode != 0:
         raise GraphReadFailed(
             f"`base rule list --domain {domain}` exited {listed.returncode}: "

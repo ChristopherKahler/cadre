@@ -574,6 +574,10 @@ class _Run:
 
     def __call__(self, cmd, **kwargs):
         self.calls.append(list(cmd))
+        #: The kwargs of the LAST call, so an arm can assert how the child was
+        #: decoded rather than only which verb it ran. Issue #114 is invisible
+        #: at the argv level and lives entirely in these.
+        self.kwargs = dict(kwargs)
         if list(cmd)[1:3] == ["rule", "list"]:
             class L:
                 returncode = 0
@@ -1063,3 +1067,75 @@ def test_an_unreadable_graph_is_reported_as_unknown_never_as_clean(
     code = base_extension.run_install("/opt/cadre")
     assert code == 0
     assert "could not be read" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Reading the graph is a #114 surface too
+#
+# I wrote this call with `subprocess.run(..., text=True)` and shipped it in my
+# own first commit, one file away from the fix for exactly that. `text=True`
+# decodes with the host locale — cp1252 on the operator's Windows install — and
+# the rule text being read here is full of what that mangles: the shipped rules
+# carry backticks and an em dash, the stale ones carry `§`.
+#
+# The crash half is the visible one. The half that would have gone unnoticed is
+# worse: every graph rule decoded differently from the manifest rule it is a
+# copy of, so `r not in mine` is true for all of them and a perfectly clean
+# machine reports a collision on every domain. A false-positive generator, from
+# a decode nobody would think to look at.
+# ---------------------------------------------------------------------------
+
+def test_the_graph_read_is_decoded_as_utf8_never_by_the_host_locale(
+        fake_base, monkeypatch):
+    """Asserted on the kwargs the child was actually launched with. The argv is
+    identical either way, so an arm that only checked the verb would pass over
+    a locale-decoded read."""
+    run = _Run(0, 0, 0)
+    run.listing = CLEAN_LISTING
+    monkeypatch.setattr(subprocess, "run", run)
+    _land(fake_base)
+    base_extension.install("/opt/cadre")
+    assert run.kwargs.get("encoding") == "utf-8", (
+        "the rule listing is decoded with the host locale, which is #114 "
+        f"reopened in the reader: {run.kwargs!r}")
+    assert "text" not in run.kwargs, (
+        "text=True beside an explicit encoding means a future edit can drop "
+        "the encoding and look unchanged")
+
+
+def test_a_rule_carrying_non_ascii_does_not_read_as_foreign(fake_base,
+                                                            monkeypatch):
+    """The false-positive arm, and the reason the one above matters.
+
+    A graph copy that IS this manifest, carrying the characters cp1252 would
+    have mangled, must compare equal. Under the decode bug every one of these
+    rules read as a rule the manifest did not write.
+    """
+    mine = _manifest_rules()
+    assert any("`" in r for r in mine), (
+        "precondition: the shipped rules no longer carry a character the host "
+        "locale would mangle, so this arm has nothing to discriminate")
+    run = _Run(0, 0, 0)
+    run.listing = _listing_of(mine)
+    monkeypatch.setattr(subprocess, "run", run)
+    _land(fake_base)
+    res = base_extension.install("/opt/cadre")
+    assert res["collision"] is False, (
+        f"a faithful graph copy read as foreign: {res['foreign_rules']}")
+
+
+def test_an_empty_listing_is_a_failed_read_never_a_clean_one(fake_base,
+                                                             monkeypatch):
+    """base always prints either a listing or the "No rules" sentence, so an
+    empty stdout is a failed read. Parsed rather than refused it would come
+    back as [] — no rules, nothing wrong, machine clean — which is the exact
+    shape of a zero that means "I could not see"."""
+    run = _Run(0, 0, 0)
+    run.listing = ""
+    monkeypatch.setattr(subprocess, "run", run)
+    _land(fake_base)
+    res = base_extension.install("/opt/cadre")
+    assert res["graph_read"] is False, (
+        "an empty rule listing was read as a clean graph")
+    assert res["collision"] is False
+    assert "UNKNOWN" in res["reason"]
