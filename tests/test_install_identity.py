@@ -17,12 +17,14 @@ measured: four different synthetic stamps all produced one string.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import types
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -526,6 +528,10 @@ def test_doctor_reads_the_editable_record_instead_of_saying_none_was_written(sta
 
 _DIRTY_VERSION = "0.1.0.dev441+g21aba4f.dirty"
 
+#: What `cadre install` says when pip's record names the same wheel before and
+#: after. It names what was compared, a recorded wheel hash, and nothing more.
+_SAME_WHEEL = "pip's record already named this exact wheel"
+
 
 def _installed(sha256, *, commit=COMMIT_A, version=_DIRTY_VERSION):
     wheel = None if sha256 is None else {"kind": "wheel", "url": "file:///w.whl",
@@ -560,17 +566,25 @@ def test_install_never_claims_the_same_bytes_when_the_bytes_differ(tmp_path, cap
 
     assert rc == 0
     assert "exactly these bytes" not in out
+    assert _SAME_WHEEL not in out
     assert old in out and _file_sha(wheel) in out
 
 
-def test_install_says_the_same_bytes_only_when_both_hashes_match(tmp_path, capsys, monkeypatch):
-    # Control: the same wheel twice. Here the claim is true and must still be made.
+def test_install_names_the_same_wheel_only_when_both_hashes_match(tmp_path, capsys, monkeypatch):
+    # Control: the same wheel twice. pip's record names this exact wheel before and
+    # after, and that is said out loud. What is NOT said is that the environment
+    # held these bytes: equal recorded hashes do not show the installed files were
+    # unchanged, because a hand-edited install reinstalled from the same wheel
+    # records the same hash (avocet's L7E, #120 re-grade N2). The old line claimed
+    # "exactly these bytes"; this assertion replaced it and fails if it returns.
     wheel = _wheel(tmp_path, f"cadre-{_DIRTY_VERSION}-py3-none-any.whl", COMMIT_A, _DIRTY_VERSION)
     sha = _file_sha(wheel)
     _install_with(monkeypatch, _installed(sha), _installed(sha))
 
     assert install_mod.run_install(wheel) == 0
-    assert "exactly these bytes" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert _SAME_WHEEL in out and sha in out
+    assert "exactly these bytes" not in out
 
 
 def test_install_says_bytes_not_verified_when_the_old_install_recorded_no_hash(tmp_path, capsys, monkeypatch):
@@ -580,6 +594,7 @@ def test_install_says_bytes_not_verified_when_the_old_install_recorded_no_hash(t
     assert install_mod.run_install(wheel) == 0
     out = capsys.readouterr().out
     assert "exactly these bytes" not in out
+    assert _SAME_WHEEL not in out
     assert "not verified" in out
 
 
@@ -668,3 +683,216 @@ def test_install_makes_pip_reinstall_even_when_the_version_matches(tmp_path, cap
     pip = [argv for argv in calls if "pip" in argv]
     assert len(pip) == 1
     assert "--force-reinstall" in pip[0] and "--no-deps" in pip[0]
+
+
+# ---------------------------------------------------------------------------
+# G2 re-grade R1 — a checkout whose git cannot answer says unknown, never a stamp
+# ---------------------------------------------------------------------------
+
+#: The first line git prints when it refuses a repository another account owns,
+#: the shape avocet's K3 shim printed. The advice lines follow it.
+_DUBIOUS = ("fatal: detected dubious ownership in repository at '/srv/cadre'\n"
+            "To add an exception for this directory, call:\n\n"
+            "\tgit config --global --add safe.directory /srv/cadre\n")
+
+
+def _leftover_stamp(monkeypatch, commit=COMMIT_A):
+    """A real stamp in the pre-rework backend's format, naming *commit*."""
+    leftover = types.ModuleType("firm._build_stamp")
+    leftover.COMMIT, leftover.COMMIT_COUNT, leftover.DIRTY = commit, 440, False
+    leftover.TAG = leftover.DESCRIBE = leftover.REMOTE_DISTANCE = ""
+    leftover.BUILT_AT = "2026-09-14T15:00:00Z"
+    monkeypatch.setitem(sys.modules, "firm._build_stamp", leftover)
+
+
+def _subprocess_where_git(kind):
+    """``subprocess`` as ``_build_info`` sees it when git cannot answer.
+
+    Scoped to ``_build_info``: the stub replaces that module's name only, so the
+    real ``_git`` error handling runs and nothing else in the process loses its
+    subprocess module.
+    """
+    def run(argv, **kwargs):
+        if kind == "missing":
+            raise FileNotFoundError(2, "No such file or directory", "git")
+        if kind == "timeout":
+            raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+        return subprocess.CompletedProcess(argv, 128, stdout="", stderr=_DUBIOUS)
+    return types.SimpleNamespace(run=run, TimeoutExpired=subprocess.TimeoutExpired,
+                                 CompletedProcess=subprocess.CompletedProcess)
+
+
+def _checkout_git_cannot_read(tmp_path, monkeypatch, kind="missing"):
+    """A Cadre checkout with a repository of its own, a leftover stamp beside it,
+    and a git that cannot answer: avocet's K2 (git hidden), K3 (git refusing)."""
+    root = _cadre_shaped(tmp_path / "cadre")
+    (root / ".git").mkdir()
+    monkeypatch.setattr(_build_info, "_PACKAGE_DIR", root / "src" / "firm", raising=False)
+    _leftover_stamp(monkeypatch)
+    monkeypatch.setattr(_build_info, "subprocess", _subprocess_where_git(kind))
+    return root
+
+
+@pytest.mark.parametrize("kind,named", [
+    ("missing", "could not be started"),
+    ("refused", "dubious ownership"),
+    ("timeout", "did not answer"),
+])
+def test_a_checkout_whose_git_cannot_answer_says_unknown_never_the_leftover_stamp(
+        tmp_path, monkeypatch, kind, named):
+    """avocet's K2, K3 and W7. With git hidden or refusing, a stamp left by an
+    older build made an editable install name the commit it was installed at,
+    with source git and state agree, while the checkout ran other code. A tree
+    with its own repository never reads a stamp: git answers, or it is unknown
+    and says why."""
+    _checkout_git_cannot_read(tmp_path, monkeypatch, kind)
+
+    info = _build_info.build_info()
+
+    assert info["commit"] != COMMIT_A, "a leftover stamp decided what a checkout reports"
+    assert info["commit"] is None
+    assert info["source"] == "unknown"
+    assert named in (info.get("checkout_error") or ""), info
+    assert _build_info.version_string() == _build_info.BASE_VERSION
+
+
+def test_identity_and_doctor_say_not_verified_when_a_checkout_cannot_be_read(tmp_path, monkeypatch):
+    root = _checkout_git_cannot_read(tmp_path, monkeypatch, "missing")
+    # What the pre-rework editable install recorded: the stamp's own label, so the
+    # old code printed "agree" here (K2's exact symptom).
+    monkeypatch.setattr(ident_mod, "_metadata_version", lambda: "0.1.0.dev440+g11c530b")
+    monkeypatch.setattr(ident_mod, "_direct_url", lambda: {
+        "kind": "editable", "url": root.as_uri(), "dir": str(root), "filename": None, "sha256": None})
+
+    identity = ident_mod.installed_identity()
+    text = ident_mod.render_text(identity)
+    cards = {c["key"]: c for c in install_doctor.diagnose_install(identity)}
+
+    assert identity["sources"]["build"]["commit"] is None
+    assert identity["agreement"]["state"] != "agree", identity["agreement"]
+    assert COMMIT_A not in text and "could not be started" in text, text
+    assert cards["install-commit"]["state"] == "undeterminable", cards["install-commit"]
+    assert "could not be started" in cards["install-commit"]["detail"]
+    # Not a green tick: nothing about this install could be checked.
+    assert cards["install-agreement"].get("state") == "undeterminable", cards["install-agreement"]
+
+
+def test_an_unpacked_sdist_with_no_repository_of_its_own_keeps_its_stamp(tmp_path, monkeypatch):
+    """The control for R1. An sdist carries the stamp its build wrote and has no
+    .git, so the stamp IS its answer and must still be read."""
+    root = _cadre_shaped(tmp_path / "cadre-0.1.0")
+    monkeypatch.setattr(_build_info, "_PACKAGE_DIR", root / "src" / "firm", raising=False)
+    _leftover_stamp(monkeypatch)
+    monkeypatch.setattr(_build_info, "subprocess", _subprocess_where_git("missing"))
+
+    info = _build_info.build_info()
+
+    assert info["commit"] == COMMIT_A
+    assert info["source"] == "git"
+
+
+# ---------------------------------------------------------------------------
+# G2 re-grade N1 — a live checkout has no build time
+# ---------------------------------------------------------------------------
+
+def _dirty_identity(source):
+    return {"sources": {"build": {"commit": COMMIT_B, "source": source, "dirty": True},
+                        "metadata": {"version": "0.1.0.dev9+g6cab301"}, "wheel": None},
+            "agreement": {"ok": True, "state": "checkout", "detail": "running a git checkout"}}
+
+
+def test_doctor_describes_a_dirty_checkout_as_changed_now_not_at_build_time():
+    card = next(c for c in install_doctor.diagnose_install(_dirty_identity("checkout"))
+                if c["key"] == "install-clean")
+    assert card["ok"] is False
+    assert "build time" not in card["detail"] and "Built" not in card["label"], card
+    assert "now" in card["detail"], card
+
+
+def test_doctor_still_says_build_time_for_a_stamped_build():
+    # Control: a stamp really was written at build time, so there it is true.
+    card = next(c for c in install_doctor.diagnose_install(_dirty_identity("git"))
+                if c["key"] == "install-clean")
+    assert "at build time" in card["detail"], card
+
+
+# ---------------------------------------------------------------------------
+# G2 re-grade N3 — importing firm starts no git, and reading never writes
+# ---------------------------------------------------------------------------
+
+#: Runs in a child: counts the git processes Python starts while `import firm`
+#: runs, then, as the control that the counter can see git at all, while the
+#: identity of a scratch checkout is read.
+_COUNT_GIT = r"""
+import json, os, subprocess, sys
+from pathlib import Path
+spawned = []
+class _Counting(subprocess.Popen):
+    def __init__(self, args, *a, **k):
+        argv = [args] if isinstance(args, (str, bytes, os.PathLike)) else list(args)
+        spawned.append(os.path.basename(os.fsdecode(argv[0])).lower())
+        super().__init__(args, *a, **k)
+subprocess.Popen = _Counting
+import firm
+at_import = sum(1 for name in spawned if name.startswith("git"))
+from firm import _build_info
+_build_info._PACKAGE_DIR = Path(sys.argv[1]) / "src" / "firm"
+_build_info.build_info()
+on_request = sum(1 for name in spawned if name.startswith("git")) - at_import
+print(json.dumps({"firm": firm.__file__, "at_import": at_import, "on_request": on_request}))
+"""
+
+
+def test_importing_firm_starts_no_git_process(checkout):
+    """avocet's L12: every firm process imports this package, and on main that
+    ran no git. Reading the commit at import cost every one of them four git
+    children, one of which rewrote the checkout's index. The identity and the
+    version resolve when they are asked for."""
+    src = Path(_build_info.__file__).resolve().parents[1]
+    out = subprocess.run(
+        [sys.executable, "-c", _COUNT_GIT, str(checkout)],
+        capture_output=True, encoding="utf-8", errors="replace", timeout=120,
+        env=dict(os.environ, PYTHONPATH=str(src)), cwd=str(checkout.parent),
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    assert Path(got["firm"]).resolve().parent == src / "firm", got
+    assert got["on_request"] > 0, f"CONTROL: the counter saw no git on request: {got}"
+    assert got["at_import"] == 0, got
+
+
+def test_cadre_version_resolves_when_asked_for_not_when_the_cli_starts(monkeypatch, capsys):
+    from firm import __main__ as cli
+    calls = []
+    monkeypatch.setattr(_build_info, "version_string",
+                        lambda: calls.append("asked") or "0.1.0.dev7+gabcdef0")
+
+    parser = cli._build_parser()
+    assert calls == [], "building the parser resolved the version"
+
+    with pytest.raises(SystemExit) as stopped:
+        parser.parse_args(["--version"])
+
+    assert stopped.value.code == 0
+    assert capsys.readouterr().out.strip() == f"{parser.prog} 0.1.0.dev7+gabcdef0"
+    assert calls == ["asked"]
+
+
+def test_reading_a_checkout_identity_never_rewrites_its_git_index(checkout):
+    """osprey's index leg for N3. git status refreshes a stat-stale index entry and
+    writes the index back when it can take the lock, which can collide with a
+    commit running in that checkout. The identity read must leave it alone."""
+    index = checkout / ".git" / "index"
+    stale = checkout / "_build" / "backend.py"
+    os.utime(stale, (1_577_836_800, 1_577_836_800))   # 2020-01-01: stat no longer matches
+    before = (index.stat().st_mtime_ns, index.read_bytes())
+
+    info = _build_info.build_info()
+
+    assert info["source"] == "checkout" and info["dirty"] is False, info
+    assert (index.stat().st_mtime_ns, index.read_bytes()) == before, "reading rewrote the index"
+    # CONTROL: a plain status on the same stat-stale entry does rewrite it, so the
+    # assertion above was able to fail.
+    _scratch_git(checkout, "status", "--porcelain")
+    assert (index.stat().st_mtime_ns, index.read_bytes()) != before
