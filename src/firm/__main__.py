@@ -514,6 +514,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--framework-dir", dest="framework_dir", default=None,
         help="Where Cadre is installed. Defaults to the package's own root, "
              "which is what a normal install wants.")
+    # Not the house sentence "(defaults to current directory)" the other
+    # --workspace flags carry, on purpose: this default is different. It walks
+    # up to the firm you are standing in, and outside any firm it names no
+    # workspace at all. Copying that sentence would tell the operator about a
+    # default this flag does not have.
+    ext_install.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to the firm you are "
+             "standing in). The manifest goes into that firm's own base tier. "
+             "Outside a firm, with no flag, it goes where it always went.")
 
     # ---- export subparser ----
     # The manifest declares `[[hooks.session_start.ingest]]` blocks that base
@@ -1037,7 +1047,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.extension_command == "install":
             from firm.services.base_extension import run_install
 
-            return run_install(args.framework_dir)
+            # THE FIRM YOU ARE STANDING IN (#117), resolved here rather than
+            # inside run_install, which is also a Python API. An explicit
+            # --workspace wins. Otherwise walk up for .firm/firm.db, and outside
+            # any firm pass no workspace, which keeps today's tier. A Member
+            # runs `base cadre` in its firm's own tier, so a flag people forget
+            # would install where no Member looks. Made absolute because it
+            # becomes BASE_HOME, and a relative BASE_HOME means whatever
+            # directory base happens to resolve it from.
+            if args.workspace is not None:
+                workspace = Path(args.workspace).expanduser().absolute()
+            else:
+                from firm.services.firm_relay import resolve_firm
+
+                workspace = resolve_firm()
+            return run_install(args.framework_dir, workspace=workspace)
 
     if args.command == "learn":
         from firm.services.writeback import run_learn

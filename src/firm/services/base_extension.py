@@ -133,7 +133,7 @@ def render(framework_dir: Path | str | None = None) -> str:
                 .replace(HANDLER_PLACEHOLDER, console_script().as_posix()))
 
 
-def _base_env() -> dict[str, str]:
+def _base_env(workspace: Path | str | None = None) -> dict[str, str]:
     """The env every `base` call gets. ONE definition, deliberately.
 
     This was a second copy of base_domain's helper. They drifted the moment
@@ -145,13 +145,40 @@ def _base_env() -> dict[str, str]:
 
     while every other base call had been repaired. Two copies of an
     environment builder is two chances to configure a subprocess wrong.
+
+    THE WORKSPACE IS FORWARDED, NEVER DROPPED (#117). With one, the shared
+    builder points `BASE_HOME` at the firm's own tier, and that one key is the
+    whole of where `base extension install` writes. When #117 taught the shared
+    builder to take a workspace, this delegator still took none. So every base
+    call in this module stayed on the operator's tier while the function the
+    isolation tests name was already correct: a fix that reads as complete and
+    moves nothing.
     """
     from firm.services.base_domain import _base_env as _shared
 
-    return _shared()
+    return _shared(workspace)
 
 
-def _installed_path() -> Path:
+def _installed_path(workspace: Path | str | None = None) -> Path:
+    """Where the installed manifest is READ BACK from, and the tier a refusal names.
+
+    With a workspace this is the FIRM's own tier (#117): a firm's extensions
+    are a whitelist, and the only entry Cadre puts there is this manifest.
+    Without one the old behaviour stands, which is what `cadre extension
+    install` outside a firm still needs.
+
+    THIS PATH NEVER DECIDES WHERE THE MANIFEST GOES. base writes wherever the
+    `BASE_HOME` in its env points, so the destination moves with
+    `_base_env(workspace)` and with nothing here. That is why both must be
+    handed the SAME workspace. A read-back aimed at a different tier from the
+    env is reading a file this install did not write: it reports False over a
+    good install when that tier is empty, and when that tier holds an older
+    Cadre manifest it reads the old one back as proof of the new one.
+    """
+    if workspace is not None:
+        from firm.services.graph_isolation import tier_extensions_dir
+
+        return tier_extensions_dir(workspace) / "cadre.toml"
     home = os.environ.get("BASE_HOME")
     root = Path(home) if home else Path.home()
     return root / ".base-gbl" / "extensions" / "cadre.toml"
@@ -317,12 +344,24 @@ def foreign_rules(rendered: str, base: str, env: dict[str, str]) -> list[dict[st
     return findings
 
 
-def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
+def install(framework_dir: Path | str | None = None,
+            workspace: Path | str | None = None) -> dict[str, Any]:
     """Render, validate, install, read back. Never raises.
 
     ``ok`` False with ``reason`` "base is not installed" is not an error — a
     licensee may not carry base, and a firm without it is degraded, never
     broken. That is the same contract ``base_domain.sync`` keeps.
+
+    ``workspace`` names the firm whose OWN tier receives the manifest (#117).
+    A firm's tier is a whitelist and this manifest is its one entry, and a
+    Member spawned in that firm runs `base cadre` against that tier and no
+    other, so an install anywhere else leaves every Member's command dead.
+    With a workspace, all FOUR `base` calls below (validate, install, the
+    handler proof, the graph read) carry that firm's `BASE_HOME`, the read-back
+    reads that tier, and a refusal names it. A call left on the old env is not
+    a smaller leak. It is the same leak, found later. With no workspace the
+    manifest goes where it always went: the tier `BASE_HOME` names, or the
+    home tier.
     """
     from firm.sysconfig.service import which_base
 
@@ -363,7 +402,12 @@ def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
     # resolved can honour that tier, and refuses with a reason when it cannot.
     from firm.sysconfig.binaries import base_can_honour_tier
 
-    expected = _installed_path()
+    # The FIRM's tier when there is one. base_can_honour_tier decides on the
+    # binary's image format alone, so this does not change WHETHER the install
+    # refuses; it changes which tier the refusal tells the operator it
+    # protected, and the `path` it reports. Naming the operator's tier while
+    # refusing an install into a firm would send them to check the wrong place.
+    expected = _installed_path(workspace)
     may_run, refusal = base_can_honour_tier(base, expected)
     if not may_run:
         result["path"] = str(expected)
@@ -380,7 +424,12 @@ def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
     staged = Path(tmpdir) / "cadre.toml"
     try:
         staged.write_text(rendered, encoding="utf-8")
-        env = _base_env()
+        # ONE env, bound once, for every base call in this function: validate,
+        # install, `base cadre --help`, and the rule listing inside
+        # foreign_rules. Each of them takes `env=env`. A call that builds its
+        # own with `_base_env()` runs in the operator's tier while the rest run
+        # in the firm's, and nothing downstream reads differently.
+        env = _base_env(workspace)
 
         checked = run_utf8(
             [base, "extension", "validate", str(staged)],
@@ -402,7 +451,10 @@ def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
             return result
         result["installed"] = True
 
-        landed = _installed_path()
+        # The same workspace the env was given. See _installed_path: a
+        # read-back aimed at another tier reads a file this install never
+        # wrote.
+        landed = _installed_path(workspace)
         result["path"] = str(landed)
         if not landed.exists():
             result["reason"] = (f"base reported success but {landed} does not exist")
@@ -507,8 +559,15 @@ def install(framework_dir: Path | str | None = None) -> dict[str, Any]:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def run_install(framework_dir: Path | str | None = None) -> int:
+def run_install(framework_dir: Path | str | None = None,
+                workspace: Path | str | None = None) -> int:
     """`cadre extension install`. Installs the manifest into base, returns 0.
+
+    ``workspace`` goes straight to ``install``, and this function never guesses
+    one. The CLI resolves "the firm you are standing in" before it calls here.
+    A Python caller therefore never has a firm chosen for it by whichever
+    directory the interpreter happens to be running in, which matters because
+    naming a workspace creates that firm's tier on disk.
 
     Until this existed, the only way to wire a firm's base extension was
 
@@ -534,7 +593,7 @@ def run_install(framework_dir: Path | str | None = None) -> int:
     """
     import sys
 
-    result = install(framework_dir)
+    result = install(framework_dir, workspace=workspace)
     if result.get("ok"):
         print(result.get("reason") or "installed")
         if result.get("handler_runs"):
