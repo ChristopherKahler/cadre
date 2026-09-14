@@ -49,6 +49,17 @@ screen. The env builder this module shares with every other `base` call creates
 the firm's tier when handed a workspace, so a firm whose tier does not exist yet
 is REPORTED as having none rather than having one made for it by a screen.
 
+REFUSE BEFORE ANYTHING RUNS, ``--version`` INCLUDED. A base built for another
+platform still executes here -- in WSL ``which_base`` resolves the Windows base
+across /mnt/c -- and it ignores a POSIX ``BASE_HOME``, so whatever it printed
+would be a reading of the operator's own tier, not the firm's.
+``base_extension.install`` and ``base_domain.scaffold_tier`` refuse such a base
+before their first subprocess; ``check`` asks the same gate before its first.
+The second version of this module asked the gate only after ``--version`` had
+run, then ran ``base cadre --help`` whatever the gate said, and a founding
+reported the command running for a binary its own reason said had been
+"Refused before anything ran" (PR 127, G2 finding F1).
+
 SKIPPED AND FAILED ARE DIFFERENT FACTS, and ``skipped`` is a FIELD. Issue #83:
 ``run_install`` decided an exit code by finding "not installed" in a human
 sentence, and a base under a directory of that name turned a genuine refusal
@@ -102,6 +113,8 @@ def _blank() -> dict[str, Any]:
         "skipped": False,
         "base_present": False,
         "base_runs": False,
+        # The #75 gate's answer for the resolved binary, asked before any
+        # subprocess, with or without a firm. False also when never asked.
         "base_may_write_the_tier": False,
         "base_path": "",
         "extension_installed": False,
@@ -162,6 +175,22 @@ def check(workspace: Path | str | None = None) -> dict[str, Any]:
         result["base_present"] = True
         result["base_path"] = str(base)
 
+        extensions = _tier(workspace)
+        manifest = extensions / "cadre.toml" if extensions is not None else None
+
+        # REFUSE BEFORE ANYTHING RUNS -- see the module docstring. The gate reads
+        # the binary's image format and runs nothing; the tier it is handed only
+        # names, in the refusal, what this base would have written over.
+        from firm.sysconfig.binaries import base_can_honour_tier
+
+        may_run, refusal = base_can_honour_tier(
+            base, manifest if manifest is not None else "the firm's own tier")
+        result["base_may_write_the_tier"] = bool(may_run)
+        if not may_run:
+            result["missing"] = [MISSING_BASE]
+            result["reason"] = refusal
+            return result
+
         try:
             probe = run_utf8([base, "--version"], capture_output=True,
                              timeout=_TIMEOUT_SEC, env=_env(None),
@@ -179,20 +208,13 @@ def check(workspace: Path | str | None = None) -> dict[str, Any]:
             return result
         result["base_runs"] = True
 
-        extensions = _tier(workspace)
-        if extensions is None:
+        if extensions is None or manifest is None:
             result["reason"] = (
                 "base is here and runs. The cadre extension is checked in the "
                 "firm's own tier, and there is no firm yet")
             return result
-        manifest = extensions / "cadre.toml"
         result["extensions_dir"] = str(extensions)
         result["manifest_path"] = str(manifest)
-
-        from firm.sysconfig.binaries import base_can_honour_tier
-
-        may_write, refusal = base_can_honour_tier(base, manifest)
-        result["base_may_write_the_tier"] = bool(may_write)
 
         if not extensions.is_dir():
             # Report, never create. A tier made by a screen render is a write,
@@ -252,8 +274,6 @@ def check(workspace: Path | str | None = None) -> dict[str, Any]:
                 f"`base cadre` runs with the firm's BASE_HOME but no Cadre manifest "
                 f"was read back from {manifest}, so base is resolving it from "
                 "somewhere this check cannot see")
-        if not may_write:
-            result["reason"] += f" — and this base cannot write that tier: {refusal}"
         return result
     except Exception as exc:  # noqa: BLE001 - never raise from a screen or a founding
         result["reason"] = f"the base check did not complete: {exc}"

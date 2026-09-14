@@ -65,9 +65,13 @@ class _Machine:
     rc 0 only when the manifest sits in the extensions directory of the
     BASE_HOME the call was made with -- what the real base did in the probe
     recorded in src/firm/services/base_ready.py.
+
+    `anywhere=True`: `base cadre --help` exits 0 whatever BASE_HOME says -- a
+    base resolving the command from outside the firm's tier.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, anywhere: bool = False) -> None:
+        self.anywhere = anywhere
         self.calls: list[list[str]] = []
 
     def __call__(self, cmd, **kwargs):
@@ -80,8 +84,8 @@ class _Machine:
             out = "base 0.15.2"
         elif rest[:2] == ["cadre", "--help"]:
             home = env.get("BASE_HOME", "")
-            ok = bool(home) and (Path(home) / ".base-gbl" / "extensions"
-                                 / "cadre.toml").is_file()
+            ok = self.anywhere or bool(home) and (
+                Path(home) / ".base-gbl" / "extensions" / "cadre.toml").is_file()
             rc = 0 if ok else 127
             out = "usage: cadre" if ok else "base: unknown command 'cadre'"
 
@@ -228,3 +232,71 @@ def test_readiness_never_installs_anything(monkeypatch, tmp_path, stub_base):
 
     row = [c for c in state["checks"] if c["key"] == "base_cadre"]
     assert len(row) == 1 and row[0]["ok"] is False, row
+
+
+# ---------------------------------------------------------------------------
+# G2 F1 / F2 / F4 — the screen and the result follow check's own verdict
+# ---------------------------------------------------------------------------
+
+def _magic(native: bool) -> bytes:
+    from firm.sysconfig.binaries import native_image_format
+
+    kind = native_image_format()
+    if native:
+        return {"pe": b"MZ\x90\x00", "macho": b"\xcf\xfa\xed\xfe"}.get(kind, b"\x7fELF")
+    return b"\x7fELF" if kind == "pe" else b"MZ\x90\x00"
+
+
+def _point_at_stub(monkeypatch, tmp_path: Path, *, native: bool) -> Path:
+    stub = tmp_path / ("native-bin" if native else "foreign-bin") / "base"
+    stub.parent.mkdir(parents=True, exist_ok=True)
+    stub.write_bytes(_magic(native) + b"\x00" * 128)
+    stub.chmod(0o755)
+    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: str(stub))
+    return stub
+
+
+def _bare_firm(tmp_path: Path, fid: str) -> Path:
+    """A workspace with the firm's tier and nothing else. `readiness` guards
+    its database reads, so no founding is needed -- and without one, a
+    mutation of `commit` cannot reach these legs."""
+    from firm.services.graph_isolation import ensure_tier
+
+    ws = tmp_path / fid
+    ws.mkdir(parents=True)
+    ensure_tier(ws)
+    return ws
+
+
+def _rows(state: dict) -> dict:
+    rows = {c["key"]: c for c in state["checks"] if c["key"] in ("base", "base_cadre")}
+    assert len(rows) == 2, f"visited {len(rows)} of the 2 base rows"
+    return rows
+
+
+def test_a_refused_base_reads_unhealthy_on_both_readiness_rows(monkeypatch, tmp_path):
+    """G2 F1 on the screen: a base this host cannot run is not "base at ...".
+    The command runs in any tier, which is what a Windows base under WSL does,
+    so only the refusal keeps either row from reading healthy."""
+    _bare_firm(tmp_path, "zqrefusedrows")
+    _point_at_stub(monkeypatch, tmp_path, native=False)
+    monkeypatch.setattr(subprocess, "run", _Machine(anywhere=True))
+
+    rows = _rows(founding.readiness(tmp_path, "zqrefusedrows"))
+
+    assert rows["base"]["ok"] is False, rows["base"]
+    assert "Refused before anything ran" in rows["base"]["detail"], rows["base"]
+    assert rows["base_cadre"]["ok"] is False, rows["base_cadre"]
+    assert "installed" not in rows["base_cadre"]["detail"], rows["base_cadre"]
+
+
+def test_founding_with_a_refused_base_never_reports_the_command_running(
+        monkeypatch, tmp_path):
+    _point_at_stub(monkeypatch, tmp_path, native=False)
+    monkeypatch.setattr(subprocess, "run", _Machine(anywhere=True))
+
+    result = founding.commit(tmp_path, _proposal("zqrefused"))
+
+    assert result.get("ok") is True, result
+    assert result["base_present"] is True
+    assert result["base_cadre_runs"] is False, result["base_ready"]

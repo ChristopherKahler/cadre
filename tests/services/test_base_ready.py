@@ -61,11 +61,17 @@ class _Base:
 
     `dead=True` makes the command fail even where the manifest is present:
     the F1 shape, installed and listed and not running.
+
+    `anywhere=True` makes `base cadre --help` exit 0 whatever BASE_HOME says:
+    a base resolving the command from somewhere other than the firm's tier,
+    which is what a Windows base under WSL does with the operator's own tier.
     """
 
-    def __init__(self, *, version_rc: int = 0, dead: bool = False) -> None:
+    def __init__(self, *, version_rc: int = 0, dead: bool = False,
+                 anywhere: bool = False) -> None:
         self.version_rc = version_rc
         self.dead = dead
+        self.anywhere = anywhere
         self.calls: list[tuple[list[str], dict]] = []
 
     def __call__(self, cmd, **kwargs):
@@ -78,7 +84,7 @@ class _Base:
             rc, out = self.version_rc, "base 0.15.2"
         elif rest[:2] == ["cadre", "--help"]:
             home = env.get("BASE_HOME", "")
-            installed = bool(home) and (
+            installed = self.anywhere or bool(home) and (
                 Path(home) / ".base-gbl" / "extensions" / "cadre.toml").is_file()
             rc = 0 if installed and not self.dead else 127
             out = ("usage: cadre [-h] [--version] <command> ..." if rc == 0
@@ -186,6 +192,82 @@ def test_a_base_that_does_not_run_is_named_rather_than_assumed_absent(monkeypatc
     assert state["base_runs"] is False
     assert "does not run" in state["reason"]
     assert fake.count("cadre --help") == 0
+
+
+# ---------------------------------------------------------------------------
+# F1 — a base this host cannot run is refused before ANY subprocess
+# ---------------------------------------------------------------------------
+
+def _stub_with(tmp_path: Path, magic: bytes) -> Path:
+    stub = tmp_path / "other-bin" / "base"
+    stub.parent.mkdir(parents=True, exist_ok=True)
+    stub.write_bytes(magic + b"\x00" * 128)
+    stub.chmod(0o755)
+    return stub
+
+
+def _native_magic() -> bytes:
+    from firm.sysconfig.binaries import native_image_format
+
+    return {"pe": b"MZ\x90\x00", "macho": b"\xcf\xfa\xed\xfe"}.get(
+        native_image_format(), b"\x7fELF")
+
+
+def _foreign_magic() -> bytes:
+    """An image format this host does not run: ELF on Windows, PE elsewhere."""
+    from firm.sysconfig.binaries import native_image_format
+
+    return b"\x7fELF" if native_image_format() == "pe" else b"MZ\x90\x00"
+
+
+@pytest.mark.parametrize("where", ["firm", "no_firm"])
+def test_a_base_this_host_cannot_run_is_refused_before_anything_runs(
+        monkeypatch, tmp_path, machine, where):
+    """G2 F1. The gate refused and the probes ran anyway; now nothing runs.
+
+    `--version` COUNTS. A foreign base under interop executes and ignores a
+    POSIX BASE_HOME, so even its version line is a reading of some other tier.
+    The fake answers `base cadre` in ANY tier, so a probe that slipped past the
+    gate would read as a running command -- the state the grader measured.
+    Control: the leg below, identical but for the stub's magic bytes.
+    """
+    _, firm = machine
+    stub = _stub_with(tmp_path, _foreign_magic())
+    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: str(stub))
+    fake = _Base(anywhere=True)
+    monkeypatch.setattr(subprocess, "run", fake)
+
+    state = base_ready.check(firm if where == "firm" else None)
+
+    assert fake.calls == [], f"a refused base was run: {[a for a, _ in fake.calls]}"
+    assert state["base_present"] is True
+    assert state["base_runs"] is False
+    assert state["base_may_write_the_tier"] is False
+    assert state["skipped"] is False, "refused is not skipped"
+    assert state["extension_installed"] is False
+    assert state["extension_runs"] is False
+    assert state["ok"] is False
+    assert state["missing"] == [base_ready.MISSING_BASE]
+    assert "Refused before anything ran" in state["reason"], state["reason"]
+
+
+def test_control_a_base_this_host_can_run_is_let_through_and_probed(
+        monkeypatch, tmp_path, machine):
+    """Control for the leg above: the same machine with native magic bytes is
+    not refused, and both probes run exactly once."""
+    _, firm = machine
+    stub = _stub_with(tmp_path, _native_magic())
+    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: str(stub))
+    fake = _Base(anywhere=True)
+    monkeypatch.setattr(subprocess, "run", fake)
+
+    state = base_ready.check(firm)
+
+    assert fake.count("--version") == 1
+    assert fake.count("cadre --help") == 1
+    assert state["base_may_write_the_tier"] is True
+    assert state["base_runs"] is True
+    assert "Refused" not in state["reason"], state["reason"]
 
 
 # ---------------------------------------------------------------------------
