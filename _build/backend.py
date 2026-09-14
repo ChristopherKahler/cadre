@@ -53,14 +53,26 @@ def _remote_distance() -> str:
     behind origin/main with nothing modified when this was written, so a build
     there would have shipped pre-fix code with nothing to notice.
     """
-    counts = _git("rev-list", "--left-right", "--count", "@{upstream}...HEAD")
-    if not counts:
-        return ""
-    parts = counts.split()
-    if len(parts) != 2:
-        return ""
-    behind, ahead = parts
-    return f"behind {behind}, ahead {ahead}"
+    # Try the branch's own upstream first, then the default remote branch. A
+    # branch made by `git worktree add -b` has NO upstream, which is every
+    # builder branch in this repository -- measured: the first build of this
+    # lane stamped an empty string. Without the fallback the field would be
+    # empty exactly where it is most wanted.
+    for ref in ("@{upstream}", "origin/HEAD", "origin/main"):
+        counts = _git("rev-list", "--left-right", "--count", f"{ref}...HEAD")
+        if not counts:
+            continue
+        parts = counts.split()
+        if len(parts) != 2:
+            continue
+        behind, ahead = parts
+        if behind == "0" and ahead == "0":
+            return f"level with {ref}"
+        # Name the ref. A distance is meaningless without the baseline it was
+        # measured against, and a reader who assumes the wrong one gets a
+        # confident wrong answer rather than no answer.
+        return f"behind {ref} by {behind}, ahead by {ahead}"
+    return ""
 
 
 def _stamp() -> None:
