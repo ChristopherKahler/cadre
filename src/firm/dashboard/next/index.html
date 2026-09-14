@@ -426,6 +426,12 @@ body.vista::after{opacity:.7;animation:city-breathe 26s ease-in-out infinite}
 }
 .hollow h1{font-size:30px;font-weight:550}
 .hollow p{color:var(--ink-2);max-width:44ch;line-height:1.6}
+.skipped{display:flex;flex-direction:column;gap:var(--s3);max-width:60ch;width:100%}
+.skiprow{text-align:left;padding:var(--s3) 0}
+.skiprow .why{font-weight:550}
+.skiprow .where{color:var(--ink-2);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:12px;word-break:break-all}
+.skiprow .detail{color:var(--ink-3);font-size:12px;margin-top:2px}
 
 /* --- founding ----------------------------------------------------------- */
 .step{animation:rise 420ms var(--ease) both}
@@ -1212,7 +1218,7 @@ function theme(next){
 theme();
 
 /* ------------------------------------------------------------------- state */
-const S = { firms: [], job: null, cursor: 0, thoughts: [], proposal: null,
+const S = { firms: [], skipped: [], job: null, cursor: 0, thoughts: [], proposal: null,
             cut: new Set(), modelMenu: null, founded: null, readiness: null, interval: '30m',
             survey: null, surveyFor: null, picked: new Set(), folders: [],
             skills: new Set(), cmds: new Set(), filter: '',
@@ -1458,6 +1464,21 @@ function phSuite(firms){
   </div>`;
 }
 
+function skippedNotice(){
+  const skipped = S.skipped || [];
+  if(!skipped.length) return '';
+  return `
+    <div class="rack skipped-rack">
+      <div class="rack-head"><h3>Not being served</h3>
+        <span class="count">${plural(skipped.length, 'workspace')}</span></div>
+      ${skipped.map(s => `
+        <div class="skiprow">
+          <div class="why">${esc(SKIP_REASONS[s.reason] || s.reason)}</div>
+          <div class="where">${esc(s.path)}</div>
+        </div>`).join('')}
+    </div>`;
+}
+
 function viewBoardroom(){
   if(!S.firms.length) return viewHollow();
   const rows = byFloor(S.firms)
@@ -1543,7 +1564,8 @@ function wireRail(){
         const n = ((r.result || r).runs_finalized || []).length;
         b.title = n ? plural(n, 'run') + ' closed out' : 'pulse stopped';
         // The pill counts live runs; reload so it stops claiming this one.
-        try{ S.firms = (await GET("/api/next/hub")).firms || []; repaint(); }catch(err){}
+        try{ const d = await GET("/api/next/hub");
+             S.firms = d.firms || []; S.skipped = d.skipped || []; repaint(); }catch(err){}
       } else {
         b.title = r.error || 'could not stop the pulse';
       }
@@ -1776,6 +1798,7 @@ async function viewDesk(refresh = true){
     try{
       const d = await GET('/api/next/hub');
       S.firms = d.firms || [];
+      S.skipped = d.skipped || [];
       if(d.prefs && typeof d.prefs.notes === 'string') S.notes = d.prefs.notes;
     }catch(e){}
   }
@@ -1888,6 +1911,8 @@ async function viewDesk(refresh = true){
             <button class="tick" onclick="go('#/found')" style="margin-top:var(--s3)">＋ Found a firm</button>
           </div>
 
+          ${skippedNotice()}
+
           <div class="rack">
             <div class="rack-head"><h3>Signals</h3></div>
             ${sig.length ? sig.slice(0, 6).map(s => `
@@ -1937,7 +1962,46 @@ async function viewDesk(refresh = true){
   };
 }
 
+/* Why a workspace that looks like a firm is not being served, in words the
+   Board can act on. The server sends a machine reason; this is the sentence. */
+const SKIP_REASONS = {
+  'no-firm-row':    'founding never finished here',
+  'corrupt-db':     'the database will not open as a database',
+  'unreadable-db':  'no permission to read the database',
+  'unreadable-root':'the firms root could not be listed',
+};
+
 function viewHollow(){
+  const skipped = S.skipped || [];
+
+  /* An empty building and a building whose only firm will not open are two
+     different facts, and the hub used to tell you the first one in both
+     cases. Saying "the building is empty" to someone whose firm is sitting
+     on disk in front of them is the same lie the old no-firms-found refusal
+     told, one layer up and in nicer type. */
+  if(skipped.length){
+    mount(`
+      ${chrome('')}
+      <div class="hollow">
+        <h1>Nothing here will open.</h1>
+        <p>Cadre found ${plural(skipped.length, 'workspace')} that should hold a firm
+           and could not read ${skipped.length === 1 ? 'it' : 'them'}. Nothing was
+           changed and nothing was deleted. Repair what is listed below, or found a
+           new firm alongside it.</p>
+        <div class="skipped">
+          ${skipped.map(s => `
+            <div class="skiprow">
+              <div class="why">${esc(SKIP_REASONS[s.reason] || s.reason)}</div>
+              <div class="where">${esc(s.path)}</div>
+              ${s.detail ? `<div class="detail">${esc(s.detail)}</div>` : ''}
+            </div>`).join('')}
+        </div>
+        <button class="btn primary" onclick="go('#/found')">Found a firm</button>
+      </div>
+    `);
+    return;
+  }
+
   mount(`
     ${chrome('')}
     <div class="hollow">
@@ -3966,9 +4030,11 @@ async function route(){
   try{
     const data = await GET('/api/next/hub');
     S.firms = data.firms || [];
+    S.skipped = data.skipped || [];
     if(data.prefs && typeof data.prefs.notes === 'string') S.notes = data.prefs.notes;
   }catch(e){
     S.firms = [];
+    S.skipped = [];
   }
   viewBoardroom();
 }

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 
 import pytest
 
@@ -65,5 +66,48 @@ host_cannot_exec_a_shebang_script = pytest.mark.skipif(
         "this host's kernel does not execute #! scripts (Windows: WinError "
         "193; npm installs .cmd and .ps1 shims there and pulses are Task "
         "Scheduler tasks)."
+    ),
+)
+
+
+def _chmod_can_make_a_directory_unlistable() -> bool:
+    """Probe, rather than assume, that mode bits actually bite here.
+
+    On Windows ``os.chmod`` only toggles the read-only attribute; it cannot
+    remove read access, and an administrator bypasses directory ACLs in any
+    case. Under a root uid on POSIX the mode is likewise ignored. In both
+    cases a directory chmod'd to 000 stays perfectly listable, so an arm
+    asserting that the hub refuses an unreadable root would be asserting a
+    refusal that correctly never happens.
+
+    Probed rather than keyed on ``os.name`` so that any host where the
+    mechanism does exist runs the arms, and so the skip disappears by itself
+    if the suite later runs somewhere it does.
+    """
+    if os.name != "posix":
+        return False
+    with tempfile.TemporaryDirectory() as d:
+        probe = os.path.join(d, "probe")
+        os.mkdir(probe)
+        os.chmod(probe, 0o000)
+        try:
+            os.listdir(probe)
+            return False
+        except PermissionError:
+            return True
+        finally:
+            os.chmod(probe, 0o755)
+
+
+#: Issue #113's unreadable-root and unreadable-database arms need a directory
+#: or file the process genuinely cannot read. No defect is waiting on this
+#: skip; where it fires, the condition being tested cannot be produced at all.
+skip_without_posix_permissions = pytest.mark.skipif(
+    not _chmod_can_make_a_directory_unlistable(),
+    reason=(
+        "needs a directory this process genuinely cannot read, and chmod 000 "
+        "does not produce one here (Windows chmod only toggles the read-only "
+        "attribute; a root uid ignores the mode). The refusal under test "
+        "cannot be provoked, so asserting it would prove nothing."
     ),
 )

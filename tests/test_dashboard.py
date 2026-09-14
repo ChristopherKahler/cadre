@@ -665,21 +665,35 @@ def test_run_retry_requeues_failed_unit(mock_dm):
         perform_action(conn, "run-retry", "RUN-001", {})
 
 
-def test_hub_strips_single_firm_db_override(tmp_path, monkeypatch, capsys):
+def test_hub_strips_single_firm_db_override(tmp_path, monkeypatch):
     """A hub inheriting CADRE_DB_URL (e.g. from a sourced firm .env) must not
-    point every firm at one shared database — it strips the override."""
+    point every firm at one shared database — it strips the override.
+
+    Driven through build_hub_server, not run_hub. This used to call
+    ``run_hub(tmp_path, port=0)`` and assert ``rc == 1``, which worked only
+    because an empty root was a refusal: run_hub blocks in serve_forever on
+    every other path, so the lockout was the one way to make the function
+    return at all. The strip was never about empty roots. Now that an empty
+    root starts a hub (#113), that shape would block the suite forever, and
+    the assertion is on the strip itself rather than on a refusal that no
+    longer happens.
+    """
     import os
     from firm.dashboard import server as srv
 
+    monkeypatch.setenv("CADRE_HOME", str(tmp_path / "cadre-home"))
     monkeypatch.setenv("CADRE_DB_URL", "libsql://somewhere.turso.io")
     monkeypatch.setenv("CADRE_DB_TOKEN", "tok")
-    # empty root -> run_hub exits early with no-firms-found, AFTER the strip
-    rc = srv.run_hub(tmp_path, port=0)
-    assert rc == 1
-    assert "CADRE_DB_URL" not in os.environ
-    assert "CADRE_DB_TOKEN" not in os.environ
-    out = capsys.readouterr().out
-    assert "hub ignores" in out
+    server, payload = srv.build_hub_server(tmp_path, port=0)
+    try:
+        assert server is not None          # an empty root is served, not refused
+        assert "CADRE_DB_URL" not in os.environ
+        assert "CADRE_DB_TOKEN" not in os.environ
+        # run_hub prints this payload, so this is what the operator reads.
+        assert "hub ignores" in payload["warning"]
+    finally:
+        if server is not None:
+            server.server_close()
 
 
 def test_discover_firms_duplicate_id_prefers_canonical_folder(tmp_path, capsys):

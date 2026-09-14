@@ -52,6 +52,7 @@ import subprocess
 import sqlite3
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -141,6 +142,7 @@ PRE_BASE_ROWS = [
     "CONTROL: firm resolves from the venv, not from the source tree",
     "the MCP tool surface loads from the installed package",
     "the wheel carries its data files, not only its code",
+    "the hub starts on an empty firms root and serves the founding screen",
     "CONTROL: no firm database exists before init",
     "cadre init --demo creates a firm",
     "the demo firm actually has a roster and work",
@@ -959,6 +961,108 @@ def main() -> int:
               json.dumps(counts) + ("" if not missing else
                                     f"\nmissing: {missing} — a wheel can import "
                                     "perfectly and still ship no migrations"))
+
+        # ---- 5a. the cold start, which is the FIRST thing a new operator
+        # does and was the last thing this harness covered ----------------
+        #
+        # Issue #113: the hub refused to start until a firm existed, and the
+        # only screen that can found a firm is served by the hub. Every row
+        # in this harness ran AFTER `cadre init`, so the journey a brand new
+        # operator actually takes had no row at all and the lockout could not
+        # be seen from here.
+        #
+        # Port 0 and the port is read back out of the hub's own startup
+        # payload, never fixed: a fixed port talks to whatever else happens to
+        # be listening, and the answer looks exactly like a passing row. The
+        # child is killed by its own handle in the finally, so the harness
+        # cannot leave a server behind for the next run to find.
+        hub_root = sandbox / "empty-firms-root"
+        hub_root.mkdir(parents=True, exist_ok=True)
+        hub_proc = None
+        try:
+            hub_proc = subprocess.Popen(
+                [str(venv_bin(venv, "cadre")), "hub",
+                 "--firms-root", str(hub_root), "--port", "0"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                # DELIBERATELY NOT setting PYTHONUNBUFFERED. An earlier
+                # version did, as "belt and braces" beside the hub's own
+                # flush, and it was a blindfold: it forced the child's stdout
+                # unbuffered, which is the exact condition whose ABSENCE is
+                # the defect. Measured on a tree with `flush=True` removed --
+                # this row passed on CI regardless, so it was never pinning
+                # what it appeared to pin. A real parent does not set this
+                # variable, and this row exists to see what a real parent
+                # sees.
+                env={**os.environ, **SANDBOX_ENV})
+            payload = {}
+
+            # Read on a thread and JOIN WITH A TIMEOUT. A bare readline() on
+            # a server that never speaks blocks past any deadline written
+            # beside it -- measured here as a ten-minute hang inside a
+            # thirty-minute CI job, which is the worst way for a row to fail
+            # because it looks like nothing at all. A silent hub must make
+            # this row RED, promptly, not stall the run.
+            def _read_startup() -> None:
+                for raw in iter(hub_proc.stdout.readline, b""):
+                    try:
+                        candidate = json.loads(raw.decode("utf-8", "replace"))
+                    except ValueError:
+                        continue
+                    # A warning object may come first; the startup line is
+                    # the one carrying a url, and a refusal carries a reason.
+                    if isinstance(candidate, dict) and (candidate.get("url")
+                                                        or candidate.get("reason")):
+                        payload.update(candidate)
+                        return
+
+            reader = threading.Thread(target=_read_startup, daemon=True)
+            reader.start()
+            reader.join(timeout=60)
+            if reader.is_alive():
+                payload = {"error": "the hub printed no startup line in 60s"}
+            url = payload.get("founding_url") or ""
+            status, body = 0, b""
+            if url:
+                import urllib.request
+                try:
+                    with urllib.request.urlopen(url, timeout=30) as resp:
+                        status, body = resp.status, resp.read()
+                except OSError as exc:
+                    status, body = 0, str(exc).encode()
+            # Asserting the founding screen actually came back, not merely
+            # that a port was bound: a hub that binds and serves nothing
+            # satisfies a port check and strands the operator, which is the
+            # failure this row has to be able to see.
+            served = status == 200 and b"Found a firm" in body
+            # Three distinguishable outcomes, never one sentence for all of
+            # them: the hub served, the hub REFUSED and said why, or the hub
+            # said nothing at all. Reporting a refusal as silence sends the
+            # reader looking for a dead process when the process answered.
+            if payload.get("url"):
+                said = f"started, url={payload['url']}"
+            elif payload.get("reason"):
+                said = (f"REFUSED to start: reason={payload['reason']} "
+                        f"detail={str(payload.get('detail'))[:160]}")
+            elif payload.get("error"):
+                said = f"NO STARTUP LINE: {payload['error']}"
+            else:
+                said = "NO STARTUP LINE and no error recorded"
+            b.add(PASS if served else FAIL,
+                  "the hub starts on an empty firms root and serves the founding screen",
+                  f"root={hub_root} (empty)\n"
+                  f"hub {said}\n"
+                  f"founding_url={url or 'absent'}\n"
+                  f"GET founding_url -> {status}, {len(body)} bytes, "
+                  f"offers founding: {b'Found a firm' in body}")
+        finally:
+            if hub_proc is not None:
+                hub_proc.terminate()
+                try:
+                    hub_proc.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    hub_proc.kill()
+                if hub_proc.stdout is not None:
+                    hub_proc.stdout.close()
 
         # ---- 6. cadre init, with a CONTROL that the db was absent -------
         ws.mkdir(parents=True, exist_ok=True)
