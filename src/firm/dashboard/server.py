@@ -3531,7 +3531,17 @@ def run_hub(
     one shared database. Remote-backed firms get their own dedicated
     ``cadre dashboard`` process with the env set."""
     server, payload = build_hub_server(root, host=host, port=port)
-    print(json.dumps(payload))
+    # flush=True is load-bearing, not tidiness. Python block-buffers stdout
+    # when it is not a terminal, and the next thing this function does on the
+    # success path is block in serve_forever() forever -- so without the
+    # flush the startup line sits in an 8 KiB buffer that never drains, and
+    # every parent that pipes stdout (a supervisor, a test harness, a CI
+    # step) waits for a line the hub has already "printed". Measured: an
+    # acceptance arm read a bound, correctly-serving hub as a ten-minute
+    # hang. The refusal path happened to work only because returning exits
+    # the process, which flushes on the way out -- so the ONLY observable
+    # path was the failure path.
+    print(json.dumps(payload), flush=True)
     if server is None:
         return 1
     try:
