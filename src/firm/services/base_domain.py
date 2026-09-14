@@ -259,12 +259,31 @@ _SEED_RULE = ("Members of this firm read the firm's own graph before acting and 
               "this one finished.")
 
 
-def _base_env() -> dict[str, str]:
+def _base_env(workspace: Path | str | None = None) -> dict[str, str]:
     """Explicit env for every `base` call — a systemd-spawned hub has a bare PATH.
 
-    BASE_HOME is deliberately carried through when the caller set it: a test
-    harness pointing base at a scratch tier must not have Cadre silently
-    re-resolve the operator's real one.
+    WITH A WORKSPACE THIS IS THE ISOLATION SEAM (#117). base takes its entire
+    global tier from BASE_HOME — extensions, domains, rules, the relay store —
+    so pointing it at the firm's own tier is the whole of "nothing outside the
+    firm ever writes into the firm's graph". Measured on the operator's machine
+    2026-09-14 with base 0.15.2: against his real tier one session-start wrote
+    13,564 lines of an unrelated extension's data and 116 lines of his own
+    domain definitions into a firm's graph; against a tier of the firm's own,
+    the same wire produced one line.
+
+    THE FIRM'S TIER BEATS AN AMBIENT BASE_HOME, and that is a deliberate
+    reversal of what this function used to do. It carried the caller's
+    BASE_HOME through so a harness could aim base at a scratch tier. A caller
+    aiming base somewhere else WHILE CADRE IS WORKING A FIRM is exactly the
+    hole this seam closes, so the firm wins, and the reason lives here rather
+    than in a commit message nobody opens. With no workspace there is no firm
+    to isolate and the passthrough stands unchanged, which is what keeps
+    `cadre extension install` and the suite's own fence working.
+
+    The directory is created here rather than by a caller because this is the
+    one place every `base` subprocess in this package passes through, and a
+    BASE_HOME naming a path that does not exist is not isolation, it is a
+    guess about what base will do with it.
     """
     env = {"HOME": str(Path.home()),
            "PATH": os.environ.get("PATH") or "/usr/bin:/bin"}
@@ -272,6 +291,10 @@ def _base_env() -> dict[str, str]:
         value = os.environ.get(passthrough)
         if value:
             env[passthrough] = value
+    if workspace is not None:
+        from firm.services.graph_isolation import ensure_tier
+
+        env["BASE_HOME"] = str(ensure_tier(workspace))
     if os.name == "nt":
         # HOME is not how Windows finds a home directory. `Path.home()` reads
         # USERPROFILE, or HOMEDRIVE+HOMEPATH, and raises RuntimeError when it
@@ -357,7 +380,8 @@ def _rule_count(workspace: Path, firm_id: str) -> tuple[int | None, str]:
         listed = run_utf8(
             [base, "rule", "list", "--domain", firm_id],
             capture_output=True, timeout=60, require_output=True,
-            cwd=str(workspace), env=_base_env(), stdin=subprocess.DEVNULL)
+            cwd=str(workspace), env=_base_env(workspace),
+            stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return None, f"base rule list did not run: {exc}"
     except NoOutput as exc:
@@ -410,7 +434,8 @@ def _seed_rule_detail(workspace: Path, firm_id: str) -> tuple[bool, str]:
         added = run_utf8(
             [base, "rule", "add", "--domain", firm_id, "--text", _SEED_RULE],
             capture_output=True, timeout=60,
-            cwd=str(workspace), env=_base_env(), stdin=subprocess.DEVNULL)
+            cwd=str(workspace), env=_base_env(workspace),
+            stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, f"base rule add did not run: {exc}"
     if added.returncode != 0:
@@ -491,7 +516,7 @@ def scaffold_tier(workspace: Path) -> dict[str, Any]:
         proc = run_utf8(
             [base, "scaffold", str(workspace)],
             capture_output=True, timeout=120,
-            env=_base_env(),
+            env=_base_env(workspace),
         )
         if proc.returncode != 0:
             result["detail"] = (
