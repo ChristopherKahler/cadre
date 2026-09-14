@@ -577,6 +577,11 @@ def test_the_tier_is_decided_in_one_place_and_it_is_the_firms(monkeypatch, machi
 
     Parsed with `ast`, not grepped: the docstrings name both tiers while
     explaining the finding, and a substring count cannot tell prose from a call.
+
+    Every spelling that reaches the operator-tier path counts: an attribute
+    (`base_extension._installed_path`), a from-import (`import _installed_path`)
+    and the bare name it binds. The attribute alone was matched before, and a
+    from-import walked past this assertion (PR 127 G2, F5).
     """
     import ast
 
@@ -587,7 +592,9 @@ def test_the_tier_is_decided_in_one_place_and_it_is_the_firms(monkeypatch, machi
                  and getattr(n, "id", getattr(n, "attr", getattr(n, "name", "")))
                  == "tier_extensions_dir"]
     ambient_uses = [n for n in ast.walk(tree)
-                    if isinstance(n, ast.Attribute) and n.attr == "_installed_path"]
+                    if (isinstance(n, ast.Attribute) and n.attr == "_installed_path")
+                    or (isinstance(n, ast.alias) and n.name == "_installed_path")
+                    or (isinstance(n, ast.Name) and n.id == "_installed_path")]
     assert ambient_uses == [], (
         f"visited {len(ambient_uses)} uses of the operator-tier path in base_ready.py")
     assert firm_uses, "base_ready.py no longer resolves the firm's tier at all"
