@@ -984,11 +984,16 @@ def main() -> int:
                 [str(venv_bin(venv, "cadre")), "hub",
                  "--firms-root", str(hub_root), "--port", "0"],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                # PYTHONUNBUFFERED belt-and-braces beside the hub's own
-                # flush: this row reads a line from a process that then
-                # blocks forever, so anything holding that line back reads
-                # as a hang rather than as a failure.
-                env={**os.environ, **SANDBOX_ENV, "PYTHONUNBUFFERED": "1"})
+                # DELIBERATELY NOT setting PYTHONUNBUFFERED. An earlier
+                # version did, as "belt and braces" beside the hub's own
+                # flush, and it was a blindfold: it forced the child's stdout
+                # unbuffered, which is the exact condition whose ABSENCE is
+                # the defect. Measured on a tree with `flush=True` removed --
+                # this row passed on CI regardless, so it was never pinning
+                # what it appeared to pin. A real parent does not set this
+                # variable, and this row exists to see what a real parent
+                # sees.
+                env={**os.environ, **SANDBOX_ENV})
             payload = {}
 
             # Read on a thread and JOIN WITH A TIMEOUT. A bare readline() on

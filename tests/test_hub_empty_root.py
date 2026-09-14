@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+import firm as firm_pkg
 from firm.core.migrate import apply_migrations
 from firm.core.repo import create
 from firm.dashboard.server import build_hub_server, root_state, scan_firms_root
@@ -421,3 +422,85 @@ def test_e12b_the_founding_screen_branches_on_the_skipped_list():
     branch = page.index("const skipped = S.skipped")
     empty_line = page.index("The building is empty.", branch)
     assert branch < empty_line
+
+
+# ----------------------------------------------------------------------- E13
+def test_e13_the_startup_line_reaches_a_parent_that_pipes_it(tmp_path: Path):
+    """The hub must print its startup payload where a parent can read it.
+
+    This is the one arm that pins ``flush=True``, and it exists because the
+    arm that appeared to pin it did not. Python block-buffers stdout when it
+    is not a terminal, and ``run_hub`` then blocks in ``serve_forever``
+    forever, so without the flush the startup line sits in a buffer that never
+    drains and every supervisor, harness or CI step waits for a line the hub
+    has already printed. The refusal path flushed by accident, because
+    returning exits the process -- so the only observable path was the failure
+    path, and the bound port and founding_url were unreachable by exactly the
+    readers they were added for.
+
+    PYTHONUNBUFFERED is explicitly REMOVED from the child's environment. An
+    acceptance row once set it as a safety measure and thereby forced the very
+    condition whose absence is the defect: it passed on a tree with the flush
+    deleted. An instrument whose only failure direction is clean is worse than
+    none.
+
+    The timeout path distinguishes "the hub buffered its line" from "the hub
+    never started" by asserting the child is still ALIVE when the read gives
+    up. A dead child would fail this arm for an unrelated reason and send the
+    next reader to the wrong place.
+    """
+    import subprocess
+    import sys as _sys
+
+    root = tmp_path / "firms"
+    root.mkdir()
+
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
+    env["CADRE_HOME"] = str(tmp_path / "cadre-home")
+    # The child must import the same firm this test did, whatever put it on
+    # the path -- never a different checkout via an editable .pth.
+    env["PYTHONPATH"] = str(Path(firm_pkg.__file__).resolve().parents[1])
+
+    proc = subprocess.Popen(
+        [_sys.executable, "-m", "firm", "hub",
+         "--firms-root", str(root), "--port", "0"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+
+    payload: dict = {}
+    try:
+        def _read() -> None:
+            for raw in iter(proc.stdout.readline, b""):
+                try:
+                    line = json.loads(raw.decode("utf-8", "replace"))
+                except ValueError:
+                    continue
+                if isinstance(line, dict) and (line.get("url")
+                                               or line.get("reason")):
+                    payload.update(line)
+                    return
+
+        reader = threading.Thread(target=_read, daemon=True)
+        reader.start()
+        reader.join(timeout=45)
+
+        if not payload:
+            still_running = proc.poll() is None
+            assert still_running, (
+                "the hub exited instead of serving, so this arm says nothing "
+                "about buffering -- investigate the child, not the flush")
+            raise AssertionError(
+                "the hub bound its port and served, but printed no startup "
+                "line a piped parent could read within 45s. That is the "
+                "missing flush on run_hub's payload.")
+
+        assert payload.get("ok") is True
+        assert payload.get("url", "").startswith("http://127.0.0.1:")
+        assert payload["founding_url"] == payload["url"] + "/next/"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        if proc.stdout is not None:
+            proc.stdout.close()
