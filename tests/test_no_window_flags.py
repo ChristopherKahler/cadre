@@ -95,7 +95,9 @@ def _on(monkeypatch, platform: str) -> None:
     measured, the strict form failed all 43 arms in this helper before a single
     assertion ran, including the 10 that hold on that tree.
     """
-    monkeypatch.setattr(proc, "sys", SimpleNamespace(platform=platform),
+    monkeypatch.setattr(proc, "sys",
+                        SimpleNamespace(platform=platform, stdin=sys.stdin,
+                                        stdout=sys.stdout, stderr=sys.stderr),
                         raising=False)
 
 
@@ -420,3 +422,106 @@ def test_a_board_fired_pulse_gets_a_hidden_console_of_its_own(
     assert kw.get("cwd") == str(tmp_path)
     assert kw.get("env", {}).get("CADRE_PROBE") == "d1c"
     assert out == {"via": "detached-popen", "pid": 4242}
+
+
+# ---------------------------------------------------------------------------
+# PART THREE -- exec_in_place: `cadre env exec`, the MCP server wrapper
+# ---------------------------------------------------------------------------
+#
+# `cadre env exec -- <cmd>` is how a firm's .mcp.json starts an MCP server
+# with the vault injected, so claude.exe runs it with the server's stdio
+# pipes as its standard handles, and it replaces itself with the command.
+# On POSIX that is a true exec. On Windows the C runtime starts the command
+# with cadre's console and handles and exits, which opens a window exactly
+# when cadre has no console. In that one case the command runs as a child
+# through run_utf8, where the window rule applies, with cadre's own standard
+# streams handed down and the child's exit code returned. Everywhere else it
+# stays an exec, because MCP's stdio rides on the handles an exec keeps.
+
+_EXEC_ENV = {"PATH": "/usr/bin", "VAULT_TOKEN": "from-the-vault"}
+
+
+class _Execd(Exception):
+    """Raised by the fake exec: a real one never returns."""
+
+
+@pytest.fixture
+def execs(monkeypatch):
+    calls: list[tuple] = []
+
+    def fake_execvpe(file, args, env):
+        calls.append((file, list(args), dict(env)))
+        raise _Execd(file)
+
+    monkeypatch.setattr(os, "execvpe", fake_execvpe)
+    return calls
+
+
+@pytest.mark.parametrize("platform, console", [
+    ("linux", 0), ("darwin", 0), ("win32", 3)],
+    ids=["linux", "darwin", "windows with a console"])
+def test_env_exec_stays_an_exec_where_that_opens_no_window(
+        monkeypatch, spawned, execs, platform, console):
+    _on(monkeypatch, platform)
+    _console(monkeypatch, console, console)
+    with pytest.raises(_Execd):
+        proc.exec_in_place(["mcp-server", "--stdio"], _EXEC_ENV)
+    assert execs == [("mcp-server", ["mcp-server", "--stdio"], _EXEC_ENV)]
+    assert spawned == [], "started a child where an exec keeps the handles"
+
+
+@pytest.mark.parametrize("console", [0, OSError("no answer")],
+                         ids=["no console", "console question fails"])
+def test_env_exec_with_no_console_runs_a_windowless_child_on_cadres_streams(
+        monkeypatch, execs, console):
+    _on(monkeypatch, "win32")
+    _console(monkeypatch, console, console)
+    started: list[dict] = []
+
+    def fake_run(argv, **kwargs):
+        started.append({"argv": argv, **kwargs})
+        return SimpleNamespace(stdout=None, stderr=None, returncode=7)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    rc = proc.exec_in_place(["mcp-server", "--stdio"], _EXEC_ENV)
+
+    assert execs == [], "exec'd with no console: the command gets a window"
+    assert len(started) == 1, started
+    kw = started[0]
+    assert kw["argv"] == ["mcp-server", "--stdio"]
+    assert _flagged(kw), kw
+    assert kw.get("env") == _EXEC_ENV
+    for stream in ("stdin", "stdout", "stderr"):
+        assert kw.get(stream) is getattr(sys, stream), (
+            f"{stream} was not handed down; an MCP server's stdio is on it")
+    assert rc == 7, "the child's exit code did not come back"
+
+
+def test_cadre_env_exec_goes_through_exec_in_place(monkeypatch, tmp_path):
+    """The verb itself, so a future edit cannot quietly call os.execvpe again."""
+    from firm.cli import env as env_cli
+
+    class _Provider:
+        def resolve(self, workspace):
+            return {"VAULT_TOKEN": "from-the-vault"}
+
+    seen: dict = {}
+
+    def fake_exec_in_place(argv, env):
+        seen["argv"], seen["env"] = argv, env
+        return 5
+
+    def no_raw_exec(*args):
+        raise AssertionError("cadre env exec called os.execvpe itself")
+
+    monkeypatch.setattr(env_cli, "resolve_provider", lambda: _Provider())
+    monkeypatch.setattr(env_cli, "exec_in_place", fake_exec_in_place,
+                        raising=False)
+    monkeypatch.setattr(os, "execvpe", no_raw_exec)
+    monkeypatch.delenv("VAULT_TOKEN", raising=False)
+
+    rc = env_cli.run_env_exec(tmp_path, ["--", "mcp-server", "--stdio"])
+
+    assert seen.get("argv") == ["mcp-server", "--stdio"], seen
+    assert seen["env"]["VAULT_TOKEN"] == "from-the-vault"
+    assert rc == 5

@@ -70,6 +70,7 @@ behind this are in ``tests/test_no_window_flags.py``.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from typing import Any
@@ -211,3 +212,23 @@ def popen_utf8(argv: Any, **kwargs: Any) -> subprocess.Popen[str]:
     """
     return subprocess.Popen(argv, encoding="utf-8", errors="replace",
                             **_window_kwargs(_owned_kwargs(kwargs)))
+
+
+def exec_in_place(argv: list[str], env: dict[str, str]) -> int:
+    """Run *argv* in this process's place, with *env* as its whole environment.
+
+    ``cadre env exec`` is how a firm's ``.mcp.json`` starts an MCP server with
+    the vault injected, so this process's standard handles are the server's
+    stdio pipes, and ``os.execvpe`` keeps them: on POSIX it replaces the
+    process, and on Windows the C runtime starts the command with this
+    process's console and handles, then exits. That Windows start opens a
+    window exactly when this process has no console. In that one case the
+    command runs as a child through :func:`run_utf8`, where
+    ``CREATE_NO_WINDOW`` applies, with this process's own standard streams
+    handed down, and the child's exit code is returned. Everywhere else this
+    never returns. ``OSError`` propagates from either path.
+    """
+    if sys.platform != "win32" or _has_console():
+        os.execvpe(argv[0], argv, env)
+    return run_utf8(argv, env=env, stdin=sys.stdin, stdout=sys.stdout,
+                    stderr=sys.stderr).returncode
