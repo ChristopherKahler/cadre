@@ -478,6 +478,20 @@ def scaffold_tier(workspace: Path) -> dict[str, Any]:
     from firm.sysconfig.service import base_absence_reason
 
     result: dict[str, Any] = {"scaffolded": False, "detail": ""}
+
+    # Point every Claude session opened in this firm at the firm's own tier
+    # (#117, coverage row 3). Cadre's own calls and the Member runs it spawns
+    # are covered in code; this covers the sessions Cadre is not present for --
+    # the Boardroom, or a person working in the firm's directory -- because the
+    # operator's global settings register `base hook session-start` and that
+    # hook ingests his whole global tier into whatever workspace it stands in.
+    #
+    # Before the base-absent check on purpose: a firm founded on a machine
+    # without base is then already isolated on the day base arrives.
+    from firm.services.graph_isolation import write_session_env
+
+    result["session_env"] = write_session_env(workspace)
+
     base = which_base()
     if not base:
         result["detail"] = (

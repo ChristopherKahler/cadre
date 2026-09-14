@@ -33,6 +33,7 @@ writes.
 """
 from __future__ import annotations
 
+import json
 import re
 from enum import Enum
 from pathlib import Path
@@ -101,6 +102,80 @@ def ensure_tier(workspace: Path | str) -> Path:
     root = firm_base_home(workspace)
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+#: Machine-specific settings for a firm's own workspace. Claude Code reads
+#: `.claude/settings.local.json` over `.claude/settings.json`, and firms COMMIT
+#: settings.json -- `cli/install_hooks.py` keeps the hook command a bare
+#: `python3` for exactly that reason -- so an absolute machine path belongs in
+#: the local file, which is per-machine by design.
+LOCAL_SETTINGS = ("settings.local.json",)
+
+
+def write_session_env(workspace: Path | str) -> dict[str, Any]:
+    """Point every Claude session opened in this firm at the firm's own tier.
+
+    THIS IS THE THIRD WRITER. Cadre's own `base` calls and the Member runs it
+    spawns are covered in code; this covers the case nothing in Cadre is even
+    present for -- a person (or the Boardroom) opening a Claude session with
+    this firm as the working directory. The operator's global settings register
+    `base hook session-start`, so that session ingests the operator's whole
+    global tier into whatever workspace it is standing in. Measured on Windows
+    2026-09-14: that is precisely how 13,564 lines of one extension's data
+    reached `firms/seedwin`.
+
+    Measured the same day, with a real headless run in a scratch workspace: a
+    project `settings.local.json` carrying an `env` block DOES reach the hook
+    child, and with it the hook wrote one line where the operator's tier would
+    have written thousands.
+
+    Merges rather than replaces, reads the value back, and never raises: a firm
+    whose settings file is unwritable is degraded, not broken.
+    """
+    workspace = _as_path(workspace)
+    path = workspace / ".claude" / LOCAL_SETTINGS[0]
+    tier = str(ensure_tier(workspace))
+    out: dict[str, Any] = {"path": str(path), "written": False, "detail": ""}
+
+    settings: dict[str, Any] = {}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                settings = loaded
+        except (OSError, ValueError) as exc:
+            out["detail"] = (f"{path} could not be read ({exc}), so the "
+                             "isolation env was not written — a session opened "
+                             "here would use the operator's tier")
+            return out
+
+    env = settings.get("env")
+    if not isinstance(env, dict):
+        env = {}
+    if env.get("BASE_HOME") == tier and path.exists():
+        out["written"] = True
+        out["detail"] = f"already points at {tier}"
+        return out
+    env["BASE_HOME"] = tier
+    settings["env"] = env
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+        back = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        out["detail"] = f"could not write {path}: {exc}"
+        return out
+
+    # Read-back, because a write returning without error is the writer's own
+    # opinion of its own work.
+    if (back.get("env") or {}).get("BASE_HOME") != tier:
+        out["detail"] = (f"{path} was written but does not carry the tier on "
+                         "read-back, so isolation is not established here")
+        return out
+    out["written"] = True
+    out["detail"] = f"sessions opened here use {tier}"
+    return out
 
 
 def _slug(name: str) -> str:

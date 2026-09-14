@@ -211,6 +211,67 @@ def diagnose(workspace: Path, firm_id: str, *,
             _bd_detail, state=_bd_verdict.value,
             fix="rebuild .base/domains.toml from the roster"))
 
+        # 5b. where this firm's Members are reachable (#117, #122)
+        #
+        # A firm keeps its own message store, in its own base tier, so "ping
+        # the Member" needs an answer to "which store". Naming the path is the
+        # whole point of the card: a steer that goes to the wrong store looks
+        # exactly like a Member ignoring you.
+        from firm.services import firm_relay as _firm_relay
+        from firm.services import graph_isolation as _isolation
+        from firm.services import relay_title as _relay_title
+
+        _store = _firm_relay.store_path(workspace)
+        _store_here = _store.exists()
+        checks.append(_check(
+            "relay-store", "Where this firm's Members are reachable",
+            _store_here, "operator",
+            f"Members register in {_store}; steer with "
+            f"cadre relay ping --to <member name>" if _store_here else
+            f"{_store} does not exist yet — it appears the first time this "
+            "firm runs base, so where Members will register is known but "
+            "unconfirmed",
+            state="ok" if _store_here else "undeterminable"))
+
+        # 5c. every Member answers to its own name
+        _clashes = _relay_title.collisions(workspace, firm_id)
+        _unreadable = [c for c in _clashes if not c["title"]]
+        if _unreadable:
+            _titles_detail = _unreadable[0]["reason"]
+            _titles_state = "undeterminable"
+        elif _clashes:
+            _titles_detail = (
+                "; ".join(f"{c['title']} is claimed by " + ", ".join(c["members"])
+                          for c in _clashes)
+                + " — both carry their row id until one is renamed, because "
+                  "picking one of them silently would send a steer to the "
+                  "wrong Member")
+            _titles_state = "finding"
+        else:
+            _titles_detail = "each active Member's name resolves to one title"
+            _titles_state = "ok"
+        checks.append(_check(
+            "relay-titles", "Every Member answers to its own name",
+            _titles_state == "ok", "board" if _titles_state == "finding"
+            else "operator", _titles_detail, state=_titles_state))
+
+        # 5d. nothing outside the firm has written into the firm's graph
+        #
+        # Cleanup is NOT mechanical and must never be a --fix: it rewrites the
+        # operator's own machine state, and a founding flow does not get to do
+        # that unasked.
+        _census = _isolation.census(workspace)
+        if _census["reason"]:
+            _iso_state = "undeterminable"
+        elif _census["foreign_lines"]:
+            _iso_state = "finding"
+        else:
+            _iso_state = "ok"
+        checks.append(_check(
+            "graph-isolation", "The firm's graph is the firm's alone",
+            _iso_state == "ok", "operator", _isolation.summary(_census),
+            state=_iso_state))
+
         # 6. goal — board
         goals = repo.find(conn, "goal", firm_id=firm_id)
         firm_goal = any((g.get("parent_entity_type"), g.get("parent_entity_id"))
