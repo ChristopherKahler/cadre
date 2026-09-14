@@ -269,6 +269,85 @@ def test_winsched_status_unreadable_result_fails_toward_failed(tmp_path,
     assert st["last_result"] == "not-a-number"
 
 
+# remove() and the shared Task Scheduler folder. Every firm's task lives in the
+# same folder, so the folder may only go when nothing is left in it. Measured
+# during #119: schtasks /Delete cannot remove a folder at all (rc 1, folder
+# still there) and a folder query answers rc 0 with no rows while an EMPTY
+# folder still exists; only rc 1 means it is gone.
+_CADRE_FOLDER = "\\Cadre"
+
+
+def _scripted_remove(monkeypatch, *, folder_reply, folder_query_rc=1):
+    calls: list[list[str]] = []
+
+    def fake(argv, timeout=30):
+        calls.append(list(argv))
+        if argv[0] == "schtasks" and "/Query" in argv:
+            return folder_query_rc, ""
+        if argv[0].lower().startswith("powershell"):
+            return folder_reply
+        return 0, ""
+
+    monkeypatch.setattr(winsched_mod, "run_cmd", fake)
+    return calls
+
+
+def test_winsched_remove_deletes_the_folder_when_it_is_empty(tmp_path,
+                                                             monkeypatch):
+    calls = _scripted_remove(monkeypatch, folder_reply=(0, "deleted"))
+    launchers = tmp_path / "sched"
+    launchers.mkdir()
+    (launchers / "cadre-heartbeat-lab.cmd").write_text("x", encoding="utf-8")
+
+    out = WindowsScheduler(launcher_dir=launchers).remove("cadre-heartbeat-lab")
+
+    assert out["folder"] == {"path": _CADRE_FOLDER, "action": "deleted",
+                             "verified_gone": True}
+    assert not launchers.exists()              # its last launcher was removed
+    query = next(c for c in calls if c[0] == "schtasks" and "/Query" in c)
+    assert query[query.index("/TN") + 1] == _CADRE_FOLDER + "\\"
+
+
+def test_winsched_remove_keeps_a_folder_another_firm_still_uses(tmp_path,
+                                                                monkeypatch):
+    calls = _scripted_remove(monkeypatch, folder_reply=(0, "kept 1"))
+    launchers = tmp_path / "sched"
+    launchers.mkdir()
+    (launchers / "cadre-heartbeat-lab.cmd").write_text("x", encoding="utf-8")
+    (launchers / "cadre-heartbeat-other.cmd").write_text("x", encoding="utf-8")
+
+    out = WindowsScheduler(launcher_dir=launchers).remove("cadre-heartbeat-lab")
+
+    assert out["folder"] == {"path": _CADRE_FOLDER, "action": "kept",
+                             "tasks_remaining": 1}
+    assert (launchers / "cadre-heartbeat-other.cmd").exists()
+    assert not any(c[0] == "schtasks" and "/Query" in c for c in calls)
+
+
+def test_winsched_remove_says_so_when_the_folder_did_not_go(tmp_path,
+                                                            monkeypatch):
+    _scripted_remove(monkeypatch, folder_reply=(0, "deleted"),
+                     folder_query_rc=0)
+    out = WindowsScheduler(launcher_dir=tmp_path).remove("cadre-heartbeat-lab")
+    assert out["folder"]["verified_gone"] is False
+
+
+def test_winsched_remove_reports_an_unreadable_folder_answer(tmp_path,
+                                                             monkeypatch):
+    _scripted_remove(monkeypatch,
+                     folder_reply=(1, "Exception calling GetFolder"))
+    out = WindowsScheduler(launcher_dir=tmp_path).remove("cadre-heartbeat-lab")
+    assert out["folder"]["action"] == "unknown"
+    assert "Exception calling GetFolder" in out["folder"]["detail"]
+
+
+def test_winsched_remove_with_the_folder_already_gone(tmp_path, monkeypatch):
+    calls = _scripted_remove(monkeypatch, folder_reply=(0, "absent"))
+    out = WindowsScheduler(launcher_dir=tmp_path).remove("cadre-heartbeat-lab")
+    assert out["folder"] == {"path": _CADRE_FOLDER, "action": "absent"}
+    assert not any(c[0] == "schtasks" and "/Query" in c for c in calls)
+
+
 def test_unit_files_are_utf8_whatever_the_locale_is(tmp_path, monkeypatch):
     """Unit files are UTF-8 by specification; the locale codec is not.
 

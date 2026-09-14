@@ -25,6 +25,8 @@ from typing import Any
 from firm.sched.base import SchedulerError, interval_to_seconds, run_cmd
 
 _TASK_FOLDER = "Cadre"
+# The folder as Task Scheduler names it. Its first character is the root.
+_FOLDER_PATH = "\\" + _TASK_FOLDER
 
 # Task Scheduler's `Last Result`, which schtasks prints as a SIGNED decimal, read
 # here as the unsigned 32-bit code. Every value below was captured from a live
@@ -46,6 +48,42 @@ _NOT_FAILURES = frozenset({_LR_OK, _LR_RUNNING, _LR_NEVER_RUN, _LR_REFUSED,
 # Matched on the year so another date order still reads as "never", not as
 # a pulse that fired in 1999.
 _NEVER_RUN_TIME = re.compile("(?<![0-9])1999(?![0-9])")
+
+
+def _folder_cleanup_script() -> str:
+    """PowerShell that deletes the Cadre task folder only when it holds no task.
+
+    Every firm's task lives in this one folder, so it may only go once the last
+    task has. Hidden tasks count (GetTasks(1)). schtasks cannot delete a folder
+    at all -- measured during #119, /Delete on a folder path returns rc 1 and
+    leaves it -- so this goes through the Task Scheduler COM object. Output is
+    one word the caller parses: absent, deleted, or kept <n>.
+    """
+    root = _FOLDER_PATH[0]
+    return (
+        "$ErrorActionPreference='Stop';"
+        "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
+        "$s=New-Object -ComObject Schedule.Service;$s.Connect();"
+        f"try{{$f=$s.GetFolder('{_FOLDER_PATH}')}}catch{{'absent';exit 0}};"
+        "$n=@($f.GetTasks(1)).Count;"
+        "if($n -gt 0){'kept '+$n;exit 0};"
+        f"$s.GetFolder('{root}').DeleteFolder('{_TASK_FOLDER}',0);"
+        "'deleted'"
+    )
+
+
+def _folder_answer(rc: int, out: str) -> dict[str, Any]:
+    for line in reversed(out.splitlines()):
+        word = line.strip()
+        if word in ("absent", "deleted"):
+            return {"action": word}
+        if word.startswith("kept "):
+            try:
+                return {"action": "kept", "tasks_remaining": int(word[5:])}
+            except ValueError:
+                break
+    # Anything else is reported, never read as a clean removal.
+    return {"action": "unknown", "detail": f"rc={rc}: {out[:300]}"}
 
 
 def _last_result_code(val: str) -> int | None:
@@ -144,7 +182,26 @@ class WindowsScheduler:
         if launcher.exists():
             launcher.unlink()
             removed.append(launcher.name)
-        return {"removed": removed}
+        result: dict[str, Any] = {"removed": removed,
+                                  "folder": self._remove_folder_if_empty()}
+        # The launcher directory goes the same way: only once it is empty, so
+        # another firm's launcher is never touched.
+        if self.launcher_dir.is_dir() and not any(self.launcher_dir.iterdir()):
+            self.launcher_dir.rmdir()
+            removed.append(str(self.launcher_dir))
+        return result
+
+    def _remove_folder_if_empty(self) -> dict[str, Any]:
+        rc, out = run_cmd(["powershell.exe", "-NoProfile", "-NonInteractive",
+                           "-Command", _folder_cleanup_script()], timeout=60)
+        answer: dict[str, Any] = {"path": _FOLDER_PATH, **_folder_answer(rc, out)}
+        if answer["action"] == "deleted":
+            # Read it back. A folder query answers rc 0 with no rows while an
+            # EMPTY folder still exists; only rc 1 means it is gone.
+            qrc, _ = run_cmd(["schtasks", "/Query", "/TN",
+                              _FOLDER_PATH + _FOLDER_PATH[0]])
+            answer["verified_gone"] = qrc == 1
+        return answer
 
     def status(self, stem: str) -> dict[str, Any]:
         out: dict[str, Any] = {"installed": False, "state": "absent",
