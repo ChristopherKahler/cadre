@@ -376,6 +376,30 @@ def spawn_member_run(
                 env.setdefault(k, v)
         except Exception:
             pass   # vault is additive — it must never block a member run
+    # --- the firm's own BASE tier -----------------------------------------
+    # base takes its whole global tier from BASE_HOME: extensions, domains,
+    # rules, the relay store. A Member run that inherits the operator's tier
+    # ingests the operator's world into the firm's graph at session start --
+    # measured on Windows 2026-09-14, 13,564 lines of one extension's data and
+    # 116 lines of the operator's own domains, written into a firm that owned
+    # 86 of its 13,774 lines (#117). A firm's graph is the firm's alone, so a
+    # Member is pointed at the firm's tier before it starts.
+    #
+    # Only for a real firm directory: `spawn_member_run` is also used where
+    # there is no firm to isolate, and a BASE_HOME invented for those would
+    # point base at a tier nothing else uses.
+    # `Path` is a LOCAL name inside this function -- the vault block above
+    # imports it within an `if`, and any binding anywhere in a body makes the
+    # name local throughout it. The bare name is therefore unbound here, which
+    # the full suite caught as an UnboundLocalError at the relay-title line
+    # below. An alias of our own is bound unconditionally instead.
+    from pathlib import Path as _Path
+
+    if cwd and (_Path(cwd) / ".firm").is_dir():
+        from firm.services.graph_isolation import ensure_tier
+
+        env["BASE_HOME"] = str(ensure_tier(_Path(cwd)))
+
     # Board credentials never enter a Member run: the dashboard's POST gate
     # (X-Cadre-Board-Token) would be meaningless if the token rode in on the
     # inherited shell env or a future vault entry.
@@ -416,9 +440,20 @@ def spawn_member_run(
     #    would clear relay alerts meant for the others. So this is an assignment,
     #    never a setdefault, and the variable is removed outright when there is
     #    no member to name.
+    # 3. THE TITLE IS THE MEMBER'S OWN NAME (#122). It used to be
+    #    `<firm_id>-<member_id>`: stable, and unusable. `member_id` is the row
+    #    id, so the Member called Pen registered as `demo-MEM-001` and steering
+    #    Pen meant first looking up that Pen is MEM-001. The operator asked to
+    #    steer by name, which means the name IS the title. Resolution, the
+    #    rename follow and the collision rule live in `services/relay_title.py`;
+    #    it never raises and never invents a name, so a roster that cannot be
+    #    read falls back to the old shape rather than to something unguessable.
     env.pop("WT_SESSION", None)
     if firm_id and member_id:
-        env["BASE_RELAY_AS"] = f"{firm_id}-{member_id}"
+        from firm.services.relay_title import bind as bind_relay_title
+
+        env["BASE_RELAY_AS"] = bind_relay_title(
+            _Path(cwd) if cwd else _Path.cwd(), member_id, firm_id)["title"]
     else:
         env.pop("BASE_RELAY_AS", None)
 
