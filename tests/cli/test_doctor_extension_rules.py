@@ -42,7 +42,28 @@ KEY = "base-extension-rules"
 #: attribute, and an arm that needs it genuinely absent calls this.
 REAL_WHICH_BASE = sysconfig_service.which_base
 
-STUB_BASE = "/nonexistent/base-stub-for-the-extension-rules-arms"
+#: This host's magic bytes, so a stub base is a REAL FILE.
+#:
+#: `tests/test_no_weak_base_stubs.py` caught this file stubbing `which_base` at
+#: a bare string, and it was right to. Since #75 `install()` identifies the
+#: binary it resolved before running it, so a stub that is not a file is
+#: refused BEFORE any check under test is reached — and an arm built on one
+#: cannot tell REFUSED CORRECTLY from NEVER GOT THERE. The same reasoning is
+#: why the `fake_base` fixture in tests/services/test_base_extension.py writes
+#: real bytes. Nothing here currently goes through that refusal, which is
+#: exactly how a weak stub survives until the day something does.
+_MAGIC = {"pe": b"MZ\x90\x00", "macho": b"\xcf\xfa\xed\xfe"}
+
+
+def _stub_base(tmp_path: Path) -> str:
+    from firm.sysconfig.binaries import native_image_format
+
+    bindir = tmp_path / "stubbin"
+    bindir.mkdir(exist_ok=True)
+    stub = bindir / "base"
+    stub.write_bytes(_MAGIC.get(native_image_format(), b"\x7fELF") + b"\x00" * 128)
+    stub.chmod(0o755)
+    return str(stub)
 
 #: Copied out of a real ``base rule list`` run on the maintainer's machine,
 #: not typed from memory. A control keyed on a string somebody invented cannot
@@ -83,18 +104,19 @@ def _firm(workspace: Path) -> None:
     conn.close()
 
 
-def _base_answers(monkeypatch, listing: str) -> None:
+def _base_answers(monkeypatch, tmp_path: Path, listing: str) -> None:
     """Make base look present and answer `rule list` with ``listing``.
 
     Only our stub argv is intercepted. ``diagnose`` shells out for other checks
     too, so a blanket replacement of ``subprocess.run`` would move more than
     the one variable under test.
     """
-    monkeypatch.setattr(sysconfig_service, "which_base", lambda: STUB_BASE)
+    stub = _stub_base(tmp_path)
+    monkeypatch.setattr(sysconfig_service, "which_base", lambda: stub)
     real_run = subprocess.run
 
     def _run(cmd, **kwargs):
-        if cmd and str(cmd[0]) == STUB_BASE:
+        if cmd and str(cmd[0]) == stub:
             return _Result(listing)
         return real_run(cmd, **kwargs)
 
@@ -130,7 +152,7 @@ def _card(workspace: Path) -> dict:
 
 def test_doctor_reports_rules_the_manifest_did_not_write(tmp_path, monkeypatch):
     _firm(tmp_path)
-    _base_answers(monkeypatch, FOREIGN_LISTING)
+    _base_answers(monkeypatch, tmp_path, FOREIGN_LISTING)
 
     card = _card(tmp_path)
     assert card["ok"] is False, (
@@ -153,7 +175,7 @@ def test_doctor_passes_when_the_graph_copy_is_cadres_own(tmp_path, monkeypatch):
     copy would pass the arm above and fail every healthy machine.
     """
     _firm(tmp_path)
-    _base_answers(monkeypatch, _own_rules_listing())
+    _base_answers(monkeypatch, tmp_path, _own_rules_listing())
 
     card = _card(tmp_path)
     assert card["ok"] is True, (
@@ -163,7 +185,7 @@ def test_doctor_passes_when_the_graph_copy_is_cadres_own(tmp_path, monkeypatch):
 
 def test_doctor_passes_when_the_graph_holds_no_copy(tmp_path, monkeypatch):
     _firm(tmp_path)
-    _base_answers(monkeypatch, CLEAN_LISTING)
+    _base_answers(monkeypatch, tmp_path, CLEAN_LISTING)
 
     card = _card(tmp_path)
     assert card["ok"] is True, card["detail"]
@@ -178,7 +200,7 @@ def test_doctor_does_not_pass_over_a_listing_it_could_not_read(tmp_path,
     """A zero that means "I could not see" reads exactly like a zero that means
     "nothing is wrong", and only one of those is good news."""
     _firm(tmp_path)
-    _base_answers(monkeypatch, "some future base says something else entirely")
+    _base_answers(monkeypatch, tmp_path, "some future base says something else entirely")
 
     card = _card(tmp_path)
     assert card["ok"] is False
@@ -193,7 +215,7 @@ def test_doctor_fix_claims_no_repair_for_a_defect_base_owns(tmp_path,
     """``--fix`` selects on ``route == "mechanical"``. There is no verb in base
     that removes these rules, so a claimed repair here would be a lie."""
     _firm(tmp_path)
-    _base_answers(monkeypatch, FOREIGN_LISTING)
+    _base_answers(monkeypatch, tmp_path, FOREIGN_LISTING)
 
     checks = doctor_mod.diagnose(tmp_path, FIRM)
     card = next(c for c in checks if c["key"] == KEY)
