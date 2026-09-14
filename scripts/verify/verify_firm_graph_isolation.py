@@ -33,7 +33,7 @@ fires exactly one of them while M1 and M3 fire exactly the other.
 
 Nothing here touches the operator's own files. Five of them are hashed before
 and after every arm; the count checked is printed, and a count of zero is a
-failure rather than a pass. `C:/Users/Chris/firms/seedwin` is never read as a
+failure rather than a pass. The operator's live `firms/seedwin` is never read as a
 fixture: it is the live specimen of the defect and it is evidence.
 
 Exit codes:  0 all rows as expected   1 a row disagreed   91 refused to run
@@ -129,9 +129,9 @@ def which_base() -> tuple[Path | None, str]:
     """A base this platform can actually be isolated with, or a refusal.
 
     `shutil.which("base")` INSIDE WSL RETURNS THE WINDOWS EXE. Measured
-    2026-09-14: `which base` gave `/mnt/c/Users/Chris/.local/bin/base`, a PE32+
+    2026-09-14: `which base` gave the Windows exe under the /mnt/c mount, a PE32+
     executable, while an ELF base 0.15.1 sat unused at
-    `/home/chriskahler/.local/bin/base`. That matters because a POSIX BASE_HOME
+    an ELF base sat unused in the Linux home. That matters because a POSIX BASE_HOME
     handed to a Windows base is IGNORED -- Cadre records the measurement in
     `src/firm/sysconfig/binaries.py:92-93` -- so every "isolated" call this
     harness made went to the operator's real Windows tier instead.
@@ -452,7 +452,7 @@ def attribute(drift: list[str], root: Path) -> tuple[list[str], list[str]]:
     that stops watching it cannot see a real one. So the test is CONTENT: does
     the file now carry something that exists only because this run existed?
 
-    Measured 2026-09-14: `/mnt/c/Users/Chris/.base/graph.nq` moved during arm
+    Measured 2026-09-14: the operator's Windows-side workspace graph moved during arm
     M2 of a run that never named a Windows path, while another builder was
     working in that workspace.
     """

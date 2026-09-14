@@ -1,7 +1,7 @@
 """A firm's graph is the firm's alone: nothing outside it ever writes in.
 
 WHAT WENT WRONG, measured on the operator's Windows machine 2026-09-14 (#117).
-`C:/Users/Chris/firms/seedwin/.base/graph.nq` held 13,774 lines and **86 of them
+The operator's own `firms/seedwin/.base/graph.nq` held 13,774 lines and **86
 belonged to the firm**. The other 13,688 were the operator's: 13,564 lines of
 Skyrim lore from an extension he installed globally, 116 lines of his own domain
 definitions, and 8 rules hanging off one of those domains. Every one of them was
@@ -187,6 +187,55 @@ def write_session_env(workspace: Path | str) -> dict[str, Any]:
     out["written"] = True
     out["detail"] = f"sessions opened here use {tier}"
     return out
+
+
+def isolation_state(workspace: Path | str) -> tuple[Isolation, str]:
+    """Is this firm's graph isolated, and how do we know? Three answers.
+
+    Founding does NOT refuse on a bad answer. base absent is a supported
+    degraded state everywhere in this codebase -- a licensee need not carry
+    base, and a firm without it must still be foundable -- so the honest move
+    is to report which of the three states this is and let the operator read
+    it. What must never happen is `unknown` printing as `isolated`.
+
+    ISOLATED means all three of: the tier exists on disk, the firm's own
+    settings point a session at it, and the value read back out of that file is
+    this firm's tier. The read-back is the load-bearing third: a settings file
+    that was written and then rewritten by something else looks identical from
+    here without it.
+    """
+    from firm.sysconfig.service import base_absence_reason, which_base
+
+    tier = firm_base_home(workspace)
+    if not which_base():
+        return Isolation.UNKNOWN, (
+            f"{base_absence_reason()} — with no base on this machine there is "
+            "nothing to isolate yet, and that is not the same as a firm whose "
+            "isolation failed")
+
+    settings = _as_path(workspace) / ".claude" / LOCAL_SETTINGS[0]
+    if not tier.is_dir():
+        return Isolation.UNISOLATED, (
+            f"{tier} does not exist, so base has no tier of this firm's to "
+            "resolve and will use whatever the environment names")
+    if not settings.exists():
+        return Isolation.UNISOLATED, (
+            f"{settings} does not exist, so a Claude session opened in this "
+            "firm inherits the operator's tier")
+    try:
+        loaded = json.loads(settings.read_text(encoding="utf-8"))
+        found = str((loaded.get("env") or {}).get("BASE_HOME") or "")
+    except (OSError, ValueError) as exc:
+        return Isolation.UNKNOWN, (
+            f"{settings} could not be read ({exc}), so whether a session here "
+            "is isolated cannot be established")
+    if found != str(tier):
+        return Isolation.UNISOLATED, (
+            f"{settings} points a session at {found or 'nothing'}, which is not "
+            f"this firm's tier at {tier}")
+    return Isolation.ISOLATED, (
+        f"this firm's graph is its own: base resolves {tier} here, for Cadre's "
+        "own calls, for its Members, and for a session opened in this directory")
 
 
 def _slug(name: str) -> str:

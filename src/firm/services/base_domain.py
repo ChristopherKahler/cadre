@@ -488,7 +488,7 @@ def scaffold_tier(workspace: Path) -> dict[str, Any]:
     #
     # Before the base-absent check on purpose: a firm founded on a machine
     # without base is then already isolated on the day base arrives.
-    from firm.services.graph_isolation import write_session_env
+    from firm.services.graph_isolation import isolation_state, write_session_env
 
     result["session_env"] = write_session_env(workspace)
 
@@ -541,6 +541,9 @@ def scaffold_tier(workspace: Path) -> dict[str, Any]:
         result["detail"] = f"base scaffold did not run: {exc}"
         return result
     result["scaffolded"] = True
+    state, why = isolation_state(workspace)
+    result["isolation"] = state.value
+    result["isolation_detail"] = why
     return result
 
 

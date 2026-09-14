@@ -388,10 +388,17 @@ def spawn_member_run(
     # Only for a real firm directory: `spawn_member_run` is also used where
     # there is no firm to isolate, and a BASE_HOME invented for those would
     # point base at a tier nothing else uses.
-    if cwd and (Path(cwd) / ".firm").is_dir():
+    # `Path` is a LOCAL name inside this function -- the vault block above
+    # imports it within an `if`, and any binding anywhere in a body makes the
+    # name local throughout it. The bare name is therefore unbound here, which
+    # the full suite caught as an UnboundLocalError at the relay-title line
+    # below. An alias of our own is bound unconditionally instead.
+    from pathlib import Path as _Path
+
+    if cwd and (_Path(cwd) / ".firm").is_dir():
         from firm.services.graph_isolation import ensure_tier
 
-        env["BASE_HOME"] = str(ensure_tier(Path(cwd)))
+        env["BASE_HOME"] = str(ensure_tier(_Path(cwd)))
 
     # Board credentials never enter a Member run: the dashboard's POST gate
     # (X-Cadre-Board-Token) would be meaningless if the token rode in on the
@@ -446,7 +453,7 @@ def spawn_member_run(
         from firm.services.relay_title import bind as bind_relay_title
 
         env["BASE_RELAY_AS"] = bind_relay_title(
-            Path(cwd) if cwd else Path.cwd(), member_id, firm_id)["title"]
+            _Path(cwd) if cwd else _Path.cwd(), member_id, firm_id)["title"]
     else:
         env.pop("BASE_RELAY_AS", None)
 

@@ -32,6 +32,10 @@ def _wire_base(workspace: Path, conn) -> None:
         print(f"    skipped: {tier['detail']}")
         return
     print("    .base/ scaffolded")
+    # Three states, never a default. A firm whose isolation could not be
+    # established must not read as one that is isolated (#117).
+    if tier.get("isolation"):
+        print(f"    isolation: {tier['isolation']} — {tier['isolation_detail']}")
 
     firms = repo.find(conn, "firm")
     if len(firms) != 1:

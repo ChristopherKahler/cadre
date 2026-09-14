@@ -374,6 +374,51 @@ def test_without_a_tier_the_census_refuses_rather_than_guesses(tmp_path):
     assert result["foreign"] == {}
 
 
+def test_a_founded_firm_reports_itself_isolated(monkeypatch, tmp_path):
+    workspace = _firm(tmp_path)
+    monkeypatch.setattr("firm.sysconfig.service.which_base",
+                        lambda: _stub_base(tmp_path))
+    graph_isolation.ensure_tier(workspace)
+    graph_isolation.write_session_env(workspace)
+
+    state, why = graph_isolation.isolation_state(workspace)
+
+    assert state is graph_isolation.Isolation.ISOLATED, why
+    assert str(graph_isolation.firm_base_home(workspace)) in why
+
+
+def test_settings_pointing_somewhere_else_is_unisolated(monkeypatch, tmp_path):
+    """The read-back is the load-bearing part: a file that was written and then
+    rewritten by something else looks identical without it."""
+    import json
+
+    workspace = _firm(tmp_path)
+    monkeypatch.setattr("firm.sysconfig.service.which_base",
+                        lambda: _stub_base(tmp_path))
+    graph_isolation.ensure_tier(workspace)
+    settings = workspace / ".claude" / "settings.local.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(json.dumps({"env": {"BASE_HOME": "/somewhere/else"}}),
+                        encoding="utf-8")
+
+    state, why = graph_isolation.isolation_state(workspace)
+
+    assert state is graph_isolation.Isolation.UNISOLATED
+    assert "/somewhere/else" in why
+
+
+def test_no_base_at_all_is_unknown_and_not_a_failure(monkeypatch, tmp_path):
+    """base absent is a supported state. A firm on a machine without it is
+    degraded, never broken, and must not be reported as isolation FAILING."""
+    workspace = _firm(tmp_path)
+    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: None)
+
+    state, why = graph_isolation.isolation_state(workspace)
+
+    assert state is graph_isolation.Isolation.UNKNOWN
+    assert "not the same as a firm whose isolation failed" in why
+
+
 def test_the_three_states_are_three(tmp_path):
     """UNKNOWN is not UNISOLATED, and a bool cannot hold three answers."""
     values = {graph_isolation.Isolation.ISOLATED,
