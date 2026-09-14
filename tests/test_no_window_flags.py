@@ -46,6 +46,7 @@ without, against an independent reader.
 
 from __future__ import annotations
 
+import ast
 import ctypes
 import json
 import os
@@ -525,3 +526,347 @@ def test_cadre_env_exec_goes_through_exec_in_place(monkeypatch, tmp_path):
     assert seen.get("argv") == ["mcp-server", "--stdio"], seen
     assert seen["env"]["VAULT_TOKEN"] == "from-the-vault"
     assert rc == 5
+
+
+# ---------------------------------------------------------------------------
+# PART FOUR -- THE GUARD: no child starts outside firm.core.proc (verdict A3)
+# ---------------------------------------------------------------------------
+#
+# Everything above holds only for children that go through firm.core.proc.
+# This sweep keeps every child there. Parsed, never grepped, and resolved per
+# module from that module's own imports: the UTF-8 sweep beside this file
+# measured four spellings of a subprocess call that a name search never even
+# counted.
+#
+# WHAT FAILS THE BUILD, enumerated from the codebase and from verdict A3:
+#   R1   a call that starts a process, anywhere in src/ outside
+#        src/firm/core/proc.py: subprocess, os.system / popen / startfile /
+#        spawn* / exec* / posix_spawn*, asyncio.create_subprocess_*, a loop's
+#        subprocess_exec / subprocess_shell, multiprocessing,
+#        ProcessPoolExecutor, webbrowser.open*, pty.spawn, _winapi and any
+#        CreateProcess* / ShellExecute* call, and importing one of those
+#        modules by string;
+#   R1b  the same call written inside a string that is Python code -- a
+#        `python -c` wrapper. An f-string's holes read as `_`. Docstrings are
+#        prose and are skipped;
+#   R2   CREATE_NEW_CONSOLE or DETACHED_PROCESS anywhere in src/, proc.py
+#        included: by name, by alias, as a getattr string, or as a literal
+#        bit inside a creationflags= value.
+# WHAT IT CANNOT SEE: a flag held in a variable. The refusal in part one
+# catches that when the call runs, and part one pins the refusal.
+
+_SPAWNERS = {
+    "subprocess": {"run", "Popen", "call", "check_call", "check_output",
+                   "getoutput", "getstatusoutput"},
+    "os": ({"system", "popen", "startfile", "posix_spawn", "posix_spawnp"}
+           | {f"spawn{s}" for s in ("l", "le", "lp", "lpe", "v", "ve", "vp", "vpe")}
+           | {f"exec{s}" for s in ("l", "le", "lp", "lpe", "v", "ve", "vp", "vpe")}),
+    "asyncio": {"create_subprocess_exec", "create_subprocess_shell"},
+    "multiprocessing": {"Process", "Pool", "get_context"},
+    "concurrent.futures": {"ProcessPoolExecutor"},
+    "webbrowser": {"open", "open_new", "open_new_tab"},
+    "pty": {"spawn"},
+    "_winapi": {"CreateProcess"},
+}
+_SPAWN_TARGETS = {f"{m}.{f}" for m, fs in _SPAWNERS.items() for f in fs}
+_SPAWN_METHODS = {"subprocess_exec", "subprocess_shell", "CreateProcessW",
+                  "CreateProcessA", "ShellExecuteW", "ShellExecuteA",
+                  "ShellExecuteExW"}
+_WRAPPER_TARGETS = {f"firm.core.proc.{w}"
+                    for w in ("run_utf8", "popen_utf8", "exec_in_place")}
+_WINDOW_FLAG_NAMES = {"CREATE_NEW_CONSOLE", "DETACHED_PROCESS"}
+_WINDOW_FLAG_BITS = 0x00000010 | 0x00000008
+_ALLOWED_SPAWNER = "src/firm/core/proc.py"
+
+
+def _dotted_name(node: ast.AST) -> str:
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+    return ""
+
+
+class _Bindings:
+    """What one module's own imports make its names mean."""
+
+    def __init__(self, tree: ast.AST) -> None:
+        self.aliases: dict[str, str] = {}   # import X.Y as z  -> z: X.Y
+        self.roots: set[str] = set()        # import X.Y       -> X
+        self.froms: dict[str, str] = {}     # from X import y as z -> z: X.y
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    if a.asname:
+                        self.aliases[a.asname] = a.name
+                    else:
+                        self.roots.add(a.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                for a in node.names:
+                    self.froms[a.asname or a.name] = f"{node.module}.{a.name}"
+
+    def resolve(self, dotted: str) -> str:
+        head, _, rest = dotted.partition(".")
+        tail = f".{rest}" if rest else ""
+        if head in self.aliases:
+            return self.aliases[head] + tail
+        if head in self.froms:
+            return self.froms[head] + tail
+        if head in self.roots:
+            return dotted
+        return ""
+
+
+def _call_shape(node: ast.Call, names: _Bindings) -> tuple[str, str] | None:
+    """("spawn" | "wrapper", what) for a call that starts a process."""
+    dotted = _dotted_name(node.func)
+    full = names.resolve(dotted) if dotted else ""
+    if full in _WRAPPER_TARGETS:
+        return "wrapper", full
+    if full in _SPAWN_TARGETS:
+        return "spawn", full
+    if isinstance(node.func, ast.Attribute) and node.func.attr in _SPAWN_METHODS:
+        return "spawn", f"<object>.{node.func.attr}"
+    if dotted == "__import__" or full == "importlib.import_module":
+        first = node.args[0] if node.args else None
+        if isinstance(first, ast.Constant) and first.value in _SPAWNERS:
+            return "spawn", f"import of {first.value} by string"
+    return None
+
+
+def _string_code(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(str(v.value) if isinstance(v, ast.Constant) else "_"
+                       for v in node.values)
+    return None
+
+
+def _guard_scan(source: str, rel: str) -> tuple[list[str], list[str], int]:
+    """(violations, raw spawn shapes seen, wrapper calls seen) for one file."""
+    tree = ast.parse(source)
+    names = _Bindings(tree)
+    allowed = rel == _ALLOWED_SPAWNER
+    bad: list[str] = []
+    raw: list[str] = []
+    wrappers = 0
+    skip: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                             ast.AsyncFunctionDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+                skip.add(id(first.value))
+        if isinstance(node, ast.JoinedStr):
+            skip.update(id(v) for v in node.values)
+    for node in ast.walk(tree):
+        line = getattr(node, "lineno", 0)
+        if isinstance(node, ast.Call):
+            shape = _call_shape(node, names)
+            if shape and shape[0] == "wrapper":
+                wrappers += 1
+            elif shape:
+                raw.append(shape[1])
+                if not allowed:
+                    bad.append(f"{rel}:{line}: {shape[1]} starts a process "
+                               "outside firm.core.proc")
+            if _dotted_name(node.func) == "getattr" and len(node.args) >= 2 \
+                    and isinstance(node.args[1], ast.Constant) \
+                    and node.args[1].value in _WINDOW_FLAG_NAMES:
+                bad.append(f"{rel}:{line}: getattr of {node.args[1].value}")
+        elif isinstance(node, ast.Name) and node.id in _WINDOW_FLAG_NAMES:
+            bad.append(f"{rel}:{line}: the name {node.id}")
+        elif isinstance(node, ast.Attribute) and node.attr in _WINDOW_FLAG_NAMES:
+            bad.append(f"{rel}:{line}: the attribute {node.attr}")
+        elif isinstance(node, ast.ImportFrom):
+            for a in node.names:
+                if a.name in _WINDOW_FLAG_NAMES:
+                    bad.append(f"{rel}:{line}: an import of {a.name}")
+        elif isinstance(node, ast.keyword) and node.arg == "creationflags":
+            for sub in ast.walk(node.value):
+                if isinstance(sub, ast.Constant) and type(sub.value) is int \
+                        and sub.value & _WINDOW_FLAG_BITS:
+                    bad.append(f"{rel}:{node.value.lineno}: creationflags "
+                               f"literal {sub.value:#x} opens a window")
+        if id(node) in skip:
+            continue
+        code = _string_code(node)
+        if code is None or "(" not in code:
+            continue
+        try:
+            inner = ast.parse(code)
+        except (SyntaxError, ValueError):
+            continue
+        inner_names = _Bindings(inner)
+        for sub in ast.walk(inner):
+            if isinstance(sub, ast.Call):
+                shape = _call_shape(sub, inner_names)
+                if shape and shape[0] == "spawn" and not allowed:
+                    bad.append(f"{rel}:{line}: {shape[1]} starts a process "
+                               "from code written in a string")
+    return bad, raw, wrappers
+
+
+def _guard_sweep() -> tuple[list[str], dict[str, list[str]], int, int]:
+    bad: list[str] = []
+    raw_by_file: dict[str, list[str]] = {}
+    wrappers = files = 0
+    for path in sorted(SRC.rglob("*.py")):
+        files += 1
+        rel = path.relative_to(REPO).as_posix()
+        found, raw, w = _guard_scan(path.read_text(encoding="utf-8"), rel)
+        bad += found
+        wrappers += w
+        if raw:
+            raw_by_file[rel] = raw
+    return bad, raw_by_file, wrappers, files
+
+
+_GUARD_CAUGHT = {
+    "subprocess.run": "import subprocess\nsubprocess.run(['x'])\n",
+    "import subprocess as sp": "import subprocess as sp\nsp.Popen(['x'])\n",
+    "from subprocess import call": "from subprocess import call\ncall(['x'])\n",
+    "check_output aliased": ("from subprocess import check_output as co\n"
+                             "co(['x'])\n"),
+    "subprocess.getoutput": "import subprocess\nsubprocess.getoutput('x')\n",
+    "os.system": "import os\nos.system('x')\n",
+    "os.popen": "import os\nos.popen('x')\n",
+    "os.startfile": "import os\nos.startfile('x')\n",
+    "from os import spawnv": "from os import spawnv\nspawnv(0, 'x', ['x'])\n",
+    "os.execvpe": "import os\nos.execvpe('x', ['x'], {})\n",
+    "import os.path then os.system": "import os.path\nos.system('x')\n",
+    "asyncio.create_subprocess_exec": ("import asyncio\n"
+                                       "asyncio.create_subprocess_exec('x')\n"),
+    "from asyncio import create_subprocess_shell": (
+        "from asyncio import create_subprocess_shell\n"
+        "create_subprocess_shell('x')\n"),
+    "a loop's subprocess_exec": ("async def f(loop):\n"
+                                 "    await loop.subprocess_exec(object, 'x')\n"),
+    "multiprocessing.Process": ("import multiprocessing\n"
+                                "multiprocessing.Process(target=print)\n"),
+    "ProcessPoolExecutor": ("from concurrent.futures import ProcessPoolExecutor\n"
+                            "ProcessPoolExecutor()\n"),
+    "webbrowser.open": "import webbrowser\nwebbrowser.open('https://x')\n",
+    "ShellExecuteW": ("import ctypes\n"
+                      "ctypes.windll.shell32.ShellExecuteW(0, 'open', 'x', 0, 0, 1)\n"),
+    "_winapi.CreateProcess": "import _winapi\n_winapi.CreateProcess(0)\n",
+    "importlib.import_module('subprocess')": (
+        "import importlib\nimportlib.import_module('subprocess').run(['x'])\n"),
+    "__import__('os')": "__import__('os').system('x')\n",
+    "a python -c wrapper string": (
+        "CODE = \"import subprocess; subprocess.call(['x'])\"\n"),
+    "a python -c wrapper f-string": (
+        "argv = ['x']\n"
+        "CODE = f\"import subprocess, sys; rc = subprocess.call({argv!r}); "
+        "sys.exit(rc)\"\n"),
+    "creationflags=subprocess.DETACHED_PROCESS": (
+        "import subprocess\nfrom firm.core.proc import popen_utf8\n"
+        "popen_utf8(['x'], creationflags=subprocess.DETACHED_PROCESS)\n"),
+    "from subprocess import CREATE_NEW_CONSOLE": (
+        "from subprocess import CREATE_NEW_CONSOLE\n"),
+    "getattr of DETACHED_PROCESS": (
+        "import subprocess\nflags = getattr(subprocess, 'DETACHED_PROCESS', 8)\n"),
+    "creationflags literal 0x10": (
+        "from firm.core.proc import run_utf8\n"
+        "run_utf8(['x'], creationflags=0x10)\n"),
+    "creationflags literal bit inside an or": (
+        "from firm.core.proc import run_utf8\n"
+        "run_utf8(['x'], creationflags=0x08000000 | 0x8)\n"),
+    "DETACHED_PROCESS defined": "DETACHED_PROCESS = 8\n",
+}
+
+_GUARD_ALLOWED = {
+    "the wrappers by name": (
+        "from firm.core.proc import run_utf8, popen_utf8, exec_in_place\n"
+        "run_utf8(['x'], capture_output=True)\n"
+        "popen_utf8(['x'], creationflags=0x08000200)\n"
+        "exec_in_place(['x'], {})\n"),
+    "the wrappers by module": ("import firm.core.proc as proc\n"
+                               "proc.run_utf8(['x'])\n"),
+    "from firm.core import proc": ("from firm.core import proc\n"
+                                   "proc.popen_utf8(['x'])\n"),
+    "a local function called system": ("def system(cmd):\n    return cmd\n"
+                                       "system('x')\n"),
+    "subprocess constants and exceptions": (
+        "import subprocess\nx = subprocess.DEVNULL\n"
+        "try:\n    pass\nexcept subprocess.TimeoutExpired:\n    pass\n"),
+    "a docstring quoting a spawn": (
+        "def f():\n    \"\"\"subprocess.run(['x']) is how not to do it.\"\"\"\n"
+        "    return 1\n"),
+    "prose about a subprocess": (
+        "MSG = \"base's banner killed subprocess's reader thread (#114)\"\n"),
+    "getattr of the no-window flag": (
+        "import subprocess\nflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)\n"),
+    "os.path.join and open()": ("import os\nos.path.join('a', 'b')\n"
+                                "open('f').close()\n"),
+}
+
+
+def test_the_guard_can_go_red_on_every_shape_it_claims():
+    """One planted call per shape, each caught once; the allowed shapes, never."""
+    for label, source in _GUARD_CAUGHT.items():
+        bad, _, _ = _guard_scan(source, "src/firm/canary.py")
+        assert len(bad) == 1, f"{label}: {len(bad)} violations: {bad}"
+    for label, source in _GUARD_ALLOWED.items():
+        bad, _, _ = _guard_scan(source, "src/firm/canary.py")
+        assert bad == [], f"{label}: flagged: {bad}"
+    bad, raw, _ = _guard_scan(_GUARD_CAUGHT["subprocess.run"], _ALLOWED_SPAWNER)
+    assert bad == [] and raw == ["subprocess.run"], (
+        f"proc.py is the one place a raw spawn is allowed: bad={bad} raw={raw}")
+
+
+def test_no_child_in_src_starts_outside_firm_core_proc():
+    bad, raw_by_file, wrappers, files = _guard_sweep()
+    assert bad == [], (
+        f"{len(bad)} place(s) in src/ start a process outside firm.core.proc or "
+        "name a flag that opens a window. On Windows that is a console window "
+        "on the operator's screen (#119). Route it through run_utf8, popen_utf8 "
+        "or exec_in_place:\n  " + "\n  ".join(bad))
+    # A sweep that reports zero must first prove it can see. proc.py's own raw
+    # calls are the anchor that MUST be found, by shape.
+    seen_in_proc = sorted(set(raw_by_file.get(_ALLOWED_SPAWNER, [])))
+    assert seen_in_proc == ["os.execvpe", "subprocess.Popen", "subprocess.run"], (
+        f"the sweep saw {seen_in_proc} inside proc.py; it has stopped resolving "
+        "calls, and the zero above means nothing")
+    assert files >= 100, f"visited {files} files"
+    assert wrappers >= 30, f"only {wrappers} wrapper calls seen across src/"
+
+
+def test_the_board_pulse_wrapper_parses_and_starts_the_pulse_through_proc(
+        monkeypatch, tmp_path):
+    """The one spawn written inside a string, built by the real _fire_pulse.
+
+    The sweep reads string code only when it parses, so a wrapper that stopped
+    parsing would read CLEAN there. This holds the other half: it must parse,
+    and the call that starts the pulse must be run_utf8 from firm.core.proc.
+    """
+    import firm.pulse.environment as environment
+    import firm.sched as sched_mod
+    from firm.dashboard import server
+
+    captured: dict = {}
+
+    class _Sched:
+        def spawn_detached(self, argv, *, workdir, env, unit=None):
+            captured["argv"] = argv
+            return {"via": "fake"}
+
+    monkeypatch.setattr(sched_mod, "resolve_scheduler", lambda: _Sched())
+    monkeypatch.setattr(environment, "pulse_path", lambda ws, fid: "/usr/bin")
+    monkeypatch.setattr(server, "_venv_python", lambda ws: "python-under-test")
+    monkeypatch.setenv("CADRE_CLAUDE_BIN", "/fake/claude")
+
+    server._fire_pulse(tmp_path, "zq")
+
+    argv = captured["argv"]
+    assert argv[:2] == ["python-under-test", "-c"], argv[:2]
+    tree = ast.parse(argv[2])
+    names = _Bindings(tree)
+    shapes = [_call_shape(n, names) for n in ast.walk(tree)
+              if isinstance(n, ast.Call)]
+    assert ("wrapper", "firm.core.proc.run_utf8") in shapes, shapes
+    assert not [s for s in shapes if s and s[0] == "spawn"], shapes

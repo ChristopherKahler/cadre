@@ -2164,10 +2164,14 @@ def _fire_pulse(
     log_dir.mkdir(parents=True, exist_ok=True)
     pulse_log = log_dir / f"{unit}.json"
     status_file = workspace / ".firm" / "last-pulse.json"
+    # The pulse is started through firm.core.proc like every child (#119), so
+    # the window rule and its refusals hold inside this wrapper too.
     wrapper = (
         "import shutil, subprocess, sys; "
-        f"rc = subprocess.call({pulse_argv!r}, "
-        f"stdout=open({str(pulse_log)!r}, 'w'), stderr=subprocess.STDOUT); "
+        "from firm.core.proc import run_utf8; "
+        f"rc = run_utf8({pulse_argv!r}, "
+        f"stdout=open({str(pulse_log)!r}, 'w'), "
+        "stderr=subprocess.STDOUT).returncode; "
         f"shutil.copy({str(pulse_log)!r}, {str(status_file)!r}); "
         "sys.exit(rc)"
     )
