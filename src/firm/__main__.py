@@ -617,6 +617,11 @@ def _build_parser() -> argparse.ArgumentParser:
              "Judgment stays with Train; authority stays with the Board.",
     )
     doctor_parser.add_argument(
+        "--install", dest="install_only", action="store_true",
+        help="Report on the INSTALL rather than a firm: version, commit, "
+             "artifact and whether the three agree. Needs no workspace and no "
+             "firm database.")
+    doctor_parser.add_argument(
         "--fix", action="store_true",
         help="Apply mechanical fixes (never touches loadouts, models, or goals).")
     doctor_parser.add_argument(
@@ -1259,6 +1264,15 @@ def main(argv: list[str] | None = None) -> int:
         return run_identity(as_json=args.as_json)
 
     if args.command == "doctor":
+        if args.install_only:
+            # Ahead of run_doctor deliberately: that function returns
+            # db-not-found and exits before a single check runs when there is
+            # no .firm/firm.db, and the install question has to be answerable
+            # on a machine with no firm on it at all.
+            from firm.cli.install_doctor import run_install_doctor
+
+            return run_install_doctor(as_json=args.as_json)
+
         from firm.cli.doctor import run_doctor
 
         workspace = args.workspace if args.workspace is not None else Path.cwd()

@@ -233,3 +233,21 @@ def run_identity(*, as_json: bool = False) -> int:
     else:
         print(render_text(identity))
     return 0 if identity["agreement"]["ok"] else 1
+
+def hub_identity(firms_root: Any, firms: Any) -> dict[str, Any]:
+    """What the hub serves at ``/api/identity``.
+
+    A function rather than a dict built inline in the request handler, so that
+    DoD 5 -- the three surfaces agree about what is installed -- can be tested
+    by driving it, instead of by reading the server source and believing it.
+    A test that asserts about code it has read is not a test.
+
+    It ADDS to the shared identity and never recomputes any of it: the reach
+    half is the only thing the hub knows that the others do not.
+    """
+    identity = installed_identity()
+    identity["reaches"] = {
+        "firms_root": str(firms_root),
+        "firms": sorted(firms),
+    }
+    return identity

@@ -135,6 +135,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Full history. The version is X.Y.Z.dev<N>+g<sha7> where N is
+          # `git rev-list --count HEAD`, and a depth-1 clone answers 1 for
+          # every commit ever made. The sha half would still move, so nothing
+          # would break -- which is exactly why it needs saying: the job would
+          # build dev1 forever and the number would look like information
+          # while carrying none.
+          fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.12"
@@ -144,6 +152,71 @@ jobs:
           python -m pip install --upgrade build
           python -m build
           ls -l dist/
+
+      # The gate that would have caught the stale wheel. Issue #120: a wheel
+      # built 2026-09-10 sat in a gitignored dist/ on a build box whose main
+      # was seven commits behind origin/main with a CLEAN working tree, so a
+      # rebuild there shipped pre-fix code with nothing untidy to notice. The
+      # artifact now carries the commit it was built from, and this step
+      # refuses one that was not built from the commit under test.
+      #
+      # On a pull_request, GITHUB_SHA is the MERGE commit, and actions/checkout
+      # checks out that same merge commit -- so the two agree by construction.
+      # That is the right thing to compare: it is the tree CI actually tested.
+      - name: The wheel must be built from the commit under test
+        run: |
+          python - <<'PY'
+          import glob, os, re, sys, zipfile
+
+          wheels = sorted(glob.glob("dist/*.whl"))
+          print(f"wheels found: {len(wheels)}")
+          if not wheels:
+              sys.exit("no wheel in dist/ — this step proved NOTHING")
+
+          want = os.environ["GITHUB_SHA"]
+          checked = 0
+          failures = []
+
+          def baked_commit(path):
+              with zipfile.ZipFile(path) as zf:
+                  for name in zf.namelist():
+                      if name.endswith("firm/_build_stamp.py"):
+                          text = zf.read(name).decode("utf-8", "replace")
+                          m = re.search(r"COMMIT\s*=\s*['\"]([0-9a-f]{40})['\"]", text)
+                          return m.group(1) if m else None
+              return None
+
+          for wheel in wheels:
+              checked += 1
+              got = baked_commit(wheel)
+              print(f"  {os.path.basename(wheel)}")
+              print(f"    baked commit: {got}")
+              print(f"    GITHUB_SHA:   {want}")
+              if got is None:
+                  failures.append(f"{wheel}: carries no build stamp at all")
+              elif got != want:
+                  failures.append(f"{wheel}: built from {got}, not {want}")
+              elif got[:7] not in os.path.basename(wheel):
+                  failures.append(
+                      f"{wheel}: filename does not carry the commit {got[:7]}")
+
+          print(f"wheels checked: {checked}")
+          if checked == 0:
+              sys.exit("checked zero wheels — a pass here would mean nothing")
+
+          # Control: the comparison must be able to say NO. If a deliberately
+          # wrong sha compares equal, every green above was an instrument that
+          # cannot fail.
+          if baked_commit(wheels[0]) == "0" * 40:
+              sys.exit("control failed: a bogus sha compared equal")
+          print("control: a bogus sha is correctly rejected")
+
+          if failures:
+              for line in failures:
+                  print(f"FAIL {line}")
+              sys.exit(1)
+          print("every wheel was built from the commit under test")
+          PY
 
       - name: Install the wheel into an empty environment
         run: |
@@ -168,10 +241,14 @@ jobs:
               print("imported", name)
           PY
 
-      - name: Prove the console scripts resolve
+      - name: Prove the console scripts resolve and can name their commit
         run: |
           /tmp/clean/bin/cadre --version
           /tmp/clean/bin/firm --version
+          # The whole point of #120: ask the INSTALL what it is, not the source
+          # tree. This runs out of /tmp/clean, which has nothing but the wheel.
+          /tmp/clean/bin/cadre identity
+          /tmp/clean/bin/cadre doctor --install
 
       - name: Run the suite against the installed package
         run: |

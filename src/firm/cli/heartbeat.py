@@ -283,6 +283,32 @@ def _service_workspace(service_path: Path) -> str | None:
     return None
 
 
+def _service_python(stem: str, unit_dir: Path | None) -> str | None:
+    """The interpreter baked into a unit's ExecStart, read from the unit file.
+
+    Worth reporting because a timer holds a PATH, and a reinstall changes the
+    bytes behind that path leaving no trace in the timer. A unit still pointing
+    at an interpreter that no longer has Cadre in it, or has a different Cadre
+    in it, looks perfectly healthy from every other angle.
+
+    Read here rather than added to the scheduler backends, which are godwit's
+    (#113, #119). Absent is returned as None and rendered as "not recorded",
+    matching the scheduler contract: keys the platform cannot answer are
+    absent, never guessed.
+    """
+    base = unit_dir or default_unit_dir()
+    for candidate in (base / f"{stem}.service", base / f"{stem}.plist"):
+        try:
+            text = candidate.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if line.startswith("ExecStart="):
+                first = line.partition("=")[2].strip().split()
+                return first[0] if first else None
+    return None
+
+
 def run_status(*, unit_dir: Path | None = None) -> int:
     sched = _sched(unit_dir)
     entries = []
@@ -301,7 +327,14 @@ def run_status(*, unit_dir: Path | None = None) -> int:
         for k in ("next_fire", "last_fire"):
             if st.get(k):
                 entry[k] = st[k]
+        entry["interpreter"] = _service_python(stem, unit_dir)
         entries.append(entry)
 
-    _emit({"ok": True, "heartbeats": entries})
+    # The identity block is the SAME dict cadre identity prints and
+    # cadre doctor --install checks. One producer, several consumers: three
+    # readers that each compute their own answer agree until the day one of
+    # them is edited, and then nobody notices.
+    from firm.identity import installed_identity
+
+    _emit({"ok": True, "cadre": installed_identity(), "heartbeats": entries})
     return 0
