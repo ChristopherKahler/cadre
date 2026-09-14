@@ -564,8 +564,26 @@ class _Run:
         self.codes = list(codes)
         self.calls: list[list[str]] = []
 
+    #: What `base rule list --domain <d>` answers. Issue #115 put a second
+    #: base call inside install(), and this one is READ rather than merely
+    #: counted, so the stub has to answer it in base's real shape. It does NOT
+    #: consume a code: every arm below sets its codes for validate / install /
+    #: `base cadre --help`, and a rule listing quietly eating one would shift
+    #: all of them and change what each arm is testing without saying so.
+    listing = "No rules for domain 'ext:cadre:cadre-firm' in either tier."
+
     def __call__(self, cmd, **kwargs):
         self.calls.append(list(cmd))
+        #: The kwargs of the LAST call, so an arm can assert how the child was
+        #: decoded rather than only which verb it ran. Issue #114 is invisible
+        #: at the argv level and lives entirely in these.
+        self.kwargs = dict(kwargs)
+        if list(cmd)[1:3] == ["rule", "list"]:
+            class L:
+                returncode = 0
+                stdout = self.listing
+                stderr = ""
+            return L()
         code = self.codes.pop(0) if self.codes else 0
 
         class R:
@@ -616,9 +634,17 @@ def test_install_validates_before_installing(monkeypatch, fake_base):
     # proved the file was acceptable and landed; neither of them proves the
     # command RUNS, which is how F1 shipped. `base cadre --help` is the arm
     # that fails exactly when a Member would fail.
-    assert run.verbs == ["validate", "install", "--help"], (
+    assert run.verbs[:3] == ["validate", "install", "--help"], (
         "validate must come first, install second, and the handler must be "
         f"exercised third — got {run.verbs}")
+    # Issue #115 added a fourth call, `base rule list`, and its POSITION is an
+    # assertion of its own: reading what the graph will serve is only
+    # meaningful once the manifest has landed and its handler has been proved
+    # to run. A graph read before `--help` would be reporting on an install
+    # that might not exist. Slicing the list above without pinning the tail
+    # would have quietly dropped that.
+    assert run.verbs[3:] == ["list"], (
+        f"unexpected base calls after the handler proof: {run.verbs[3:]}")
     assert res["ok"] is True
     assert res["read_back"] is True
 
@@ -840,3 +866,276 @@ def test_a_healthy_install_reports_the_handler_it_proved(fake_base, monkeypatch)
     assert res["ok"] is True
     assert res["handler_runs"] is True
     assert res["handler"], "a healthy install did not say which handler it ran"
+
+
+# ---------------------------------------------------------------------------
+# The graph copy — issue #115
+#
+# base matches this manifest's keywords but SERVES the rule text from its
+# graph when the graph holds a copy of the domain, and the copy wins outright.
+# Measured on base 0.15.2, 2026-09-14, on the maintainer's machine: a keyword
+# that exists ONLY in this manifest (`unit complete`) fired the domain, and
+# what arrived were three rules from a 2026-08 manifest naming one firm's WSL
+# paths. None of this file's rules reached the session.
+#
+# base owns the repair and offers no verb for it — `rule remove --index N`
+# matches an `index` triple domain-sync rules do not carry, `domain sync`
+# appends rather than replaces on a populated graph, `graph supersede` does
+# not index rules, `graph apply-ops` retires only facts with a sync id. So
+# these tests do not pin a cleanup. They pin that it cannot happen QUIETLY.
+# ---------------------------------------------------------------------------
+
+# Copied out of a real run, not typed from memory. Law 32: a literal going into
+# an assertion comes from the source that PRINTS it.
+REAL_LISTING = """[ext:cadre:cadre-firm] 3 rules across both tiers:
+  workspace 0. Cadre firm active. chrisai firm root: /home/chriskahler/firms/chrisai (WSL).
+  workspace 1. CLI: /home/chriskahler/firms/chrisai/.venv/bin/firm {init|pulse|unit|run}.
+  workspace 2. Board rules bind every session: never approve/reject Gates.
+  (global: none)
+
+Indices are per tier; `rule remove` takes the index shown beside its own tier."""
+
+CLEAN_LISTING = "No rules for domain 'ext:cadre:cadre-firm' in either tier."
+
+
+def _manifest_rules() -> list[str]:
+    """This manifest's own rules for its one domain, read from the file."""
+    rendered = base_extension.render("/opt/cadre")
+    domains = base_extension.manifest_domains(rendered)
+    assert len(domains) == 1, f"expected one domain, got {domains}"
+    return domains[0][1]
+
+
+def _listing_of(rules: list[str]) -> str:
+    body = "\n".join(f"  workspace {i}. {r}" for i, r in enumerate(rules))
+    return (f"[ext:cadre:cadre-firm] {len(rules)} rules across both tiers:\n"
+            f"{body}\n  (global: none)\n\nIndices are per tier;")
+
+
+def test_the_listing_parser_reads_a_real_listing():
+    rules = base_extension.parse_rule_listing(REAL_LISTING)
+    assert len(rules) == 3
+    assert rules[0].startswith("Cadre firm active. chrisai firm root:")
+    assert "(global: none)" not in rules
+
+
+def test_the_listing_parser_reads_the_no_rules_sentence():
+    assert base_extension.parse_rule_listing(CLEAN_LISTING) == []
+
+
+def test_the_listing_parser_refuses_what_it_cannot_read():
+    """A zero that means 'I could not see' reads exactly like a zero that means
+    'nothing is there', and only one of those is good news (law 48)."""
+    with pytest.raises(base_extension.GraphReadFailed):
+        base_extension.parse_rule_listing("ok")
+
+
+def test_the_listing_parser_refuses_a_count_that_does_not_reconcile():
+    """The listing states its own total, so the rows are checked against it.
+    A parser that silently returns fewer rules than base reported is a blind
+    detector that reads CLEAN — the worst direction to fail in."""
+    short = REAL_LISTING.replace(
+        "  workspace 2. Board rules bind every session: never approve/reject Gates.\n", "")
+    with pytest.raises(base_extension.GraphReadFailed) as exc:
+        base_extension.parse_rule_listing(short)
+    assert "3" in str(exc.value) and "2" in str(exc.value)
+
+
+def test_the_domain_name_is_namespaced_the_way_base_names_it():
+    """`ext:<extension>:<domain>`. The name is DERIVED, which is why two
+    generations cannot rename their way out of a collision."""
+    names = [n for n, _ in base_extension.manifest_domains(
+        base_extension.render("/opt/cadre"))]
+    assert names == ["ext:cadre:cadre-firm"]
+
+
+def test_a_clean_graph_leaves_the_collision_field_unset(fake_base, monkeypatch):
+    run = _Run(0, 0, 0)
+    run.listing = CLEAN_LISTING
+    monkeypatch.setattr(subprocess, "run", run)
+    _land(fake_base)
+    res = base_extension.install("/opt/cadre")
+    assert res["ok"] is True
+    assert res["graph_read"] is True
+    assert res["collision"] is False
+    assert res["foreign_rules"] == []
+
+
+def test_a_graph_copy_that_matches_this_manifest_is_not_a_collision(
+        fake_base, monkeypatch):
+    """The control that keeps the arm below honest. A graph copy is not the
+    defect — a graph copy carrying SOMEONE ELSE'S rules is. Without this arm,
+    an implementation that flagged the mere presence of a copy would pass."""
+    run = _Run(0, 0, 0)
+    run.listing = _listing_of(_manifest_rules())
+    monkeypatch.setattr(subprocess, "run", run)
+    _land(fake_base)
+    res = base_extension.install("/opt/cadre")
+    assert res["collision"] is False, res["foreign_rules"]
+
+
+def test_a_foreign_rule_in_the_graph_sets_the_collision_field(
+        fake_base, monkeypatch):
+    run = _Run(0, 0, 0)
+    run.listing = REAL_LISTING
+    monkeypatch.setattr(subprocess, "run", run)
+    _land(fake_base)
+    res = base_extension.install("/opt/cadre")
+    assert res["collision"] is True
+    assert len(res["foreign_rules"]) == 1
+    finding = res["foreign_rules"][0]
+    assert finding["domain"] == "ext:cadre:cadre-firm"
+    assert len(finding["foreign"]) == 3
+    assert any("chrisai firm root" in r for r in finding["foreign"])
+    assert res["cwd"], "a rule count with no directory beside it is not a measurement"
+
+
+def test_one_changed_character_is_still_foreign(fake_base, monkeypatch):
+    """The detector's resolution. Every rule but one is this manifest's own,
+    and the one that differs by a single character is reported. A comparison
+    that matched loosely — by count, by prefix, by domain name — would pass
+    every other arm here and miss a rewritten rule, which is the exact shape
+    the collision takes."""
+    mine = _manifest_rules()
+    tampered = list(mine)
+    tampered[0] = tampered[0].replace("never opened directly.",
+                                      "never opened directlY.")
+    run = _Run(0, 0, 0)
+    run.listing = _listing_of(tampered)
+    monkeypatch.setattr(subprocess, "run", run)
+    _land(fake_base)
+    res = base_extension.install("/opt/cadre")
+    assert res["collision"] is True
+    assert res["foreign_rules"][0]["foreign"] == [tampered[0]]
+
+
+def test_the_install_still_succeeds_over_a_collision(fake_base, monkeypatch,
+                                                     capsys):
+    """Land and shout, never refuse. The manifest DID install and its handler
+    DOES run; what shadows it is a base defect the operator has no verb to fix.
+    A refusal that can never pass is not a safety check, it is a brick — and it
+    would take founding down with it on the one machine that has the problem."""
+    run = _Run(0, 0, 0)
+    run.listing = REAL_LISTING
+    monkeypatch.setattr(subprocess, "run", run)
+    _land(fake_base)
+    code = base_extension.run_install("/opt/cadre")
+    assert code == 0
+    assert "installed" in capsys.readouterr().out
+
+
+def test_the_collision_report_names_base_as_the_owner(fake_base, monkeypatch,
+                                                      capsys):
+    """The report has to survive being read by someone who did not measure
+    this. Without the owner line the next reader spends a day inside Cadre
+    looking for a bug that is not here."""
+    run = _Run(0, 0, 0)
+    run.listing = REAL_LISTING
+    monkeypatch.setattr(subprocess, "run", run)
+    _land(fake_base)
+    base_extension.run_install("/opt/cadre")
+    err = capsys.readouterr().err
+    assert "COLLISION on domain ext:cadre:cadre-firm" in err
+    assert "OWNER: base" in err
+    assert "chrisai firm root" in err, "the report did not print the actual rule"
+    assert "base rule list --domain ext:cadre:cadre-firm" in err
+    assert "workspace tier resolved from:" in err
+
+
+def test_a_clean_install_prints_no_collision_block(fake_base, monkeypatch,
+                                                   capsys):
+    """The must-stay-quiet control. Without it, an implementation that printed
+    the block unconditionally would pass the arm above."""
+    run = _Run(0, 0, 0)
+    run.listing = CLEAN_LISTING
+    monkeypatch.setattr(subprocess, "run", run)
+    _land(fake_base)
+    base_extension.run_install("/opt/cadre")
+    assert "COLLISION" not in capsys.readouterr().err
+
+
+def test_an_unreadable_graph_is_reported_as_unknown_never_as_clean(
+        fake_base, monkeypatch, capsys):
+    run = _Run(0, 0, 0)
+    run.listing = "some future version of base says something else entirely"
+    monkeypatch.setattr(subprocess, "run", run)
+    _land(fake_base)
+    res = base_extension.install("/opt/cadre")
+    assert res["graph_read"] is False
+    assert res["collision"] is False
+    assert "UNKNOWN" in res["reason"]
+    code = base_extension.run_install("/opt/cadre")
+    assert code == 0
+    assert "could not be read" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Reading the graph is a #114 surface too
+#
+# I wrote this call with `subprocess.run(..., text=True)` and shipped it in my
+# own first commit, one file away from the fix for exactly that. `text=True`
+# decodes with the host locale — cp1252 on the operator's Windows install — and
+# the rule text being read here is full of what that mangles: the shipped rules
+# carry backticks and an em dash, the stale ones carry `§`.
+#
+# The crash half is the visible one. The half that would have gone unnoticed is
+# worse: every graph rule decoded differently from the manifest rule it is a
+# copy of, so `r not in mine` is true for all of them and a perfectly clean
+# machine reports a collision on every domain. A false-positive generator, from
+# a decode nobody would think to look at.
+# ---------------------------------------------------------------------------
+
+def test_the_graph_read_is_decoded_as_utf8_never_by_the_host_locale(
+        fake_base, monkeypatch):
+    """Asserted on the kwargs the child was actually launched with. The argv is
+    identical either way, so an arm that only checked the verb would pass over
+    a locale-decoded read."""
+    run = _Run(0, 0, 0)
+    run.listing = CLEAN_LISTING
+    monkeypatch.setattr(subprocess, "run", run)
+    _land(fake_base)
+    base_extension.install("/opt/cadre")
+    assert run.kwargs.get("encoding") == "utf-8", (
+        "the rule listing is decoded with the host locale, which is #114 "
+        f"reopened in the reader: {run.kwargs!r}")
+    assert "text" not in run.kwargs, (
+        "text=True beside an explicit encoding means a future edit can drop "
+        "the encoding and look unchanged")
+
+
+def test_a_rule_carrying_non_ascii_does_not_read_as_foreign(fake_base,
+                                                            monkeypatch):
+    """The false-positive arm, and the reason the one above matters.
+
+    A graph copy that IS this manifest, carrying the characters cp1252 would
+    have mangled, must compare equal. Under the decode bug every one of these
+    rules read as a rule the manifest did not write.
+    """
+    mine = _manifest_rules()
+    assert any("`" in r for r in mine), (
+        "precondition: the shipped rules no longer carry a character the host "
+        "locale would mangle, so this arm has nothing to discriminate")
+    run = _Run(0, 0, 0)
+    run.listing = _listing_of(mine)
+    monkeypatch.setattr(subprocess, "run", run)
+    _land(fake_base)
+    res = base_extension.install("/opt/cadre")
+    assert res["collision"] is False, (
+        f"a faithful graph copy read as foreign: {res['foreign_rules']}")
+
+
+def test_an_empty_listing_is_a_failed_read_never_a_clean_one(fake_base,
+                                                             monkeypatch):
+    """base always prints either a listing or the "No rules" sentence, so an
+    empty stdout is a failed read. Parsed rather than refused it would come
+    back as [] — no rules, nothing wrong, machine clean — which is the exact
+    shape of a zero that means "I could not see"."""
+    run = _Run(0, 0, 0)
+    run.listing = ""
+    monkeypatch.setattr(subprocess, "run", run)
+    _land(fake_base)
+    res = base_extension.install("/opt/cadre")
+    assert res["graph_read"] is False, (
+        "an empty rule listing was read as a clean graph")
+    assert res["collision"] is False
+    assert "UNKNOWN" in res["reason"]
