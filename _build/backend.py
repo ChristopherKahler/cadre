@@ -34,8 +34,14 @@ _STAMP = _ROOT / "src" / "firm" / "_build_stamp.py"
 def _git(*args: str) -> str | None:
     """Run git in the source root. None on any failure, including no git."""
     try:
+        # encoding and errors spelled out as literals, not text=True. This runs
+        # in the isolated build, where firm.core.proc is not importable, so it
+        # cannot use run_utf8 -- and the #114 sweep scans src/firm only, so it
+        # would never catch this call. The policy is the same: UTF-8, replace.
         out = subprocess.run(
-            ("git", *args), cwd=_ROOT, capture_output=True, text=True, timeout=30,
+            ("git", *args), cwd=_ROOT, capture_output=True,
+            encoding="utf-8", errors="replace", timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except Exception:
         return None

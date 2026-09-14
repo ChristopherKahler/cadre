@@ -32,6 +32,14 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from firm.core.proc import run_utf8
+
+# No console window, ever (Chris, 2026-09-14). A console child spawned from a
+# windowless parent -- a scheduled task, a hook, pythonw -- opens a visible
+# window on Windows unless told not to. getattr so this is 0 off Windows,
+# where subprocess refuses any non-zero creationflags.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 _COMMIT_RE = re.compile(r"^COMMIT\s*=\s*['\"]([0-9a-f]{40})['\"]", re.M)
 _VERSION_RE = re.compile(r"^Version:\s*(.+)$", re.M)
 
@@ -84,8 +92,12 @@ def _installed_identity(python_bin: str) -> dict[str, Any] | None:
         "    print(json.dumps({'error': str(exc)}))\n"
     )
     try:
-        run = subprocess.run([python_bin, "-c", probe],
-                             capture_output=True, text=True, timeout=120)
+        # run_utf8, not subprocess.run(text=True): the locale codec on a cp1252
+        # Windows kills the reader thread on the first non-cp1252 byte and run()
+        # then returns rc 0 with stdout None, which this function would read as
+        # "nothing is installed". Issue #114.
+        run = run_utf8([python_bin, "-c", probe], capture_output=True,
+                       timeout=120, creationflags=_NO_WINDOW)
     except (OSError, subprocess.SubprocessError):
         return None
     if run.returncode != 0 or not run.stdout.strip():
@@ -141,10 +153,10 @@ def run_install(wheel: Path, *, python_bin: str | None = None,
     before = _installed_identity(python_bin)
     result["before"] = _short(before)
 
-    run = subprocess.run(
+    run = run_utf8(
         [python_bin, "-m", "pip", "install", "--force-reinstall", "--no-deps",
          str(wheel)],
-        capture_output=True, text=True,
+        capture_output=True, creationflags=_NO_WINDOW,
     )
     result["pip_returncode"] = run.returncode
 

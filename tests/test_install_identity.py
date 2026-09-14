@@ -282,7 +282,10 @@ def test_install_refuses_an_unreadable_wheel_without_running_pip(tmp_path, capsy
     """The refusal has to happen BEFORE pip is asked to do anything, or the
     environment can be disturbed by an install that was never going to work."""
     called = []
-    monkeypatch.setattr(install_mod.subprocess, "run",
+    # Patch the name install.py CALLS. It calls run_utf8 now; a spy left on
+    # subprocess.run would never be reached, and "pip was not invoked" would
+    # pass because the spy was wired to nothing.
+    monkeypatch.setattr(install_mod, "run_utf8",
                         lambda *a, **k: called.append(a) or None)
     broken = tmp_path / "cadre-0.1.0-py3-none-any.whl"
     broken.write_bytes(b"not a zip")
