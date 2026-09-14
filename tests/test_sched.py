@@ -32,6 +32,10 @@ def ok_cmd(monkeypatch):
 
     for mod in (systemd_mod, launchd_mod, winsched_mod):
         monkeypatch.setattr(mod, "run_cmd", fake)
+    # "Every command succeeds" includes the headless self-test a Windows install
+    # runs first (#119 A7). Tests that exercise that self-test replace this.
+    monkeypatch.setattr(winsched_mod, "_headless_self_test",
+                        lambda: (True, ""), raising=False)
     return calls
 
 
@@ -164,6 +168,166 @@ def test_winsched_service_launcher_supervises(tmp_path, ok_cmd):
     assert ":loop" in launcher and "goto loop" in launcher
     create = next(c for c in ok_cmd if "/Create" in c)
     assert "ONLOGON" in create
+
+
+# ---------------------------------------------------------------------------
+# D1a (#119): the task runs its launcher under a console nobody can see
+# ---------------------------------------------------------------------------
+#
+# A task pointed straight at a .cmd gets a console, and a console gets a
+# window: every pulse drew one on the operator's desktop and closing it killed
+# the pulse. The task command is now conhost.exe --headless running cmd.exe on
+# the launcher. Before a single file is written, the install proves the flag
+# works on this machine (A7) and that the command fits schtasks' cap; the
+# launcher sends every byte of output to a log file so a headless console is
+# never left full (A6). Nothing here starts conhost: the self-test is faked.
+# The real run belongs to M-W1, on a private desktop first (verdict A1).
+
+_ROOT = "C:\\Windows"
+
+
+def _install(kind, s, tmp_path):
+    common = dict(description="d", workdir=tmp_path, env={"FIRM_ID": "lab"},
+                  argv=["py", "-m", "firm", "pulse"])
+    if kind == "timer":
+        return s.install_timer("cadre-heartbeat-lab", interval="30m", **common)
+    return s.install_service("cadre-heartbeat-lab", **common)
+
+
+def _tr(create):
+    return create[create.index("/TR") + 1]
+
+
+@pytest.mark.parametrize("kind", ["timer", "service"])
+def test_winsched_task_runs_its_launcher_under_a_headless_console(
+        tmp_path, ok_cmd, monkeypatch, kind):
+    monkeypatch.setenv("SystemRoot", _ROOT)
+    s = WindowsScheduler(launcher_dir=tmp_path)
+    _install(kind, s, tmp_path)
+    launcher = tmp_path / "cadre-heartbeat-lab.cmd"
+    create = next(c for c in ok_cmd if "/Create" in c)
+    # The root comes from the same SystemRoot lookup; every other character of
+    # the command is this test's own. (On Linux the join is a forward slash.)
+    sys32 = winsched_mod._system32()
+    assert str(sys32).startswith(_ROOT), sys32
+    assert _tr(create) == (f'"{sys32 / "conhost.exe"}" --headless '
+                           f'"{sys32 / "cmd.exe"}" /d /c "{launcher}"'), _tr(create)
+
+
+@pytest.mark.parametrize("kind", ["timer", "service"])
+def test_winsched_launcher_sends_every_command_line_to_its_log(
+        tmp_path, ok_cmd, monkeypatch, kind):
+    monkeypatch.setenv("SystemRoot", _ROOT)
+    s = WindowsScheduler(launcher_dir=tmp_path)
+    _install(kind, s, tmp_path)
+    text = (tmp_path / "cadre-heartbeat-lab.cmd").read_text(encoding="utf-8")
+    runs = [ln for ln in text.splitlines() if "firm pulse" in ln]
+    log = tmp_path / "cadre-heartbeat-lab.log"
+    assert runs, text
+    for ln in runs:
+        assert ln.endswith(f'> "{log}" 2>&1'), (
+            f"a command line writes to the console, not the log: {ln!r}")
+
+
+@pytest.mark.parametrize("kind", ["timer", "service"])
+def test_winsched_refuses_a_task_command_past_the_schtasks_cap(
+        tmp_path, ok_cmd, monkeypatch, kind):
+    monkeypatch.setenv("SystemRoot", _ROOT)
+    deep = tmp_path / ("d" * 200)
+    s = WindowsScheduler(launcher_dir=deep)
+    with pytest.raises(winsched_mod.SchedulerError) as caught:
+        _install(kind, s, tmp_path)
+    assert "261" in str(caught.value), str(caught.value)
+    assert not [c for c in ok_cmd if "/Create" in c], "a task was created anyway"
+    assert not deep.exists(), "a launcher was written for a task never created"
+
+
+@pytest.mark.parametrize("kind", ["timer", "service"])
+def test_winsched_refuses_to_install_when_the_headless_self_test_fails(
+        tmp_path, ok_cmd, monkeypatch, kind):
+    monkeypatch.setenv("SystemRoot", _ROOT)
+    monkeypatch.setattr(
+        winsched_mod, "_headless_self_test",
+        lambda: (False, "conhost.exe --headless returned 0, expected 7"))
+    s = WindowsScheduler(launcher_dir=tmp_path / "sched")
+    with pytest.raises(winsched_mod.SchedulerError) as caught:
+        _install(kind, s, tmp_path)
+    message = str(caught.value)
+    assert "returned 0, expected 7" in message, message
+    assert "pythonw" in message, "the named fallback is missing from the refusal"
+    assert not [c for c in ok_cmd if "/Create" in c], "a task was created anyway"
+    assert not (tmp_path / "sched").exists(), "files were written anyway"
+
+
+def test_winsched_remove_takes_the_launcher_log_too(tmp_path, ok_cmd):
+    s = WindowsScheduler(launcher_dir=tmp_path / "sched")
+    (tmp_path / "sched").mkdir()
+    (tmp_path / "sched" / "cadre-heartbeat-lab.cmd").write_text("@echo off\r\n")
+    (tmp_path / "sched" / "cadre-heartbeat-lab.log").write_text("pulse output\n")
+    s.remove("cadre-heartbeat-lab")
+    assert not (tmp_path / "sched" / "cadre-heartbeat-lab.log").exists()
+
+
+class _SelfTestRun:
+    def __init__(self, result):
+        self.result = result
+        self.calls = []
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append((argv, kwargs))
+        if isinstance(self.result, BaseException):
+            raise self.result
+        return type("P", (), {"returncode": self.result})()
+
+
+def _system32_with_conhost(tmp_path, monkeypatch, present=True):
+    sys32 = tmp_path / "System32"
+    sys32.mkdir()
+    if present:
+        (sys32 / "conhost.exe").write_bytes(b"MZ")
+    monkeypatch.setattr(winsched_mod, "_system32", lambda: sys32,
+                        raising=False)
+    return sys32
+
+
+def test_headless_self_test_passes_only_when_the_exit_code_comes_back(
+        tmp_path, monkeypatch):
+    import subprocess as sp
+
+    sys32 = _system32_with_conhost(tmp_path, monkeypatch)
+    run = _SelfTestRun(7)
+    assert winsched_mod._headless_self_test(run=run) == (True, "")
+    argv, kwargs = run.calls[0]
+    assert argv == [str(sys32 / "conhost.exe"), "--headless",
+                    str(sys32 / "cmd.exe"), "/d", "/c", "exit 7"]
+    for stream in ("stdin", "stdout", "stderr"):
+        assert kwargs.get(stream) is sp.DEVNULL, (stream, kwargs.get(stream))
+    assert kwargs.get("timeout"), "a self-test that can hang the install"
+    if hasattr(sp, "STARTUPINFO"):
+        si = kwargs.get("startupinfo")
+        assert si is not None and si.dwFlags & sp.STARTF_USESHOWWINDOW \
+            and si.wShowWindow == 0, "the self-test is not started hidden"
+
+
+@pytest.mark.parametrize("result, words", [
+    (0, "returned 0, expected 7"),
+    (1, "returned 1, expected 7"),
+    (OSError("not found"), "could not start"),
+    (__import__("subprocess").TimeoutExpired("conhost", 30), "did not finish"),
+])
+def test_headless_self_test_fails_on_anything_but_the_exit_code(
+        tmp_path, monkeypatch, result, words):
+    _system32_with_conhost(tmp_path, monkeypatch)
+    ok, why = winsched_mod._headless_self_test(run=_SelfTestRun(result))
+    assert ok is False and words in why, why
+
+
+def test_headless_self_test_fails_when_conhost_is_missing(tmp_path, monkeypatch):
+    sys32 = _system32_with_conhost(tmp_path, monkeypatch, present=False)
+    run = _SelfTestRun(7)
+    ok, why = winsched_mod._headless_self_test(run=run)
+    assert ok is False and str(sys32 / "conhost.exe") in why, why
+    assert run.calls == [], "ran a conhost that is not there"
 
 
 # A real `schtasks /Query /TN <task> /FO LIST /V` block, captured on Windows 10

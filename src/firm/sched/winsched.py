@@ -12,6 +12,17 @@ command in a restart loop — the task starts at logon and the loop supervises.
 
 Honesty notes: sub-minute intervals round up to 1 minute (Task Scheduler's
 floor); ``status()`` parses ``schtasks /Query /V`` for state and run times.
+
+No window (#119, design D1a). A task pointed straight at a ``.cmd`` gets a
+console, and a console gets a window: every pulse drew one on the operator's
+desktop, and closing it killed the pulse. The task command is therefore
+``conhost.exe --headless cmd.exe /d /c "<launcher>"``. Before any file is
+written, an install proves ``--headless`` works on this machine and passes the
+exit code through, and refuses the task command past schtasks' 261-character
+cap rather than cutting it. The launcher sends all output to ``<stem>.log``, so
+the headless console is never the place output goes. Logon mode is unchanged:
+interactive only, so a task runs while the user is logged on (a locked screen
+included) and never while logged out.
 """
 
 from __future__ import annotations
@@ -22,7 +33,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from firm.core.proc import popen_utf8
+from firm.core.proc import popen_utf8, run_utf8
 from firm.sched.base import SchedulerError, interval_to_seconds, run_cmd
 
 _TASK_FOLDER = "Cadre"
@@ -98,6 +109,61 @@ def _cmd_quote(s: str) -> str:
     return f'"{s}"' if (" " in s or "&" in s) else s
 
 
+# schtasks /Create takes a task command of at most this many characters.
+_TR_CAP = 261
+
+_PYTHONW_FALLBACK = ("The fallback that needs no headless console, running the "
+                     "heartbeat through pythonw.exe, is named but not built.")
+
+
+def _system32() -> Path:
+    """Where this Windows keeps conhost.exe and cmd.exe."""
+    root = (os.environ.get("SystemRoot") or os.environ.get("windir")
+            or "C:\\Windows")
+    return Path(root) / "System32"
+
+
+def _headless_tr(launcher: Path) -> str:
+    """The task command: the launcher under a console nobody can see."""
+    sys32 = _system32()
+    return (f'"{sys32 / "conhost.exe"}" --headless '
+            f'"{sys32 / "cmd.exe"}" /d /c "{launcher}"')
+
+
+def _headless_self_test(run: Any = run_utf8) -> tuple[bool, str]:
+    """Does ``conhost.exe --headless`` work here and pass the exit code through?
+
+    Runs ``conhost.exe --headless cmd.exe /d /c exit 7`` and requires rc 7
+    (verdict A7). It starts hidden (SW_HIDE), with every stream closed and a
+    timeout, so that a conhost which does not know the flag has no visible
+    window to open. That last property is M-W1's to prove, on a private desktop
+    first, before any install runs this for real.
+    """
+    sys32 = _system32()
+    conhost = sys32 / "conhost.exe"
+    if not conhost.exists():
+        return False, f"{conhost} is not on this machine"
+    kwargs: dict[str, Any] = {"stdin": subprocess.DEVNULL,
+                              "stdout": subprocess.DEVNULL,
+                              "stderr": subprocess.DEVNULL, "timeout": 30}
+    if hasattr(subprocess, "STARTUPINFO"):
+        hidden = subprocess.STARTUPINFO()
+        hidden.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        hidden.wShowWindow = 0   # SW_HIDE
+        kwargs["startupinfo"] = hidden
+    try:
+        proc = run([str(conhost), "--headless", str(sys32 / "cmd.exe"),
+                    "/d", "/c", "exit 7"], **kwargs)
+    except subprocess.TimeoutExpired:
+        return False, f"{conhost} --headless did not finish in 30 seconds"
+    except OSError as exc:
+        return False, f"{conhost} --headless could not start: {exc}"
+    if proc.returncode != 7:
+        return False, (f"{conhost} --headless returned {proc.returncode}, "
+                       "expected 7")
+    return True, ""
+
+
 class WindowsScheduler:
     name = "winsched"
 
@@ -112,6 +178,24 @@ class WindowsScheduler:
     def _launcher(self, stem: str) -> Path:
         return self.launcher_dir / f"{stem}.cmd"
 
+    def _log(self, stem: str) -> Path:
+        return self.launcher_dir / f"{stem}.log"
+
+    def _prepare_task(self, stem: str) -> str:
+        """The task command for *stem*, or SchedulerError before any write."""
+        ok, why = _headless_self_test()
+        if not ok:
+            raise SchedulerError(
+                "refusing to install a Windows task that could open a window: "
+                f"{why}. {_PYTHONW_FALLBACK}")
+        tr = _headless_tr(self._launcher(stem))
+        if len(tr) > _TR_CAP:
+            raise SchedulerError(
+                f"the task command is {len(tr)} characters and schtasks takes "
+                f"at most {_TR_CAP}; it is refused rather than cut. Use a "
+                f"shorter launcher directory than {self.launcher_dir}.")
+        return tr
+
     def _write_launcher(self, stem: str, workdir: Path, env: dict[str, str],
                         argv: list[str], *, supervise: bool) -> Path:
         self.launcher_dir.mkdir(parents=True, exist_ok=True)
@@ -119,7 +203,10 @@ class WindowsScheduler:
         for k, v in sorted(env.items()):
             lines.append(f'set "{k}={v}"')
         lines.append(f'cd /d "{workdir}"')
-        cmd = " ".join(_cmd_quote(a) for a in argv)
+        # Every byte of output goes to the log, never to the headless console
+        # (verdict A6): a console nobody reads must never be what a run waits on.
+        cmd = (" ".join(_cmd_quote(a) for a in argv)
+               + f' > "{self._log(stem)}" 2>&1')
         if supervise:
             # Task Scheduler can't restart interactive user tasks on failure —
             # the launcher supervises instead (5s backoff, exits with logoff).
@@ -148,13 +235,14 @@ class WindowsScheduler:
     def install_timer(self, stem: str, *, description: str, workdir: Path,
                       env: dict[str, str], argv: list[str],
                       interval: str) -> dict[str, Any]:
+        tr = self._prepare_task(stem)
         launcher = self._write_launcher(stem, workdir, env, argv, supervise=False)
         launcher.write_text(
             launcher.read_text(encoding="utf-8").replace(
                 "@echo off", f"@echo off\r\nrem interval={interval}", 1),
             encoding="utf-8")
         cmd = ["schtasks", "/Create", "/TN", self._tn(stem),
-               "/TR", f'"{launcher}"', "/F",
+               "/TR", tr, "/F",
                *self._schedule_flags(interval)]
         rc, out = run_cmd(cmd)
         if rc != 0:
@@ -163,9 +251,10 @@ class WindowsScheduler:
 
     def install_service(self, stem: str, *, description: str, workdir: Path,
                         env: dict[str, str], argv: list[str]) -> dict[str, Any]:
-        launcher = self._write_launcher(stem, workdir, env, argv, supervise=True)
+        tr = self._prepare_task(stem)
+        self._write_launcher(stem, workdir, env, argv, supervise=True)
         cmd = ["schtasks", "/Create", "/TN", self._tn(stem),
-               "/TR", f'"{launcher}"', "/F", "/SC", "ONLOGON"]
+               "/TR", tr, "/F", "/SC", "ONLOGON"]
         rc, out = run_cmd(cmd)
         if rc != 0:
             raise SchedulerError(f"schtasks /Create: {out}")
@@ -179,10 +268,10 @@ class WindowsScheduler:
         rc, out = run_cmd(["schtasks", "/Delete", "/TN", self._tn(stem), "/F"])
         if rc == 0:
             removed.append(self._tn(stem))
-        launcher = self._launcher(stem)
-        if launcher.exists():
-            launcher.unlink()
-            removed.append(launcher.name)
+        for leftover in (self._launcher(stem), self._log(stem)):
+            if leftover.exists():
+                leftover.unlink()
+                removed.append(leftover.name)
         result: dict[str, Any] = {"removed": removed,
                                   "folder": self._remove_folder_if_empty()}
         # The launcher directory goes the same way: only once it is empty, so
