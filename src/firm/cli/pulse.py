@@ -163,14 +163,19 @@ def _run_resolved(
             })
         _start_heartbeat(db_path, firm_id, holder, stop_beat)
 
-    conn = connect(db_path)
+    conn = None
     try:
+        # Opened inside the try: the lock and its heartbeat are already taken,
+        # and a connection that failed before the try skipped the finally that
+        # lets them go, so the lock sat held for its TTL (#128, osprey's G1).
+        conn = connect(db_path)
         return _exit_with(
             _pulse_once(conn, workspace, firm_id, dry_run=dry_run, only=only))
     except Exception as exc:
         return _exit_with({"ok": False, "reason": "error", "message": str(exc)})
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
         stop_beat.set()
         if lock_held:
             rconn = connect(db_path)
@@ -287,12 +292,14 @@ def _stranded_units(conn: Any, firm_id: str) -> list[dict[str, Any]]:
     """
     statuses = {m["id"]: m.get("status")
                 for m in repo.find(conn, "member", firm_id=firm_id)}
+    active = {member_id for member_id, s in statuses.items() if s == "active"}
 
     def who(member_id: str) -> str:
+        name = member_id if member_id else repr(member_id)
         status = statuses.get(member_id)
         if status is None:
-            return f"{member_id}, who is not a Member of this firm"
-        return f"{member_id}, who is {status}"
+            return f"{name}, who is not a Member of this firm"
+        return f"{name}, who is {status}"
 
     stranded: list[dict[str, Any]] = []
     for unit in repo.find(conn, "unit", firm_id=firm_id):
@@ -300,15 +307,18 @@ def _stranded_units(conn: Any, firm_id: str) -> list[dict[str, Any]]:
         if status not in ("pending", "in_progress"):
             continue
         assignee, claimed = unit.get("assignee_member_id"), unit.get("claimed_by")
-        if claimed:
-            if statuses.get(claimed) == "active":
-                continue
+        # compute_load's two clauses exactly, never by truthiness: claimed_by
+        # EQUALS an active Member's id, or claimed_by IS NULL while the Unit is
+        # pending and assigned to one. An empty id is neither (osprey's G1).
+        if claimed in active:
+            continue
+        if claimed is None and status == "pending" and assignee in active:
+            continue
+        if claimed is not None:
             reason = f"claimed by {who(claimed)}"
         elif status == "in_progress":
             reason = "in progress with no claim"
-        elif assignee:
-            if statuses.get(assignee) == "active":
-                continue
+        elif assignee is not None:
             reason = f"assigned to {who(assignee)}"
         else:
             reason = "no assignee and no claim"
@@ -384,14 +394,18 @@ def _drain_queue(workspace: Path, db_path: Path, firm_id: str) -> int:
 
         stop_beat = threading.Event()
         _start_heartbeat(db_path, firm_id, holder, stop_beat)
-        conn = connect(db_path)
+        conn = None
         try:
+            # Inside the try for the same reason as in _run_resolved: a failed
+            # connection must still release the lock and complete the request.
+            conn = connect(db_path)
             output = _pulse_once(conn, workspace, firm_id)
             results.append({"request": req["id"], **output})
         except Exception as exc:
             results.append({"request": req["id"], "ok": False, "error": str(exc)})
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
             stop_beat.set()
             rconn = connect(db_path)
             try:
