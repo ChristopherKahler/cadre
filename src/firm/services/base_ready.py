@@ -31,13 +31,13 @@ of them is false. ``extension_installed`` is a FILESYSTEM reading of the firm's
 tier; ``extension_runs`` is a PROCESS reading, ``base cadre --help`` run with
 the firm's ``BASE_HOME``. When they disagree, the disagreement is the finding.
 
-NO REPAIR, AND WHY. Installing into the firm's tier needs
-``base_extension.install`` to take a workspace, and it does not yet. The only
-install that exists writes the operator's own tier, which fixes nothing for a
-Member (measured above) and puts Cadre's manifest into a tier this product has
-just finished cleaning Cadre's writes out of. So ``ensure`` reports the gap by
-name and installs nothing. When the firm-tier install exists, ``ensure`` is
-where it goes.
+THE REPAIR WRITES THE FIRM'S TIER AND NO OTHER (#118 DoD 4, the founding step).
+The first repair installed into the operator's own tier, which fixes nothing for
+a Member (measured above), so it was removed. Since PR 133,
+``base_extension.install(workspace=...)`` writes the firm's own tier, and
+``ensure`` calls it once, only when that can help. It never trusts the
+installer's word: ``repaired`` comes from a second ``check`` of the firm's tier,
+taken after the install.
 
 NOTHING HERE EVER REFUSES A FOUNDING. base being absent is a fact about the
 host, not a defect in Cadre: a firm without it is degraded, never broken -- the
@@ -247,18 +247,21 @@ def check(workspace: Path | str | None = None) -> dict[str, Any]:
                 "run `base cadre`")
             return result
 
-        # Detector one: the filesystem of the firm's tier. The same three reads
-        # `base_extension.install`'s read-back makes, because a manifest still
-        # carrying a placeholder is not an installed extension.
-        from firm.services.base_extension import HANDLER_PLACEHOLDER, PLACEHOLDER
+        # Detector one: the filesystem of the firm's tier, read by the SAME reader
+        # `base_extension.install`'s read-back uses (F-F): the parsed [extension]
+        # name, never a substring, and the bytes decoded without raising. A
+        # manifest still carrying a placeholder is not an installed extension.
+        from firm.services.base_extension import (
+            HANDLER_PLACEHOLDER, PLACEHOLDER, read_cadre_manifest)
 
         landed = ""
-        try:
-            if manifest.exists():
-                landed = manifest.read_text(encoding="utf-8")
-        except OSError as exc:
-            result["reason"] = f"{manifest} could not be read: {exc}"
-        if (landed and 'name = "cadre"' in landed
+        if manifest.exists():
+            text, why = read_cadre_manifest(manifest)
+            if text is None:
+                result["reason"] = why
+            else:
+                landed = text
+        if (landed
                 and PLACEHOLDER not in landed
                 and HANDLER_PLACEHOLDER not in landed):
             result["extension_installed"] = True
@@ -302,31 +305,66 @@ def check(workspace: Path | str | None = None) -> dict[str, Any]:
 
 
 def ensure(workspace: Path | str | None = None) -> dict[str, Any]:
-    """`check`, and report what founding cannot yet fix. Installs nothing.
+    """`check`, then the founding repair: Cadre's manifest into the FIRM's tier.
 
-    This is where founding puts the extension into the firm's tier once
-    ``base_extension.install`` can take a workspace. Until then there is no
-    install that helps a Member: the one that exists writes the operator's
-    tier, which a Member never reads (measured, see the module docstring). A
-    repair that fixes nothing and writes somewhere it should not is not a
-    repair, so this reports the gap by name and stops.
+    #118 DoD 4: a firm founded through the hub runs `base cadre` in its own tier
+    with no manual step. ``base_extension.install(workspace=...)`` writes that
+    tier, and this is where founding calls it -- once, and only when all hold:
+
+    - a workspace was given (the operator's tier is never a founding target);
+    - the firm's tier is not already healthy, and base was not skipped;
+    - base runs, and the #75 gate says this base may write the firm's tier
+      (a refused base gets no install call, G2 F1).
+
+    NOT TAKEN AT ITS WORD (law 25). ``repaired`` comes from a SECOND ``check`` of
+    the firm's tier, taken after the install, never from the installer's dict.
+    SKIPPED IS A FIELD (#83), read from ``install``'s result and never from its
+    sentence. NEVER RAISES AND NEVER REFUSES A FOUNDING: an install that raises
+    anyway is named in ``repair``, and the firm is still made.
 
     Adds to ``check``'s keys:
 
-    ``install``    always ``{}`` -- no install is attempted.
-    ``repaired``   always False.
-    ``repair``     why nothing was installed, in words an operator can act on,
-                   or "" when nothing needed installing.
+    ``install``    what ``base_extension.install`` returned, or ``{}`` when no
+                   install was attempted.
+    ``repaired``   True only when the reading taken after the install is ok.
+    ``repair``     "" when nothing needed installing or the install took;
+                   otherwise why the firm is still not ready, in words an
+                   operator can act on.
     """
     state = check(workspace)
     state["install"] = {}
     state["repaired"] = False
     state["repair"] = ""
-    if state["ok"] or state["skipped"] or not state["base_runs"] or workspace is None:
+    if state["ok"] or state["skipped"] or workspace is None:
         return state
-    state["repair"] = (
-        "founding cannot install the cadre extension into the firm's own tier "
-        "yet: that install is not built. Installing it into the operator's tier "
-        "instead would fix nothing for any Member, who runs with the firm's tier, "
-        "and would write the operator's own tier")
-    return state
+    if not state["base_runs"] or not state["base_may_write_the_tier"]:
+        # A base that does not run, or one this host cannot honour the firm's
+        # tier with: an install could only fail, or write another tier.
+        return state
+
+    from firm.services import base_extension
+
+    try:
+        outcome = base_extension.install(workspace=workspace)
+    except Exception as exc:  # noqa: BLE001 - founding never raises over the extension
+        state["repair"] = (
+            "the install into the firm's own tier raised, so nothing was "
+            f"repaired: {exc}")
+        return state
+
+    after = check(workspace)
+    after["install"] = outcome if isinstance(outcome, dict) else {}
+    after["repaired"] = bool(after["ok"])
+    if after["repaired"]:
+        after["repair"] = ""
+    elif after["install"].get("skipped"):
+        after["repair"] = (
+            "the install into the firm's own tier was skipped: "
+            f"{after['install'].get('reason') or 'base went away'}")
+    else:
+        after["repair"] = (
+            "an install into the firm's own tier ran, but the reading taken after "
+            f"it is still not ready at {after.get('manifest_path') or 'the firm tier'}. "
+            f"The install said: {after['install'].get('reason') or 'nothing'}. "
+            f"The reading says: {after.get('reason') or 'nothing'}")
+    return after
