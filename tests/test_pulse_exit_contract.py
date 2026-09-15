@@ -210,7 +210,11 @@ class _Exit:
 
 def _child_env(claude: str | None = None) -> dict[str, str]:
     env = dict(os.environ)                  # conftest's fences travel in here
-    env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+    # The child must import firm from the same tree this process imported it
+    # from, and from nowhere else. Handing it the parent's whole sys.path put
+    # the repo's src beside the installed package in CI's clean-install
+    # job, so the child graded the source tree while the guard read the wheel.
+    env["PYTHONPATH"] = str(Path(pulse_cli.__file__).resolve().parents[2])
     env.pop("FIRM_ID", None)                # the database names the firm, or fails to
     env.pop("CADRE_DB_URL", None)           # the leg's own file, never a shared database
     env.pop(UNSET_RAIL_ENV, None)
