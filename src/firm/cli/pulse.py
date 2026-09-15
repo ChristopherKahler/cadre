@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from firm.core import repo
 from firm.core.db import connect, db_is_remote, get_db_path, resolve_firm_id
 from firm.pulse import dblock
 from firm.pulse.environment import pulse_environment
@@ -33,6 +34,22 @@ from firm.pulse.spawn import _active_pids
 
 _QUEUE_LOCK_WAIT_SEC = 1800   # how long a claimer waits for the table to free up
 _QUEUE_RETRY_SEC = 10
+
+
+def _exit_with(result: dict[str, Any]) -> int:
+    """Print the pulse's result line and return the exit code that goes with it.
+
+    A scheduler that starts a pulse sees only the exit code, and every reader of
+    the output takes the LAST stdout line as the result, so both come from this
+    one object: 0 only when ``ok`` is exactly True, 1 for anything else. Ways
+    out used to disagree with their own line -- a missing database and a failed
+    Member run both exited 0 under ``ok: false`` -- and a scheduler recorded
+    those pulses as clean runs (#128). Every return that ends ``firm pulse``
+    comes through here; ``tests/test_pulse_exit_contract.py`` fails when one
+    does not.
+    """
+    print(json.dumps(result, default=str))
+    return 0 if result.get("ok") is True else 1
 
 
 def run_pulse(
@@ -59,43 +76,47 @@ def run_pulse(
             request, waiting for the lock instead of failing on it.
 
     Returns:
-        0 on success, 1 on unhandled error.
+        0 when the printed result says ``ok: true``, 1 otherwise.
     """
-    workspace = workspace.expanduser().resolve()
-
-    # Abort mode: kill tracked processes + resolve the DB lock holder
-    if abort:
-        return _handle_abort(workspace, firm_id)
-
-    db_path = get_db_path(workspace)
-    if not db_is_remote() and not db_path.exists():
-        print(json.dumps({
-            "ok": False,
-            "reason": "db-not-found",
-            "workspace": str(workspace),
-        }))
-        return 0
-
-    rconn = connect(db_path)
     try:
-        firm_id = resolve_firm_id(rconn, firm_id)
-    except ValueError as exc:
-        print(json.dumps({"ok": False, "reason": "firm-id-unresolved",
-                          "message": str(exc)}))
-        return 1
-    finally:
-        rconn.close()
+        workspace = workspace.expanduser().resolve()
 
-    # The pulse makes its own environment whole before anything below resolves
-    # a tool or a token: a timer unit starts it with systemd's bare PATH and
-    # without the firm vault, so the notify rail and the preflight both failed
-    # on every unattended pulse (#107). A dry run spawns nothing and probes
-    # nothing, so it keeps the environment it was given.
-    environment = (contextlib.nullcontext() if dry_run
-                   else pulse_environment(workspace, db_path, firm_id))
-    with environment:
-        return _run_resolved(workspace, db_path, firm_id, dry_run=dry_run,
-                             only=only, drain_queue=drain_queue)
+        # Abort mode: kill tracked processes + resolve the DB lock holder
+        if abort:
+            return _handle_abort(workspace, firm_id)
+
+        db_path = get_db_path(workspace)
+        if not db_is_remote() and not db_path.exists():
+            return _exit_with({
+                "ok": False,
+                "reason": "db-not-found",
+                "workspace": str(workspace),
+            })
+
+        rconn = connect(db_path)
+        try:
+            firm_id = resolve_firm_id(rconn, firm_id)
+        except ValueError as exc:
+            return _exit_with({"ok": False, "reason": "firm-id-unresolved",
+                               "message": str(exc)})
+        finally:
+            rconn.close()
+
+        # The pulse makes its own environment whole before anything below
+        # resolves a tool or a token: a timer unit starts it with systemd's bare
+        # PATH and without the firm vault, so the notify rail and the preflight
+        # both failed on every unattended pulse (#107). A dry run spawns nothing
+        # and probes nothing, so it keeps the environment it was given.
+        environment = (contextlib.nullcontext() if dry_run
+                       else pulse_environment(workspace, db_path, firm_id))
+        with environment:
+            return _run_resolved(workspace, db_path, firm_id, dry_run=dry_run,
+                                 only=only, drain_queue=drain_queue)
+    except Exception as exc:
+        # Anything no branch caught -- a database file that will not open, a
+        # lock query that fails -- used to leave a traceback and no result line,
+        # so a reader of the last stdout line got nothing (#128 U4).
+        return _exit_with({"ok": False, "reason": "error", "message": str(exc)})
 
 
 def _run_resolved(
@@ -110,12 +131,11 @@ def _run_resolved(
 
         claude_bin, resolve_detail = resolve_claude_bin()
         if claude_bin is None:
-            print(json.dumps({
+            return _exit_with({
                 "ok": False,
                 "reason": "runtime-not-wired",
                 "detail": resolve_detail,
-            }))
-            return 1
+            })
 
     if drain_queue:
         return _drain_queue(workspace, db_path, firm_id)
@@ -135,23 +155,20 @@ def _run_resolved(
         finally:
             lconn.close()
         if not lock_held:
-            print(json.dumps({
+            return _exit_with({
                 "ok": False,
                 "reason": "pulse-already-running",
                 "detail": ("another live pulse holds the pulse_lock row for "
                            f"{firm_id!r}; wait for it or `firm pulse --abort`"),
-            }))
-            return 1
+            })
         _start_heartbeat(db_path, firm_id, holder, stop_beat)
 
     conn = connect(db_path)
     try:
-        output = _pulse_once(conn, workspace, firm_id, dry_run=dry_run, only=only)
-        print(json.dumps(output, default=str))
-        return 0
+        return _exit_with(
+            _pulse_once(conn, workspace, firm_id, dry_run=dry_run, only=only))
     except Exception as exc:
-        print(json.dumps({"ok": False, "reason": "error", "message": str(exc)}))
-        return 1
+        return _exit_with({"ok": False, "reason": "error", "message": str(exc)})
     finally:
         conn.close()
         stop_beat.set()
@@ -199,12 +216,24 @@ def _pulse_once(
         exported, output_export_note = {"ok": None}, ""
 
     output: dict[str, Any] = {
-        "ok": not (summary.errors and not summary.ran),
+        # Any error fails the pulse: a Member run that failed or timed out, or a
+        # configured notify rail that does not resolve -- the only three writers
+        # of summary.errors (pulse/orchestrator.py). This was
+        # `not (errors and not ran)`, so a failed Member beside one that worked
+        # printed ok and exited 0 (#128). `ran`, `errors` and `error_details`
+        # still tell a partial failure from a total one.
+        "ok": not summary.errors,
         "dry_run": summary.dry_run,
         "ran": len(summary.ran),
         "skipped": len(summary.skipped),
         "errors": len(summary.errors),
     }
+    # Three states, three shapes (law 7): a list, possibly empty, when the query
+    # ran; absent only beside the reason it could not.
+    try:
+        output["stranded_units"] = _stranded_units(conn, firm_id)
+    except Exception as exc:
+        output["stranded_units_error"] = f"{type(exc).__name__}: {exc}"
     if denied:
         output["policy_denials_ingested"] = denied
 
@@ -243,6 +272,50 @@ def _pulse_once(
         ]
 
     return output
+
+
+def _stranded_units(conn: Any, firm_id: str) -> list[dict[str, Any]]:
+    """Open Units no active Member's queue counts, so no pulse will ever run them.
+
+    The definition is ``compute_load``'s (``pulse/orchestrator.py``), read from
+    the other side: a pending or in-progress Unit is workable only when an
+    active Member of the firm has claimed it, or has it assigned, unclaimed and
+    pending. A firm whose every Member skips at ``load=0`` while Units like
+    these sit on its board prints the same ``ok: true, ran: 0`` as a firm with
+    nothing to do, and those need opposite responses (#128 C2). Read-only, so a
+    dry run reports them too.
+    """
+    statuses = {m["id"]: m.get("status")
+                for m in repo.find(conn, "member", firm_id=firm_id)}
+
+    def who(member_id: str) -> str:
+        status = statuses.get(member_id)
+        if status is None:
+            return f"{member_id}, who is not a Member of this firm"
+        return f"{member_id}, who is {status}"
+
+    stranded: list[dict[str, Any]] = []
+    for unit in repo.find(conn, "unit", firm_id=firm_id):
+        status = unit.get("status")
+        if status not in ("pending", "in_progress"):
+            continue
+        assignee, claimed = unit.get("assignee_member_id"), unit.get("claimed_by")
+        if claimed:
+            if statuses.get(claimed) == "active":
+                continue
+            reason = f"claimed by {who(claimed)}"
+        elif status == "in_progress":
+            reason = "in progress with no claim"
+        elif assignee:
+            if statuses.get(assignee) == "active":
+                continue
+            reason = f"assigned to {who(assignee)}"
+        else:
+            reason = "no assignee and no claim"
+        stranded.append({"id": unit["id"], "status": status,
+                         "assignee_member_id": assignee, "claimed_by": claimed,
+                         "reason": reason})
+    return sorted(stranded, key=lambda u: str(u["id"]))
 
 
 def _start_heartbeat(
@@ -327,12 +400,13 @@ def _drain_queue(workspace: Path, db_path: Path, firm_id: str) -> int:
             finally:
                 rconn.close()
 
-    print(json.dumps({
+    # An abandoned or failed request makes this ok: false, and the drain now
+    # exits on it like every pulse (#128 U1): it used to return 0 regardless.
+    return _exit_with({
         "ok": all(r.get("ok", False) for r in results) if results else True,
         "drained": len(results),
         "results": results,
-    }, default=str))
-    return 0
+    })
 
 
 def _pid_alive(pid: int) -> bool:
@@ -385,19 +459,24 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
 
     db_path = get_db_path(workspace)
     if not db_is_remote() and not db_path.exists():
-        result["lock"] = "no-db"
-        print(json.dumps(result))
-        return 0
+        # "no-db" means abort could not look at any lock, which is not "nothing
+        # is running" (that is lock: none). This printed ok: true and exited 0,
+        # so a mistyped --workspace reported a successful abort while the real
+        # firm's pulse kept going (#128, osprey's G0 item 1). Same words as
+        # run_pulse uses for the same missing database.
+        result.update({"ok": False, "reason": "db-not-found",
+                       "workspace": str(workspace), "lock": "no-db"})
+        return _exit_with(result)
 
     conn = connect(db_path)
     try:
         try:
             firm_id = resolve_firm_id(conn, firm_id)
         except ValueError as exc:
-            result["lock"] = "firm-id-unresolved"
-            result["message"] = str(exc)
-            print(json.dumps(result))
-            return 1
+            # Printed ok: true beside exit 1 (#128 U2).
+            result.update({"ok": False, "reason": "firm-id-unresolved",
+                           "lock": "firm-id-unresolved", "message": str(exc)})
+            return _exit_with(result)
         holder = dblock.current_holder(conn, firm_id)
         if holder is None:
             result["lock"] = "none"
@@ -435,8 +514,7 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
     finally:
         conn.close()
 
-    print(json.dumps(result))
-    return 0
+    return _exit_with(result)
 
 
 def _finalize_orphans(conn: Any, firm_id: str) -> list[str]:
