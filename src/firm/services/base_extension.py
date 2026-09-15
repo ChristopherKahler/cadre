@@ -184,6 +184,41 @@ def _installed_path(workspace: Path | str | None = None) -> Path:
     return root / ".base-gbl" / "extensions" / "cadre.toml"
 
 
+def read_cadre_manifest(path: Path) -> tuple[str | None, str]:
+    """The text of the manifest at *path* when it is Cadre's; otherwise None and why.
+
+    Never raises.
+
+    THE ONE READER (#118, the founding step), used by `install`'s read-back and
+    by `base_ready.check`. Two copies of this decision had already drifted: the
+    read-back learned to parse the [extension] NAME while the founding check
+    still tested `'name = "cadre"' in text`. Cadre's manifest carries that line
+    twice, under [extension] and under [[commands]], so the substring read ANY
+    manifest declaring a `cadre` command as Cadre's own. After the founding step
+    that reading decides whether a founded firm is called repaired.
+
+    THE BYTES ARE DECODED HERE, not by `read_text`. A file that is not UTF-8
+    raises UnicodeDecodeError, which is a ValueError and not an OSError, so it
+    escaped `install()` through a handler that caught only OSError (avocet's
+    G2 note N2 on PR 133). It is reported as not a readable manifest instead.
+    """
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        return None, f"{path} could not be read: {exc}"
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        return None, f"{path} exists but is not a readable manifest: {exc}"
+    try:
+        declared = tomllib.loads(text).get("extension")
+    except tomllib.TOMLDecodeError as exc:
+        return None, f"{path} exists but is not a readable manifest: {exc}"
+    if not isinstance(declared, dict) or declared.get("name") != "cadre":
+        return None, f"{path} exists but is not Cadre's manifest"
+    return text, ""
+
+
 # ── The graph copy of a prompt domain, and why this check exists ─────────────
 # Issue #115. An extension's prompt domain has TWO homes, and they are not the
 # same store. base MATCHES the domain's keywords from the installed manifest,
@@ -459,19 +494,12 @@ def install(framework_dir: Path | str | None = None,
         if not landed.exists():
             result["reason"] = (f"base reported success but {landed} does not exist")
             return result
-        on_disk = landed.read_text(encoding="utf-8")
-        # The [extension] NAME, parsed, never a substring of the file. Cadre's
-        # manifest carries `name = "cadre"` twice: once under [extension] and once
-        # under [[commands]]. A substring search therefore read back ANY landed
-        # manifest that declares a `cadre` command as Cadre's own, whatever
-        # extension it belonged to.
-        try:
-            declared = tomllib.loads(on_disk).get("extension")
-        except tomllib.TOMLDecodeError as exc:
-            result["reason"] = f"{landed} exists but is not a readable manifest: {exc}"
-            return result
-        if not isinstance(declared, dict) or declared.get("name") != "cadre":
-            result["reason"] = f"{landed} exists but is not Cadre's manifest"
+        # The [extension] NAME, parsed, never a substring of the file, and the
+        # bytes decoded without raising. One reader makes this decision here and
+        # in base_ready.check -- see read_cadre_manifest.
+        on_disk, not_cadres = read_cadre_manifest(landed)
+        if on_disk is None:
+            result["reason"] = not_cadres
             return result
         if PLACEHOLDER in on_disk:
             result["reason"] = (f"{landed} still carries {PLACEHOLDER} — the "

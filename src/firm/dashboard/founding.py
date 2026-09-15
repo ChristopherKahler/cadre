@@ -1089,11 +1089,11 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
 
     # The firm has a base tier now, so ask the question a Member will ask:
     # does `base cadre` run with THIS FIRM'S BASE_HOME (#117 spawns every
-    # Member into it). `ensure` reads the firm's tier and installs nothing --
-    # the only install that exists writes the operator's tier, which no Member
-    # reads, so it would report a repair while every Member still got 127
-    # (#118, measured). Never raises, never refuses: the gap is named in the
-    # result and on the readiness screen instead.
+    # Member into it). If it does not, `ensure` installs Cadre's manifest into
+    # the firm's own tier -- never the operator's -- and reads the tier again
+    # (#118 DoD 4: usable with no manual follow-up). Never raises, never
+    # refuses: a gap that remains is named in the result and on the readiness
+    # screen.
     base_state = base_ready.ensure(workspace)
 
     conn = connect(get_db_path(workspace))
