@@ -50,9 +50,11 @@ from __future__ import annotations
 import ast
 import dataclasses
 import json
+import linecache
 import os
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import textwrap
@@ -632,6 +634,88 @@ def test_draining_a_request_whose_pulse_failed_exits_1(tmp_path):
     assert result["results"][0]["errors"] == 1, run.output
 
 
+# --- a pulse connection that fails once the lock is held ----------------------
+
+def _fail_the_pulse_connection(monkeypatch) -> tuple[list[str], list[threading.Event]]:
+    """Make the connection a pulse opens for its own work fail, after the lock is taken.
+
+    In this process, because only a monkeypatch can fail one connection and not
+    the others: resolving the firm, taking the lock, claiming a request and
+    releasing the lock all still connect, so the leg can read whether the lock
+    was let go. The failing sites are the two ``conn = connect(`` lines in
+    ``_run_resolved`` and ``_drain_queue`` (osprey's G1 ruling); the pulse's
+    other connections are named ``rconn``, ``lconn`` and ``qconn``, and the
+    same line in ``_handle_abort`` and the heartbeat is in another function.
+
+    Returns the functions whose connection was failed, so a leg proves the
+    fault fired, and the stop events handed to the lock's heartbeat thread, so
+    a leg can see the heartbeat was told to stop.
+    """
+    import firm.pulse.spawn as spawn_mod
+
+    real_connect, real_heartbeat = pulse_cli.connect, pulse_cli._start_heartbeat
+    fired: list[str] = []
+    stops: list[threading.Event] = []
+
+    def connect(db_path):
+        caller = sys._getframe(1)
+        line = linecache.getline(caller.f_code.co_filename, caller.f_lineno).strip()
+        if (caller.f_code.co_name in ("_run_resolved", "_drain_queue")
+                and line.startswith("conn = connect(")):
+            fired.append(caller.f_code.co_name)
+            raise sqlite3.OperationalError("the pulse's own connection could not be opened")
+        return real_connect(db_path)
+
+    def start_heartbeat(db_path, firm_id, holder, stop):
+        stops.append(stop)
+        return real_heartbeat(db_path, firm_id, holder, stop)
+
+    monkeypatch.setattr(pulse_cli, "connect", connect)
+    monkeypatch.setattr(pulse_cli, "_start_heartbeat", start_heartbeat)
+    monkeypatch.setattr(spawn_mod, "resolve_claude_bin", lambda: (REFUSING_MEMBER, "test"))
+    return fired, stops
+
+
+def test_a_pulse_connection_that_fails_after_the_lock_lets_the_lock_go(
+        tmp_path, monkeypatch, capsys):
+    """The connection was opened after the lock and its heartbeat, outside the
+    try whose finally releases them, so a failure there left the lock held for
+    its 10-minute TTL and the next pulse bounced off it."""
+    ws = _firm(tmp_path / "ws")
+    fired, stops = _fail_the_pulse_connection(monkeypatch)
+
+    rc = pulse_cli.run_pulse(ws)
+
+    result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert fired == ["_run_resolved"], fired
+    assert result["ok"] is False and result["reason"] == "error", result
+    assert rc == 1
+    assert _rows(ws, "SELECT holder FROM pulse_lock") == []
+    assert len(stops) == 1 and stops[0].is_set(), "the heartbeat was never told to stop"
+
+
+def test_a_queued_pulse_whose_connection_fails_lets_the_lock_and_the_request_go(
+        tmp_path, monkeypatch, capsys):
+    """The drain had the same shape, and its claimed request was never
+    completed either, so it sat claimed forever."""
+    ws = _firm(tmp_path / "ws")
+    _request_pulse(ws)
+    fired, stops = _fail_the_pulse_connection(monkeypatch)
+
+    rc = pulse_cli.run_pulse(ws, drain_queue=True)
+
+    result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert fired == ["_drain_queue"], fired
+    assert result["ok"] is False and result.get("drained") == 1, result
+    assert result["results"][0]["ok"] is False and result["results"][0]["error"], result
+    assert rc == 1
+    assert _rows(ws, "SELECT holder FROM pulse_lock") == []
+    # Completed, as the drain already completes a request whose pulse raised:
+    # the request was processed, and its failure is in the result above.
+    assert _rows(ws, "SELECT status FROM pulse_request") == [("done",)]
+    assert len(stops) == 1 and stops[0].is_set(), "the heartbeat was never told to stop"
+
+
 # --- --abort ----------------------------------------------------------------
 
 def test_abort_with_no_firm_database_exits_1(tmp_path):
@@ -775,6 +859,39 @@ def test_stranded_units_names_every_unit_no_active_member_can_reach(tmp_path):
          "claimed_by": "MEM-002", "reason": "claimed by MEM-002, who is paused"},
         {"id": "UNIT-10", "status": "pending", "assignee_member_id": "MEM-900",
          "claimed_by": None, "reason": "assigned to MEM-900, who is not a Member of this firm"},
+    ], run.output
+
+
+def test_stranded_units_reads_an_empty_member_id_the_way_compute_load_does(tmp_path):
+    """compute_load counts a claim only when claimed_by EQUALS an active Member's
+    id, and assigned work only when claimed_by IS NULL. An empty string is
+    neither, so a Unit carrying one is never dispatched, and stranded_units must
+    list it rather than read '' as "no claim" (osprey's G1 note). The member
+    foreign keys admit '' only while enforcement is off, which SQLite sets per
+    connection, so these rows are written through a connection with it off."""
+    ws = _firm(tmp_path / "ws")
+    raw = sqlite3.connect(ws / ".firm" / "firm.db")
+    try:
+        raw.execute("PRAGMA foreign_keys = OFF")
+        raw.executemany(
+            "INSERT INTO unit (id, firm_id, project_id, name, status, assignee_member_id,"
+            " claimed_by) VALUES (?, ?, 'PROJ-001', ?, 'pending', ?, ?)",
+            [("UNIT-A", FIRM, "Claimed by an empty id", "MEM-001", ""),
+             ("UNIT-B", FIRM, "Assigned to an empty id", "", None)])
+        raw.commit()
+    finally:
+        raw.close()
+
+    run = _pulse(ws, "--dry-run")
+
+    result = _assert_exit(run, rc=0, ok=True, ran=0)
+    # The pulse's own reading of the same rows: nothing is workable.
+    assert result.get("skip_reasons") == {"load=0 (no queued Units)": 1}, run.output
+    assert result.get("stranded_units") == [
+        {"id": "UNIT-A", "status": "pending", "assignee_member_id": "MEM-001",
+         "claimed_by": "", "reason": "claimed by '', who is not a Member of this firm"},
+        {"id": "UNIT-B", "status": "pending", "assignee_member_id": "",
+         "claimed_by": None, "reason": "assigned to '', who is not a Member of this firm"},
     ], run.output
 
 
