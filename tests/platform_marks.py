@@ -21,6 +21,7 @@ when the defect is fixed instead of needing someone to remember.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import tempfile
 
@@ -109,5 +110,59 @@ skip_without_posix_permissions = pytest.mark.skipif(
         "does not produce one here (Windows chmod only toggles the read-only "
         "attribute; a root uid ignores the mode). The refusal under test "
         "cannot be provoked, so asserting it would prove nothing."
+    ),
+)
+
+
+def _host_execs_a_shebang_script() -> bool:
+    """Probe, rather than assume, that this kernel runs a ``#!`` script by path.
+
+    Run from the temp directory, because that is where the tests below write
+    their script: a host that mounts it ``noexec`` cannot run it either.
+    """
+    if os.name != "posix":
+        return False
+    with tempfile.TemporaryDirectory() as d:
+        probe = os.path.join(d, "probe")
+        with open(probe, "w", encoding="utf-8") as fh:
+            fh.write("#!/bin/sh\nexit 0\n")
+        os.chmod(probe, 0o755)
+        try:
+            return subprocess.run([probe], timeout=30).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+
+#: Issue #128's pulse legs need Member runs that COMPLETE, and one that outlives
+#: its timeout, through the real spawn path. The stand-in Member that produces
+#: those is a ``#!/bin/sh`` script (tests/test_pulse_exit_contract.py), and a
+#: kernel that does not execute ``#!`` scripts (Windows: WinError 193) cannot
+#: start it. A Windows stand-in would need an executable that ignores claude's
+#: flags and prints a stream-json result; none ships with Windows or Python, and
+#: a .cmd wrapper would hand the Member's prompt to cmd.exe to parse. The legs
+#: that need a FAILED run use the Python interpreter as the stand-in instead,
+#: which rejects claude's flags and exits non-zero, and those run everywhere. No
+#: defect is waiting here; where this fires, the run cannot be produced at all.
+stand_in_member_needs_a_shebang_host = pytest.mark.skipif(
+    not _host_execs_a_shebang_script(),
+    reason=(
+        "the stand-in Member that completes or outlives a run is a #!/bin/sh "
+        "script, and this host does not execute #! scripts (Windows: WinError "
+        "193). The failed-run legs use the Python interpreter as the stand-in "
+        "and run here."
+    ),
+)
+
+#: ``firm pulse --abort`` reports ``lock: signalled`` when the lock's holder is
+#: still alive after SIGTERM and a grace window. Producing that needs a holder
+#: that survives SIGTERM. On Windows ``os.kill(pid, signal.SIGTERM)`` is
+#: TerminateProcess, which no process can ignore, so the state cannot be
+#: produced there and asserting it would prove nothing.
+host_cannot_survive_sigterm = pytest.mark.skipif(
+    os.name != "posix",
+    reason=(
+        "needs a lock holder that survives SIGTERM, and on Windows "
+        "os.kill(pid, SIGTERM) is TerminateProcess, which a process cannot "
+        "ignore."
     ),
 )
