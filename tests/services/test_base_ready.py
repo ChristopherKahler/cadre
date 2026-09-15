@@ -15,6 +15,15 @@ nothing for any Member and wrote a tier it should not. Those legs were not made
 to pass; the behaviour they described was removed, and the legs below pin its
 absence instead.
 
+THE REPAIR IS BACK, IN THE FIRM'S OWN TIER ONLY (#118 DoD 4, the founding step).
+PR 133 gave `base_extension.install` a workspace, so an install that helps a
+Member now exists: base writes the manifest into the tier its BASE_HOME names,
+and `ensure` hands it the firm. The retired legs STAY retired, because each one
+asserted an install into the operator's tier. U1 to U8 below pin the firm-tier
+install. `test_ensure_never_installs_into_any_tier` is gone because the
+behaviour it kept absent is now the product. Its reason lives on in U1-OP and
+U8, which fail if the operator's tier is ever the target.
+
 EVERY FAILING LEG HAS ITS HEALTHY CONTROL BESIDE IT, named in its docstring, so
 a red proves discrimination rather than only that the leg can print red.
 
@@ -24,6 +33,7 @@ string -- tests/test_no_weak_base_stubs.py fails the build over one.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -65,13 +75,22 @@ class _Base:
     `anywhere=True` makes `base cadre --help` exit 0 whatever BASE_HOME says:
     a base resolving the command from somewhere other than the firm's tier,
     which is what a Windows base under WSL does with the operator's own tier.
+
+    `extension install <staged>` copies the staged manifest into the
+    extensions directory of the BASE_HOME the call carries, and nowhere else.
+    With no BASE_HOME it writes nothing and exits 1, and it never falls back to
+    a home directory. That is what base does (#117's spec, section 2, and PR
+    133's real-base leg). It is the ONE verb the founding step's G0 ruling (R4)
+    added to this fake. `lands=b"..."` makes that verb write those bytes
+    instead of the staged manifest: a file base wrote that nobody can read.
     """
 
     def __init__(self, *, version_rc: int = 0, dead: bool = False,
-                 anywhere: bool = False) -> None:
+                 anywhere: bool = False, lands: bytes | None = None) -> None:
         self.version_rc = version_rc
         self.dead = dead
         self.anywhere = anywhere
+        self.lands = lands
         self.calls: list[tuple[list[str], dict]] = []
 
     def __call__(self, cmd, **kwargs):
@@ -89,6 +108,18 @@ class _Base:
             rc = 0 if installed and not self.dead else 127
             out = ("usage: cadre [-h] [--version] <command> ..." if rc == 0
                    else "base: unknown command 'cadre'")
+        elif rest[:2] == ["extension", "install"] and len(rest) > 2:
+            home = env.get("BASE_HOME", "")
+            if not home:
+                rc, out = 1, "base: no BASE_HOME, nothing installed"
+            else:
+                dest = Path(home) / ".base-gbl" / "extensions" / "cadre.toml"
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if self.lands is None:
+                    shutil.copyfile(rest[2], dest)
+                else:
+                    dest.write_bytes(self.lands)
+                out = "Installed cadre"
 
         class R:
             returncode = rc
@@ -109,7 +140,11 @@ class _Base:
                 if argv[1:3] == ["cadre", "--help"]]
 
 
-MANIFEST = 'name = "cadre"\nframework_dir = "/opt/cadre"\n'
+# The [extension] table the real manifest carries. `check` reads the PARSED
+# extension name (F-F), so a bare top-level `name = "cadre"` no longer models a
+# landed manifest -- the same change PR 133 made to its own fixtures, with no
+# assertion changed.
+MANIFEST = '[extension]\nname = "cadre"\nframework_dir = "/opt/cadre"\n'
 
 
 @pytest.fixture
@@ -343,17 +378,72 @@ def test_l5_control_the_same_manifest_with_a_live_command_is_ok(monkeypatch, mac
 
 def test_a_manifest_that_is_not_ours_does_not_count_as_installed(monkeypatch, machine):
     _, firm = machine
-    _install_into(tier_extensions_dir(firm), 'name = "somethingelse"\n')
+    _install_into(tier_extensions_dir(firm), '[extension]\nname = "somethingelse"\n')
     monkeypatch.setattr(subprocess, "run", _Base(dead=True))
 
     assert base_ready.check(firm)["extension_installed"] is False
 
 
+def test_another_extensions_manifest_with_a_cadre_command_does_not_count_as_installed(
+        monkeypatch, machine):
+    """F-F leg (c), the founding step. `check` tested `'name = "cadre"' in landed`,
+    and that substring matches Cadre's COMMAND block as well as its [extension]
+    table. So another extension's manifest that declares a `cadre` command read as
+    Cadre's. After the founding step this reading decides `repaired`, so the blind
+    spot would decide a founding. The two preconditions prove the planted file really
+    has the blind shape: the substring is present, and the parsed name is not cadre.
+    Control: `test_l2_control_the_manifest_in_the_firms_tier_reads_every_key_true`."""
+    import tomllib
+
+    _, firm = machine
+    other = ('[extension]\nname = "somethingelse"\nversion = "0.1.0"\n\n'
+             '[[commands]]\nname = "cadre"\nhandler = "/opt/other/bin/cadre"\n')
+    _install_into(tier_extensions_dir(firm), other)
+    landed = (tier_extensions_dir(firm) / "cadre.toml").read_text(encoding="utf-8")
+    assert 'name = "cadre"' in landed, "precondition: the blind substring is present"
+    assert tomllib.loads(landed)["extension"]["name"] != "cadre", "precondition: not Cadre's"
+    monkeypatch.setattr(subprocess, "run", _Base())
+
+    state = base_ready.check(firm)
+
+    assert state["extension_installed"] is False, state
+    assert state["ok"] is False, state
+
+
+def test_ff2_a_landed_manifest_that_is_not_utf8_is_reported_and_nothing_raises(
+        monkeypatch, machine):
+    """F-F2, avocet's PR 133 note N2. `install`'s read-back decoded the landed file
+    inside a `try` whose only handler caught OSError. A UnicodeDecodeError is a
+    ValueError, so a file that is not UTF-8 escaped a function whose contract is that
+    it never raises. The shared reader decodes the bytes itself and names the file.
+    Both callers are driven: `install` through the fake base, which lands bytes that
+    are not UTF-8 in the firm's tier, and `check`, reading that same file."""
+    _, firm = machine
+    bad = b'[extension]\nname = "cadre"\n\xff\xfe\n'
+    monkeypatch.setattr(subprocess, "run", _Base(lands=bad))
+
+    result = base_extension.install(workspace=firm)
+
+    landed = tier_extensions_dir(firm) / "cadre.toml"
+    assert landed.read_bytes() == bad, "precondition: the fake landed the undecodable bytes"
+    assert result["read_back"] is False, result
+    assert result["ok"] is False, result
+    assert str(landed) in result["reason"], result["reason"]
+    assert "not a readable manifest" in result["reason"], result["reason"]
+
+    state = base_ready.check(firm)
+
+    assert state["extension_installed"] is False, state
+
+
 def test_an_unrendered_placeholder_does_not_count_as_installed(monkeypatch, machine):
-    """A placeholder still in the manifest names a handler on no machine."""
+    """A placeholder still in the manifest names a handler on no machine. The
+    fixture carries the [extension] table so this leg still reaches the
+    placeholder check under F-F, instead of stopping at the name."""
     _, firm = machine
     _install_into(tier_extensions_dir(firm),
-                  'name = "cadre"\nframework_dir = "' + base_extension.PLACEHOLDER + '"\n')
+                  '[extension]\nname = "cadre"\nframework_dir = "'
+                  + base_extension.PLACEHOLDER + '"\n')
     monkeypatch.setattr(subprocess, "run", _Base(dead=True))
 
     assert base_ready.check(firm)["extension_installed"] is False
@@ -497,55 +587,199 @@ def test_a_firm_with_no_tier_is_reported_and_no_tier_is_created(monkeypatch, tmp
     assert fake.count("cadre --help") == 0
 
 
-def test_ensure_never_installs_into_any_tier(monkeypatch, machine):
-    """The repair is gone, and this is what keeps it gone.
+# ---------------------------------------------------------------------------
+# The founding step (#118 DoD 4): `ensure` installs into the FIRM's tier
+# ---------------------------------------------------------------------------
+#
+# TURNED AROUND ON PURPOSE (law 43). `test_ensure_never_installs_into_any_tier`
+# pinned that `ensure` never reaches `install`, because the only install that
+# existed wrote the operator's tier. PR 133 made a firm-tier install, so reaching
+# it is now the product. The property that test protected -- the operator's tier
+# is never the target -- is kept, and it can still fail: U1-OP goes red if the
+# repair lands in the operator's tier, and U8 goes red if `ensure` installs with
+# no firm at all.
 
-    `base_extension.install` writes the operator's tier, which no Member reads.
-    Reaching it from `ensure` would report progress while every Member still
-    got 127 and would put Cadre's manifest into a tier this product just
-    finished cleaning.
-    """
-    operator, firm = machine
-    monkeypatch.setattr(subprocess, "run", _Base())
+def _spy_install(monkeypatch, answer=None) -> list[dict]:
+    """Record every call to `base_extension.install`. Run the real one, unless
+    `answer` is a dict to return or an exception to raise instead."""
+    seen: list[dict] = []
+    real = base_extension.install
 
-    def _never(*args, **kwargs):
-        raise AssertionError("ensure reached base_extension.install")
+    def _install(*args, **kwargs):
+        seen.append({"args": args, "kwargs": kwargs})
+        if answer is None:
+            return real(*args, **kwargs)
+        if isinstance(answer, BaseException):
+            raise answer
+        return dict(answer)
 
-    monkeypatch.setattr(base_extension, "install", _never)
-    before = sorted(p.name for p in (operator / ".base-gbl" / "extensions").iterdir())
+    monkeypatch.setattr(base_extension, "install", _install)
+    return seen
+
+
+def test_u1_ensure_installs_into_the_firms_own_tier_once_and_reads_it_back(
+        monkeypatch, machine):
+    """A firm whose tier holds no manifest, on a base that runs. `ensure` reaches
+    the install exactly once and hands it THIS firm, and the reading taken after
+    the install is healthy. Control: U7, where the tier is already healthy and
+    nothing is installed."""
+    _, firm = machine
+    fake = _Base()
+    monkeypatch.setattr(subprocess, "run", fake)
+    seen = _spy_install(monkeypatch)
 
     state = base_ready.ensure(firm)
 
-    assert state["install"] == {}
-    assert state["repaired"] is False
-    assert state["ok"] is False
-    assert "not built" in state["repair"], state["repair"]
-    after = sorted(p.name for p in (operator / ".base-gbl" / "extensions").iterdir())
-    assert after == before, f"the operator's tier changed: {before} -> {after}"
+    assert len(seen) == 1, f"install was reached {len(seen)} times, not once"
+    assert Path(seen[0]["kwargs"].get("workspace") or "") == firm, seen[0]
+    landed = sorted(p.name for p in tier_extensions_dir(firm).glob("*.toml"))
+    assert landed == ["cadre.toml"], f"the firm's tier holds {landed}"
+    assert state["install"].get("read_back") is True, state["install"]
+    assert state["repaired"] is True, state["repair"]
+    assert state["ok"] is True, state["reason"]
+    assert state["repair"] == ""
+
+
+def test_u1_op_the_repair_leaves_the_operators_tier_byte_identical(monkeypatch, machine):
+    """The half of U1 that catches an install aimed at the wrong tier. The operator's
+    tier holds an unrelated extension, and after `ensure` its names and bytes are
+    unchanged. It goes red if the repair lands in the operator's tier (MU1), and it
+    stays green when no install happens at all (MU2). That difference is what keeps
+    it a separate detector from U1."""
+    operator, firm = machine
+    ext = operator / ".base-gbl" / "extensions"
+    (ext / "lore.toml").write_text('[extension]\nname = "lore"\n', encoding="utf-8")
+    before = {p.name: p.read_bytes() for p in ext.iterdir()}
+    monkeypatch.setattr(subprocess, "run", _Base())
+
+    base_ready.ensure(firm)
+
+    after = {p.name: p.read_bytes() for p in ext.iterdir()}
+    assert len(before) == 1, f"visited {len(before)} files; the fixture must hold one"
+    assert after == before, f"the operator's tier changed: {sorted(before)} -> {sorted(after)}"
+
+
+def test_u2_an_install_that_says_ok_but_lands_nothing_is_not_a_repair(monkeypatch, machine):
+    """Law 25: the installer is not taken at its word. `install` answers ok and
+    read back, and the firm's tier is still empty. The second reading decides, so
+    nothing is called repaired, and the note names the tier it read.
+    Control: U1, the same machine with an install that really lands."""
+    _, firm = machine
+    monkeypatch.setattr(subprocess, "run", _Base())
+    seen = _spy_install(monkeypatch, {"ok": True, "read_back": True, "skipped": False,
+                                      "reason": "installed and read back"})
+
+    state = base_ready.ensure(firm)
+
+    assert len(seen) == 1, f"install was reached {len(seen)} times, not once"
+    assert state["repaired"] is False, state
+    assert state["ok"] is False, state
+    assert str(tier_extensions_dir(firm)) in state["repair"], state["repair"]
+
+
+def test_u3_a_base_this_host_cannot_run_gets_no_install(monkeypatch, tmp_path, machine):
+    """A foreign-format base is refused before anything runs (F1), so `ensure`
+    must not reach the install for it either. Control, in the same test: a native
+    base on the same firm reaches it once, so a spy that sees nothing cannot pass."""
+    _, firm = machine
+    foreign = _stub_with(tmp_path, _foreign_magic())
+    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: str(foreign))
+    monkeypatch.setattr(subprocess, "run", _Base(anywhere=True))
+    seen = _spy_install(monkeypatch, {"ok": False, "skipped": False, "reason": "spy"})
+
+    base_ready.ensure(firm)
+    refused = len(seen)
+
+    native = _stub_with(tmp_path / "native", _native_magic())
+    monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: str(native))
+    base_ready.ensure(firm)
+
+    assert refused == 0, f"a refused base reached the install {refused} time(s)"
+    assert len(seen) == 1, (
+        f"control: the native base reached the install {len(seen)} time(s), not once")
+
+
+def test_u5_a_skipped_install_is_read_from_the_field_never_from_the_sentence(
+        monkeypatch, machine):
+    """Issue #83's lesson, applied to the repair. `install` comes back skipped
+    (base went away between the reading and the install) with a reason sentence
+    that happens to contain "installed and read back". `ensure` reads the FIELD:
+    the repair is reported as skipped, and nothing is called repaired."""
+    _, firm = machine
+    monkeypatch.setattr(subprocess, "run", _Base())
+    seen = _spy_install(monkeypatch, {
+        "ok": False, "skipped": True,
+        "reason": "base went away: installed and read back never happened"})
+
+    state = base_ready.ensure(firm)
+
+    assert len(seen) == 1, f"install was reached {len(seen)} times, not once"
+    assert state["repaired"] is False, state
+    # Keyed on the sentence ONLY the skipped branch writes, never on the bare word.
+    # The first version asserted `"skipped" in repair`, and MU5 (skipped read from
+    # the sentence) left it GREEN: every other branch quotes the manifest path, and
+    # pytest's tmp_path carries this test's own name, "test_u5_a_skipped_install...".
+    # Law 40: a substring that a legitimate line also contains cannot fail.
+    assert state["repair"].startswith("the install into the firm's own tier was skipped: "), (
+        state["repair"])
+
+
+def test_u6_an_install_that_raises_is_named_and_ensure_still_returns(monkeypatch, machine):
+    """`install` promises never to raise, and founding must not depend on that
+    promise. If it raises anyway, `ensure` returns a reading, repairs nothing, and
+    names the exception."""
+    _, firm = machine
+    monkeypatch.setattr(subprocess, "run", _Base())
+    seen = _spy_install(monkeypatch, RuntimeError("boom-u6"))
+
+    state = base_ready.ensure(firm)
+
+    assert len(seen) == 1, f"install was reached {len(seen)} times, not once"
+    assert state["repaired"] is False, state
+    assert "boom-u6" in state["repair"], state["repair"]
 
 
 def test_ensure_on_a_firm_whose_command_runs_reports_nothing_to_repair(monkeypatch, machine):
-    """Control for the leg above: a healthy firm tier carries no repair note."""
+    """U7. A healthy firm tier carries no repair note, and nothing is installed
+    over it. Control for U1."""
     _, firm = machine
     _install_into(tier_extensions_dir(firm))
     monkeypatch.setattr(subprocess, "run", _Base())
+    seen = _spy_install(monkeypatch, {"ok": True})
 
     state = base_ready.ensure(firm)
 
     assert state["ok"] is True
     assert state["repair"] == ""
+    assert seen == [], f"a healthy firm reached the install {len(seen)} time(s)"
 
 
 def test_ensure_with_no_base_is_skipped_and_spawns_nothing(monkeypatch, tmp_path):
+    """U4. No base: skipped as a field, no subprocess, and no install."""
     monkeypatch.setattr("firm.sysconfig.service.which_base", lambda: None)
     fake = _Base()
     monkeypatch.setattr(subprocess, "run", fake)
+    seen = _spy_install(monkeypatch, {"ok": True})
 
     state = base_ready.ensure(tmp_path)
 
     assert state["skipped"] is True
     assert state["repair"] == ""
     assert fake.calls == []
+    assert seen == [], f"install was reached {len(seen)} time(s) with no base"
+
+
+def test_u8_ensure_with_no_workspace_never_installs(monkeypatch, machine):
+    """No firm, no install. The operator's tier is never a founding target, so
+    with no workspace `ensure` answers the base questions and stops."""
+    monkeypatch.setattr(subprocess, "run", _Base())
+    seen = _spy_install(monkeypatch, {"ok": True})
+
+    state = base_ready.ensure()
+
+    assert seen == [], f"install was reached {len(seen)} time(s) with no firm"
+    assert state["install"] == {}
+    assert state["repaired"] is False
 
 
 # ---------------------------------------------------------------------------

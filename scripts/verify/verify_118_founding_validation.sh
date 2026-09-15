@@ -3,8 +3,18 @@
 # evidence; only FIRING is. Break each thing these guards exist to catch and
 # watch the named arms go red, with the unmutated row as the blindness control.
 #
+# FOUNDING STEP (#118 DoD 4, gadwall): M-D IS RETIRED, M-Dprime TAKES ITS ROW. M-D put
+# the removed repair back ("ensure calls install()") and required the NOREPAIR arm
+# to go red. Installing into the firm's tier is now the product, so that clause
+# describes correct code; its anchor no longer exists and its row would void.
+# What M-D protected -- the operator's tier is never the repair's target -- is now
+# M-Dprime: ensure calls install() WITHOUT the workspace, which lands the manifest in
+# the operator's tier. The arm is renamed OPTIER and visits the two legs that pin
+# it: U1-OP and the turned-around operator-tier guard. Same position, same count
+# (2), and the prediction was written before this version ran.
+#
 # THIRD VERSION, after avocet's G2 of PR 127 (REWORK REQUIRED). v2's clauses
-# M-A..M-D are kept unchanged. v3 adds the rework's clauses:
+# M-A..M-C are kept unchanged. v3 adds the rework's clauses:
 #   M-E1   the tier gate reports but does not stop           (F1)
 #   M-E2   --version runs before the refusal returns          (F1, --version counts)
 #   M-F2a  base_cadre row ok back to extension_runs           (F2)
@@ -22,9 +32,9 @@
 #   M-F5   unused from-import of _installed_path in _tier     (F5)
 #
 # PREDICTED BEFORE ANY CODE, in the brief's pre-registration (R red, . green),
-# arms in this order: A4 A11 A7 NOREPAIR CTRL REFUSE NATIVE ELSEWHERE TRUE INFORM TIERAST
+# arms in this order: A4 A11 A7 OPTIER CTRL REFUSE NATIVE ELSEWHERE TRUE INFORM TIERAST
 #   ORIG ...........   M-A RR.......R.   M-B .R..R...R..   M-C ..R........
-#   M-D  ...R.......   M-E1/M-E2/M-F3b/M-F3c .....R.....
+#   M-Dprime ...R.......   M-E1/M-E2/M-F3b/M-F3c .....R.....
 #   M-F2a/M-F2b/M-F2c/M-F3a .......R...   M-F4a/M-F4b/M-F4c ........R..
 #   M-F6a/M-F6b .........R.   M-F5 ..........R
 #   M-F6c .........R. (only through the [traceback] leg). Added after the first
@@ -58,7 +68,7 @@ echo "script md5:              $(md5sum "${BASH_SOURCE[0]}" | cut -d' ' -f1)"
 echo "pristine base_ready.py md5: $READY_MD5"
 echo "pristine founding.py  md5: $FOUNDING_MD5"
 echo "python: $(python3 --version 2>&1); pytest: $(python3 -m pytest --version 2>&1 | head -1)"
-echo "arms:   A4 A11 A7 NOREPAIR CTRL REFUSE NATIVE ELSEWHERE TRUE INFORM TIERAST"
+echo "arms:   A4 A11 A7 OPTIER CTRL REFUSE NATIVE ELSEWHERE TRUE INFORM TIERAST"
 echo
 
 grade() {     # $1 row label, $2 predicted cells (11 of R/.), $3 "whole" when rc must be 0
@@ -81,8 +91,8 @@ ARMS = [
              "test_l8_an_install_only_in_the_operators_tier_is_reported_as_not_running"]),
     ("A7", ["test_l7_a_firm_is_founded_without_base_and_the_result_says_so",
             "test_the_base_reading_is_taken_before_the_workspace_exists"]),
-    ("NOREPAIR", ["test_ensure_never_installs_into_any_tier",
-                  "test_founding_writes_nothing_into_the_operators_tier"]),
+    ("OPTIER", ["test_u1_op_the_repair_leaves_the_operators_tier_byte_identical",
+                "test_founding_writes_nothing_into_the_operators_tier"]),
     ("CTRL", ["test_l2_control_the_manifest_in_the_firms_tier_reads_every_key_true",
               "test_l5_control_the_same_manifest_with_a_live_command_is_ok",
               "test_ensure_on_a_firm_whose_command_runs_reports_nothing_to_repair"]),
@@ -211,11 +221,8 @@ row M-C "$FOUNDING" '    base_before = base_ready.check()' \
                     '    base_before = base_ready.check()
     if not base_before.get("base_present"):   # MUTANT M-C
         return {"ok": False, "error": "base is not installed"}' "..R........"
-row M-D "$READY" '    state["repair"] = (
-        "founding cannot install' \
-                 '    from firm.services import base_extension as _be; _be.install()  # MUTANT M-D
-    state["repair"] = (
-        "founding cannot install' "...R......."
+row "M-Dprime" "$READY" 'outcome = base_extension.install(workspace=workspace)' \
+                   "outcome = base_extension.install()  # MUTANT M-Dprime" "...R......."
 row M-E1 "$READY" 'if not may_run:' 'if False:  # MUTANT M-E1' ".....R....."
 row M-E2 "$READY" 'result["reason"] = refusal' \
                   'run_utf8([base, "--version"], capture_output=True, timeout=_TIMEOUT_SEC, env=_env(None), cwd=cwd or None, stdin=subprocess.DEVNULL); result["reason"] = refusal  # MUTANT M-E2' ".....R....."
