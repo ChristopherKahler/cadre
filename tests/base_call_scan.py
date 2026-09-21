@@ -126,27 +126,80 @@ def _attr_name(node: ast.AST) -> str:
     return ""
 
 
-def _is_resolver_call(node: ast.AST, local_resolvers: frozenset[str] = frozenset()) -> bool:
-    """Is this expression a call that resolves base's binary path?
+def _resolver_call(node: ast.AST,
+                   local_resolvers: dict[str, int | None] | None = None
+                   ) -> tuple[bool, int | None]:
+    """(is it a call that resolves base, WHICH PART of its value is the path).
+
+    The second item is `None` when the call evaluates to the path itself, and a
+    tuple INDEX when it evaluates to a tuple carrying the path at that position.
+    That distinction is the whole of G2 finding 3: `firm_relay._base` returns
+    `(path, reason)`, so treating its value as a path would be wrong and
+    treating it as "not a resolver" made a real base call invisible.
 
     *local_resolvers* carries the module's own resolver wrappers, found by
     `_resolver_functions`. Without it this test missed four real base calls --
     see that function.
     """
+    local = local_resolvers or {}
     if not isinstance(node, ast.Call):
-        return False
+        return False, None
     name = _attr_name(node.func)
-    if name == "which_base" or name in local_resolvers:
-        return True
+    if name == "which_base":
+        return True, None
+    if name in local:
+        return True, local[name]
     if name == "which":
         # shutil.which("base") only -- shutil.which("git") is not base.
         first = node.args[0] if node.args else None
-        return isinstance(first, ast.Constant) and first.value == "base"
-    return False
+        if isinstance(first, ast.Constant) and first.value == "base":
+            return True, None
+    return False, None
 
 
-def _resolver_functions(tree: ast.AST) -> frozenset[str]:
+def _is_resolver_call(node: ast.AST,
+                      local_resolvers: dict[str, int | None] | None = None) -> bool:
+    """Is this expression a call that resolves base's binary path, any shape?"""
+    return _resolver_call(node, local_resolvers)[0]
+
+
+def _is_the_path_itself(node: ast.AST, local_resolvers: dict[str, int | None],
+                        bound_here: set[str]) -> bool:
+    """Does this expression evaluate to base's path, rather than to a tuple?"""
+    resolves, index = _resolver_call(node, local_resolvers)
+    if resolves:
+        return index is None
+    return isinstance(node, ast.Name) and node.id in bound_here
+
+
+def _names_bound_by(fn: ast.AST, local_resolvers: dict[str, int | None]) -> set[str]:
+    """Names inside *fn* that hold base's path, from either resolver shape."""
+    bound: set[str] = set()
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Assign):
+            continue
+        resolves, index = _resolver_call(node.value, local_resolvers)
+        if not resolves:
+            continue
+        for target in node.targets:
+            if index is None and isinstance(target, ast.Name):
+                bound.add(target.id)
+            elif (index is not None and isinstance(target, ast.Tuple)
+                  and index < len(target.elts)
+                  and isinstance(target.elts[index], ast.Name)):
+                # ONLY the element that carries the path. `binary, absent =
+                # _base()` must not bind `absent`: it holds the REASON base is
+                # missing, and treating it as base would let the scanner name a
+                # call that is not one.
+                bound.add(target.elts[index].id)
+    return bound
+
+
+def _resolver_functions(tree: ast.AST) -> dict[str, int | None]:
     """A module's OWN functions that return base's path, grown until stable.
+
+    The value is WHICH PART of the return carries the path: `None` when the
+    function hands the path back whole, or the tuple index that holds it.
 
     THIS WAS A BLIND SPOT AND IT COST FOUR REAL CALLS. The first version of this
     scanner knew two ways to resolve base: `which_base()` and
@@ -159,41 +212,52 @@ def _resolver_functions(tree: ast.AST) -> frozenset[str]:
     law 31's shape, where a guard fires perfectly on every case its author
     thought of and cannot see most of what it claims to cover.
 
-    A function counts when one of its `return` statements yields a resolver call
-    directly, or a name this function bound from one. That is tight on purpose:
-    a function that merely PROBES for base without returning its path is not a
-    resolver, and treating it as one would make the guard name calls that are
-    not base's.
+    IT COST A FIFTH, ONE STEP FURTHER OUT (G2 finding 3). `firm_relay._base`
+    (`:76-83`) is the same ladder with the path returned INSIDE A TUPLE,
+    `(path, reason)`. Returning a tuple is not returning a resolver call and it
+    is not returning a bound name, so the function did not count; `binary,
+    absent = _base()` therefore bound nothing, and `firm_relay.py:91` -- a real
+    base call -- was invisible. It passes `base_cwd` already, so nothing leaked;
+    what failed was the guard's claim to see every call, and a dropped `cwd`
+    there would have stayed green. avocet swept all 131 files: this is the only
+    function of that shape in the tree.
+
+    A function counts when one of its `return` statements yields the path
+    directly -- a resolver call or a name bound from one -- or yields a tuple
+    with the path at some index. That is tight on purpose: a function that
+    merely PROBES for base without returning its path is not a resolver, and
+    treating it as one would make the guard name calls that are not base's.
+
+    WHEN THE RETURNS DISAGREE, THE FUNCTION IS NOT COUNTED. Two returns putting
+    the path at different indices is a shape nobody in this tree writes, and
+    guessing one would let the scanner bind a name that is not base. Missing a
+    call is the failure direction this module already accepts and states; an
+    invented one is not (law 41).
     """
-    names: set[str] = set()
+    found: dict[str, int | None] = {}
     for _ in range(10):                       # bounded; converges in 1-2
         grew = False
         for fn in _functions(tree):
-            if fn.name in names:
+            if fn.name in found:
                 continue
-            frozen = frozenset(names)
-            bound_here: set[str] = set()
-            for node in ast.walk(fn):
-                if isinstance(node, ast.Assign) and _is_resolver_call(node.value, frozen):
-                    bound_here.update(t.id for t in node.targets
-                                      if isinstance(t, ast.Name))
-            returns_base = False
+            bound_here = _names_bound_by(fn, found)
+            indices: set[int | None] = set()
             for node in ast.walk(fn):
                 if not isinstance(node, ast.Return) or node.value is None:
                     continue
                 value = node.value
-                if _is_resolver_call(value, frozen):
-                    returns_base = True
-                    break
-                if isinstance(value, ast.Name) and value.id in bound_here:
-                    returns_base = True
-                    break
-            if returns_base:
-                names.add(fn.name)
+                if _is_the_path_itself(value, found, bound_here):
+                    indices.add(None)
+                elif isinstance(value, ast.Tuple):
+                    for position, element in enumerate(value.elts):
+                        if _is_the_path_itself(element, found, bound_here):
+                            indices.add(position)
+            if len(indices) == 1:
+                found[fn.name] = indices.pop()
                 grew = True
         if not grew:
             break
-    return frozenset(names)
+    return found
 
 
 def _bound_from_resolver(tree: ast.AST) -> set[str]:
@@ -206,6 +270,12 @@ def _bound_from_resolver(tree: ast.AST) -> set[str]:
 
     `local` carries the module's own resolver wrappers so that
     `base = find_base()` binds too -- see `_resolver_functions`.
+
+    WHICH NAME BINDS DEPENDS ON THE RESOLVER'S SHAPE. A resolver that hands the
+    path back whole binds a plain target; one that hands back `(path, reason)`
+    binds ONLY the element at the recorded index. Binding the whole unpack would
+    make `absent` -- the sentence explaining that base is missing -- read as
+    base, which is the opposite of a measurement.
     """
     local = _resolver_functions(tree)
     found: set[str] = set()
@@ -217,17 +287,23 @@ def _bound_from_resolver(tree: ast.AST) -> set[str]:
             candidates = [value]
             if isinstance(value, ast.BoolOp):
                 candidates = list(value.values)
-            if any(_is_resolver_call(c, local) for c in candidates):
-                for target in node.targets:
+            shaped = [_resolver_call(c, local) for c in candidates]
+            hits = [index for resolves, index in shaped if resolves]
+            if not hits:
+                continue
+            index = hits[0]
+            for target in node.targets:
+                if index is None:
                     if isinstance(target, ast.Name):
                         found.add(target.id)
-                    elif isinstance(target, ast.Tuple):
-                        found.update(e.id for e in target.elts
-                                     if isinstance(e, ast.Name))
+                elif (isinstance(target, ast.Tuple) and index < len(target.elts)
+                      and isinstance(target.elts[index], ast.Name)):
+                    found.add(target.elts[index].id)
         elif isinstance(node, ast.AnnAssign):
-            if node.value is not None and _is_resolver_call(node.value, local):
-                if isinstance(node.target, ast.Name):
-                    found.add(node.target.id)
+            resolves, index = _resolver_call(node.value, local) if node.value is not None \
+                else (False, None)
+            if resolves and index is None and isinstance(node.target, ast.Name):
+                found.add(node.target.id)
     return found
 
 

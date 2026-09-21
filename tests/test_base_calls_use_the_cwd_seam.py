@@ -762,3 +762,47 @@ def test_c8_the_passthrough_leaves_xdg_config_home_alone(
         "XDG_CONFIG_HOME was rewritten to %r; it is passed through verbatim "
         "because nothing compares it with a working directory"
         % env.get("XDG_CONFIG_HOME"))
+
+
+# ---------------------------------------------------------------------------
+# C9 -- THE WRITING PATH WITH NO WORKSPACE MAKES A DIRECTORY, ON PURPOSE.
+# ---------------------------------------------------------------------------
+#
+# `create=True` is the default, and with no workspace the seam makes
+# `<BASE_HOME>/.base-gbl` -- a directory outside every firm, and under the
+# user's own home when the environment names no `BASE_HOME`. That is reached
+# from `install(workspace=None)`, the operator-level install.
+#
+# It is KEPT: `install` is a writing verb, its manifest has always gone to the
+# tier the env names, and a writing verb that refused to make its own directory
+# would fail on any machine where base has not run yet. What it must not do is
+# write anywhere ELSE, and that is what this leg pins. Everything created under
+# the whole temp tree is listed and required to be at or under the tier -- an
+# allow-list of one directory, so a second one appearing anywhere is a failure
+# rather than something a narrower assertion would step over.
+
+
+def test_c9_a_writer_with_no_workspace_writes_only_inside_the_tier_the_env_names(
+        tmp_path, stub_base, calls, monkeypatch, _every_leg_controls_its_cwd):
+    """`install(workspace=None)`: `<BASE_HOME>/.base-gbl` and nothing outside it."""
+    home = tmp_path / "envhome"
+    home.mkdir()
+    monkeypatch.setenv("BASE_HOME", str(home))
+    tier = home / _TIER
+    assert not tier.exists(), "the leg's own precondition failed"
+    before = set(tmp_path.rglob("*"))
+
+    result = base_extension.install(workspace=None)
+
+    assert result["installed"], (
+        "install did not reach its base calls, so this leg measured nothing: %r"
+        % result.get("reason"))
+    assert tier.is_dir(), (
+        "the writing path did not make the tier it named, %r" % str(tier))
+
+    made = sorted(set(tmp_path.rglob("*")) - before)
+    outside = [p for p in made if p != tier and tier not in p.parents]
+    assert not outside, (
+        "a writer with no workspace created %d path(s) outside the tier the env "
+        "names (%r):\n%s"
+        % (len(outside), str(tier), "\n".join("  " + str(p) for p in outside)))

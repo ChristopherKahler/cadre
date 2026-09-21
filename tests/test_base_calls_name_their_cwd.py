@@ -131,12 +131,17 @@ def test_the_allow_list_has_no_stale_entries():
         % stale)
 
 
-def test_the_guard_names_all_seven_shapes():
+def test_the_guard_names_all_eight_shapes():
     """The guard reaches every shape this codebase writes, not just its own cases.
 
     This leg tests the GUARD, not the tree, so it is green on both sides of the
     fix and is NOT evidence that the fix works (law 45). Its evidence is the
     deletion table below it.
+
+    Eight since G2: shape 8 is a resolver that returns `(path, reason)`, which
+    the scanner counted as no resolver at all -- so one real base call
+    (`firm_relay.py:91`) was invisible to a guard whose whole claim is that none
+    are.
     """
     calls, visited = scan_source(_FIXTURE.read_text(encoding="utf-8"),
                                  "tests/base_call_shapes_fixture.py")
@@ -150,9 +155,10 @@ def test_the_guard_names_all_seven_shapes():
         "shape_5_popen",
         "shape_6_cwd_from_the_process",
         "shape_7_module_local_resolver",
+        "shape_8_tuple_returning_resolver",
     }
     assert named == expected, (
-        "the guard must name all seven shapes and only those.\n"
+        "the guard must name all eight shapes and only those.\n"
         "  missed  : %s\n  spurious: %s"
         % (sorted(expected - named), sorted(named - expected)))
 
@@ -182,6 +188,7 @@ def test_the_guard_leaves_the_two_controls_alone():
     "shape_5_popen",
     "shape_6_cwd_from_the_process",
     "shape_7_module_local_resolver",
+    "shape_8_tuple_returning_resolver",
 ])
 def test_deleting_a_fixture_shape_drops_the_count_by_exactly_one(shape):
     """Prove each shape by mutation, not by presence (law 38).

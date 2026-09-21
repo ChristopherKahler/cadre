@@ -317,13 +317,21 @@ def manifest_domains(rendered: str) -> list[tuple[str, list[str]]]:
 
 
 def graph_rules(base: str, domain: str, env: dict[str, str],
-                cwd: str | None = None) -> list[str]:
-    """What base's graph will serve for this domain, from the CURRENT directory.
+                cwd: str | None) -> list[str]:
+    """What base's graph will serve for this domain, from the directory given.
 
     cwd is load-bearing and is the caller's to control. base resolves the
     workspace tier by walking up from the working directory, so the identical
     command answers "3 rules" in one directory and "No rules for domain" one
     level down. A count reported without its directory is not a measurement.
+
+    IT HAS NO DEFAULT, AND THAT IS THE POINT (G2). `cwd=None` is a real value
+    with a real meaning -- run wherever this process happens to stand -- and it
+    is exactly the defect #136 exists to close. As a DEFAULT it was that
+    behaviour handed to any caller who simply did not think about it; as a
+    required argument it is a choice somebody made on purpose. Every caller in
+    `src` already passes `base_cwd(workspace)`; a caller that genuinely wants
+    the process's directory now has to write `None` and be seen doing it.
     """
     # run_utf8, never a bare `subprocess.run(text=True)`. This is #114 and I
     # put it back in my own code before catching it: `text=True` decodes with
@@ -364,12 +372,16 @@ def graph_rules(base: str, domain: str, env: dict[str, str],
 
 
 def foreign_rules(rendered: str, base: str, env: dict[str, str],
-                  cwd: str | None = None) -> list[dict[str, Any]]:
+                  cwd: str | None) -> list[dict[str, Any]]:
     """Rules the graph will serve that this manifest did not write.
 
     One entry per domain that carries any. An empty list means every domain
     this manifest declares serves this manifest's own rules — either because
     the graph holds no copy, or because the copy it holds still matches.
+
+    `cwd` has no default for the reason `graph_rules` gives: it is handed
+    straight down, so a default here would be the same silent choice one call
+    further out.
     """
     findings: list[dict[str, Any]] = []
     for domain, mine in manifest_domains(rendered):

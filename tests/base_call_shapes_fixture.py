@@ -21,6 +21,7 @@ The shapes, and where each one lives in the real tree:
 5. `popen_utf8` rather than `run_utf8`         -- the spawn wrappers
 6. `cwd=` built from the PROCESS's directory   -- `base_extension.py:535`, `cwd=str(Path.cwd())`
 7. a MODULE-LOCAL resolver wrapper             -- `rail/turns.py:75` `find_base()` (C20-C23)
+8. a resolver that returns `(path, reason)`    -- `firm_relay.py:76` `_base()` (C15)
 
 Shape 6 is the one the guard as first drafted would have missed on the `cwd`
 axis: it passes a `cwd=`, so a check for "no cwd at all" reads it as controlled
@@ -102,6 +103,27 @@ def _find_base_locally() -> str | None:
 def shape_7_module_local_resolver():
     base = _find_base_locally()
     return run_utf8([base, "relay", "tasks"], capture_output=True)
+
+
+def _base_and_why_not() -> tuple[str | None, str]:
+    """A resolver that hands the path back INSIDE A TUPLE, as `firm_relay._base` does.
+
+    Shape 8, and the one that was missed for real at G2. The path is element 0
+    and element 1 is the sentence explaining why there is none, so a scanner
+    that binds the whole unpack reads `absent` as base and a scanner that
+    insists on a bare resolver call or a bare name sees no resolver at all.
+    Both readings are wrong in different directions, which is why the index
+    itself has to be recorded.
+    """
+    found = which_base()
+    if found:
+        return found, ""
+    return None, "base is not on this machine"
+
+
+def shape_8_tuple_returning_resolver():
+    binary, absent = _base_and_why_not()
+    return run_utf8([binary, "relay", "board"], capture_output=True)
 
 
 def control_a_controlled_call_is_not_named(workspace: str):
