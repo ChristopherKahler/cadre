@@ -305,7 +305,16 @@ class WindowsScheduler:
         # A .cmd launcher is what cadre wrote before #119; an upgraded install
         # can still hold one, and removing the heartbeat must take it too.
         for leftover in (self._stub(stem), self._spec(stem), self._log(stem),
-                         self.launcher_dir / f"{stem}.cmd"):
+                         self.launcher_dir / f"{stem}.cmd",
+                         # #141 writes this one beside the others, and remove
+                         # not knowing about it was a REGRESSION rather than a
+                         # gap: the file survived, the directory was then not
+                         # empty, and the directory stopped being deleted --
+                         # which it was before #141 (DoD D5, remove leaves
+                         # nothing). The name comes from the function that
+                         # writes it, so there is one producer of it and this
+                         # list cannot drift from the writer again.
+                         winlaunch.containment_path(self.launcher_dir, stem)):
             if leftover.exists():
                 leftover.unlink()
                 removed.append(leftover.name)
