@@ -199,6 +199,35 @@ def job_limit_flags(handle) -> int:
     return int(info.BasicLimitInformation.LimitFlags)
 
 
+def _flags_or_none(handle) -> tuple[int | None, str]:
+    """The job's flags, or ``None`` with the reason. NEVER RAISES.
+
+    :func:`job_limit_flags` raises the moment ``QueryInformationJobObject``
+    fails, and :func:`contain_this_process` calls it on both of its branches
+    while promising never to raise. avocet measured what that costs (#146
+    FINDING 1): with only that kernel call broken, the generated launcher stub
+    exits 3 WITH THE COMMAND NEVER STARTED, and the log an operator would read
+    is empty. The mechanism that exists to stop a pulse outliving its task
+    would have stopped the pulse from ever running.
+
+    THE FLAGS ARE A FIELD THE LAUNCHER PRINTS, NOT THE CONTAINMENT ITSELF.
+    Membership is settled by ``AssignProcessToJobObject`` and read back with
+    ``IsProcessInJob`` before this is ever called; a failure here loses the
+    number and nothing else. So the number goes missing and says why, which is
+    what ``limit_flags: null`` in the record means.
+
+    Both call sites go through this ONE function rather than each growing a
+    try/except, so there is one rule and a test can hold it without a job, a
+    handle or a platform -- and so a third caller cannot quietly reintroduce
+    the bare call.
+    """
+    try:
+        return job_limit_flags(handle), ""
+    except OSError as exc:
+        return None, (f"the job was made and this process is in it, but its "
+                      f"limit flags could not be read: {exc}")
+
+
 def close(handle) -> None:
     """Close a handle this module handed out.
 
@@ -240,8 +269,8 @@ def contain_this_process() -> Containment:
             f"{sys.platform}; the pulse tree is not contained here",
             supported=False)
     if _held is not None:
-        flags = job_limit_flags(_held)
-        return Containment(True, "", flags)
+        flags, why = _flags_or_none(_held)
+        return Containment(True, why, flags)
     try:
         handle = create_kill_on_close_job()
     except OSError as exc:
@@ -268,4 +297,5 @@ def contain_this_process() -> Containment:
                    "is not in the job, so nothing it starts would be contained")
 
     _held = handle
-    return Containment(True, "", job_limit_flags(handle))
+    flags, why = _flags_or_none(handle)
+    return Containment(True, why, flags)

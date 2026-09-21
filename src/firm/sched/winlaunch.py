@@ -194,7 +194,23 @@ def main(spec_path: str | os.PathLike[str], log: IO[str], *,
     env.update(spec.get("env") or {})
     supervise = bool(spec.get("supervise"))
 
-    held = contain()
+    try:
+        held = contain()
+    except Exception as exc:                    # noqa: BLE001
+        # CONTAINMENT MUST NOT BE ABLE TO KILL THE PULSE, which is the same
+        # rule the record write below already follows. `contain_this_process`
+        # says it never raises, and this launcher must not depend on that
+        # promise being kept by every future edit of another module: anything
+        # raised out of `main` is caught by the stub, written to the log as a
+        # traceback and exited 3, WITH THE COMMAND NEVER STARTED. avocet
+        # measured exactly that (#146 FINDING 1) by breaking one kernel call.
+        #
+        # An uncontained pulse is a pulse that outlives its task, which is the
+        # defect #141 closes. A pulse that never runs is every heartbeat on the
+        # machine, silently. The first is what this reports; the second is what
+        # it refuses to cause.
+        held = winjob.Containment(
+            False, f"containment raised instead of answering: {exc}")
     try:
         record_containment(Path(spec_path).parent, spec["stem"], held)
         record_failure = ""
@@ -234,6 +250,16 @@ def main(spec_path: str | os.PathLike[str], log: IO[str], *,
             # can fix and shouting about a mechanism their kernel never had.
             print(f"winlaunch: the pulse tree is NOT contained, so ending this "
                   f"task will not end what it started: {held.reason}",
+                  file=log, flush=True)
+        elif held.supported and held.reason:
+            # CONTAINED, BUT DEGRADED. The tree is in the job -- membership was
+            # read back before this -- and only the flags the record prints are
+            # missing. Said here too, because `limit_flags: null` in the record
+            # with nothing in the log is a state an operator cannot act on, and
+            # because the read failing at all is a kernel call misbehaving on
+            # this host and worth one line.
+            print(f"winlaunch: the pulse tree IS contained, but the job's "
+                  f"limit flags could not be read: {held.reason}",
                   file=log, flush=True)
         try:
             done = run(argv, cwd=spec["cwd"], env=env, stdin=subprocess.DEVNULL,
