@@ -271,8 +271,34 @@ def run_disable(firm_id: str | None = None, *, unit_dir: Path | None = None) -> 
         except Exception:
             pass
 
+    # THE TASK IS GONE; THE FIRM'S ROWS ARE NOT (#141, condition C1). Ending
+    # the task ends the pulse tree, and leaves `pulse_lock` held by a dead
+    # holder for up to its ten-minute TTL and the Member's `member_run` marked
+    # running for good -- the reaper that would close it only runs inside a
+    # pulse, and after this verb no pulse comes.
+    #
+    # Two lines and an import, on purpose: the logic lives in
+    # `firm.pulse.cleanup` so that this file, which two other open PRs also
+    # change, keeps the smallest possible surface.
+    cleanup: dict = {"lock": "not-attempted",
+                     "reason": "the unit did not record a workspace, so there "
+                               "is no firm database to clean up"}
+    if ws_str:
+        from firm.pulse.cleanup import release_and_finalize
+
+        # The bounded wait is because the task has only just been ended: a
+        # contained tree is on its way out but may not be gone yet, and reading
+        # "still alive" too early would leave a lock that was about to free
+        # itself. It is bounded because the other case -- a host where
+        # containment failed -- is a pulse that is not going anywhere, and a
+        # verb that waited for that would hang.
+        cleanup = release_and_finalize(Path(ws_str), firm_id,
+                                       by="heartbeat disable",
+                                       wait_seconds=5.0)
+
     _emit({"ok": True, "firm_id": firm_id, "removed": f"{stem}.timer",
-           "schedule_recorded": schedule_recorded})
+           "schedule_recorded": schedule_recorded,
+           "cleanup": cleanup})
     return 0
 
 
