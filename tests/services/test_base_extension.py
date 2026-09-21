@@ -1417,9 +1417,30 @@ def test_a5_handler_tier_every_base_call_carries_the_firms_base_home(
 
     helps = [c for c in run.calls if c["argv"][1:3] == ["cadre", "--help"]]
     assert len(helps) == 1
-    assert Path(helps[0]["cwd"]).resolve() == two_tiers.standing.resolve(), (
-        "the handler proof did not run from the directory this leg set, so the "
-        "leg is not controlling which workspace tier base resolves")
+    # #136 CHANGED WHAT THIS ROW ASSERTS, and the old form is now the defect.
+    #
+    # It used to require the handler proof to run from `two_tiers.standing`, the
+    # directory this leg sets as the process cwd, as a self-check that the leg
+    # controlled which workspace tier base resolved. But the call taking the
+    # CALLER's directory is exactly what #136 removes: base walks up from the
+    # directory it runs in, so on the operator's hub that same route read his
+    # own global graph as the firm's workspace tier.
+    #
+    # The call now runs where `base_domain.base_cwd(workspace)` says, and this
+    # asserts that instead. It is a STRICTER claim than the one it replaces: it
+    # fails if the call runs in the leg's directory, in the process's directory,
+    # or anywhere else at all. `standing` is kept below as the thing it must NOT
+    # be, so the leg still proves the call is not merely inheriting a cwd.
+    from firm.services.base_domain import base_cwd
+
+    expected_cwd = base_cwd(two_tiers.firm)
+    assert helps[0]["cwd"] == expected_cwd, (
+        "the handler proof ran in %r; the seam says %r. A base call that does "
+        "not name its directory reads whichever .base sits above the caller."
+        % (helps[0]["cwd"], expected_cwd))
+    assert Path(helps[0]["cwd"]).resolve() != two_tiers.standing.resolve(), (
+        "the handler proof ran in the directory this leg happened to stand in, "
+        "which is the #136 defect rather than the fix")
 
 
 def test_a6_refusal_report_a_refused_firm_install_names_the_firms_tier(

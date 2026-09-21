@@ -259,6 +259,182 @@ _SEED_RULE = ("Members of this firm read the firm's own graph before acting and 
               "this one finished.")
 
 
+def _one_spelling(path: Path | str) -> str:
+    """The ONE lexical normalisation both `BASE_HOME` and the working directory
+    pass through, so the two strings base compares can never disagree.
+
+    `os.path.abspath`, and deliberately NOT `Path.resolve()`. Measured on this
+    machine 2026-09-21 with the real `base.exe` 0.15.2:
+
+      * base decides whether to use a tier directly or to WALK by comparing the
+        process's working directory with `<BASE_HOME>/.base-gbl` as
+        `std::path::Path` equality (`config.rs:49-59` at `0ace1bae`). The
+        comparison is byte-wise after component normalisation.
+      * A `BASE_HOME` differing from the on-disk form in the CASE of one
+        directory name made base walk straight out of the tier (probe arm A5).
+        `resolve()` canonicalises case, so resolving one side and not the other
+        reintroduces exactly that. `abspath` preserves case (question 5).
+      * Windows COLLAPSES a `..` component when it sets a child's working
+        directory, while `BASE_HOME` keeps it verbatim (`home.rs:30-34` takes
+        the variable as given). So a `..` on both sides still walked, because
+        the OS rewrote one of them (probe arm A10). `abspath` collapses `..`
+        here, on both sides, before the OS can collapse only one.
+      * A RELATIVE workspace would leave base walking from wherever the process
+        happened to stand, which is this issue. `normpath` does not fix that;
+        `abspath` does (question 5e). For a relative input it joins against the
+        process's directory, which is why the seam RECORDS the value it used.
+
+    One function, called from both `_base_env` and `base_cwd`, because two
+    normalisations are two chances for the pair to drift -- the same reason
+    this module has one env builder and `base_extension` and `base_ready`
+    delegate to it rather than copying it.
+    """
+    return os.path.abspath(str(path))
+
+
+def _existing(tier: Path, create: bool, fallback: Path) -> str:
+    """The tier directory, created if it is not there, as one spelling.
+
+    `fallback` is where a READER stands when the tier is not there, and it
+    comes from the CALLER. This function derives no directory from a path's
+    name, because the two rules that reach it have tiers whose last
+    component is the same string and whose fallbacks are not:
+
+      * rule 2's tier is `<firm>/.firm/base-home/.base-gbl`, and the firm
+        is three parents up;
+      * rule 3's tier is `<BASE_HOME>/.base-gbl`, and the root is ONE
+        parent up.
+
+    `tier.parent.parent.parent if tier.name == ".base-gbl"` served both, so
+    rule 3's reader was sent two levels ABOVE `BASE_HOME`. Measured at G2
+    with temp directories: with `BASE_HOME` an empty directory,
+    `base_cwd(None, create=False)` returned the system temp root. On a
+    machine whose global tier does not exist yet, the readiness probe would
+    have stood in the drive root -- outside everything the env names, with
+    whatever `.base` happens to sit above it.
+
+    base RETURNS this path whether or not it exists -- `config.rs:36-37` says
+    "existing or not" -- but Cadre does not merely name it, it starts a process
+    in it, and `subprocess` raises FileNotFoundError for a working directory
+    that is absent. So mirroring base's wording literally meant the base call
+    did not run at all:
+
+        FileNotFoundError: [Errno 2] No such file or directory:
+        '.../firms/acme/.firm/base-home/.base-gbl'
+
+    Found by the A10 real-child leg on its first run. Inside `install` the
+    fault was invisible, because `_base_env` runs first and `ensure_tier`
+    creates the directory as a side effect -- so the seam worked there by an
+    ordering nothing stated, and broke for any caller that reached it first.
+
+    Created here for the same reason `_base_env` creates the tier it names:
+    this is the one place every base subprocess in this package gets its
+    directory from, and creating it here is what removes the dependency on
+    which of the two functions a caller happens to call first. `exist_ok`, so
+    it is idempotent, and only ever inside the tier the call's env already
+    names.
+    """
+    if create:
+        tier.mkdir(parents=True, exist_ok=True)
+        return _one_spelling(tier)
+    # A READER MUST NOT CREATE WHAT IT REPORTS ON. `base_ready` asks whether
+    # base runs and whether this firm's extension is installed; its `_env`
+    # docstring states that the module writes nothing, and
+    # `test_a_firm_with_no_tier_is_reported_and_no_tier_is_created` enforces it.
+    # A probe that made the tier would turn "this firm has no tier" into "this
+    # firm has an empty tier", which is a different answer to a different
+    # question.
+    #
+    # With the tier absent there is no directory inside the firm that base
+    # short-circuits to, so the caller gets the fallback IT chose: rule 2 the
+    # firm, rule 3 the root the env names. Both exist in the ordinary case,
+    # both are deterministic, both are recorded, and neither is the caller's
+    # own arbitrary directory -- which is what this issue is about and what
+    # `probe_cwd` reported before.
+    #
+    # base will walk up from either, which is what rule 2 exists to stop for a
+    # call that WRITES -- and the probe's two verbs, `--version` and
+    # `cadre --help`, read no workspace tier at all (base's command registry is
+    # global only: `plugin/mod.rs:654-665`, `extension/mod.rs:279-285`).
+    #
+    # A fallback that does not exist is handed back unchanged rather than
+    # climbed out of. `subprocess` then raises `FileNotFoundError`, which
+    # `base_ready.check` already catches and reports as a host problem; that is
+    # the honest outcome, and it is better than standing somewhere outside the
+    # root and succeeding against a stranger's tier.
+    if tier.is_dir():
+        return _one_spelling(tier)
+    return _one_spelling(fallback)
+
+
+def base_cwd(workspace: Path | str | None = None, *,
+             create: bool = True) -> str:
+    """The directory every `base` call Cadre makes for a firm runs in.
+
+    base takes its GLOBAL tier from `BASE_HOME` and finds a WORKSPACE tier by
+    walking up from the directory the process runs in, and `BASE_HOME` does not
+    move that walk (`config.rs:49-59`, `home.rs:25-46`). So a call that does not
+    name its directory reads whichever `.base` sits above wherever the caller
+    stood. Measured doing exactly that at #136: the Windows hub's interpreter
+    ran from a scripts folder inside the operator's own global tier, so the rule
+    listing inside founding's install read the operator's own graph as if it
+    were the firm's workspace tier. The paths and sizes are on the issue and in
+    its fork document; they are not repeated here, because a named home
+    directory in product source resolves on one machine and means nothing
+    anywhere else.
+
+    Three rules, and every one of them ends up inside the tier the call's env
+    names:
+
+    1. **A workspace with its own `.base`** gives the workspace itself. The walk
+       starts inside the firm and stops at the firm's `.base`.
+    2. **A workspace with no `.base` yet** gives `<BASE_HOME>/.base-gbl`, which
+       is the one directory base returns WITHOUT walking (`config.rs:50-53`
+       short-circuits when the working directory equals the tier root, and
+       returns it "existing or not"). Without this a firm with no `.base` would
+       climb out of the firm.
+    3. **No workspace** gives the same short-circuit for the tier the env names.
+       That is `founding.py:1082`'s readiness probe, which runs before a firm
+       exists and today stands in `Path.cwd()`.
+
+    A WRITER (`create=True`, the default) MAKES THE TIER IT NAMES, and with
+    no workspace that is `<BASE_HOME>/.base-gbl` -- a directory outside
+    every firm, and under the user's own home when the environment names no
+    `BASE_HOME`. That is kept deliberately: `install(workspace=None)` is the
+    operator-level install, its manifest has always gone to the tier the env
+    names, and a writing verb that refused to make its own directory would
+    fail on any machine where base has not run yet. It is stated here rather
+    than discovered, because the one thing this seam must never do quietly
+    is create a directory somewhere nobody asked about.
+
+    A READER (`create=False`) never makes the tier, so when the tier is not
+    there it gets the root that rule's tier hangs from: rule 2 the firm, rule
+    3 the directory `BASE_HOME` names, or `Path.home()` when the environment
+    names none. Never a directory above either of them, and never the
+    caller's own. When that root does not exist either, it is still what
+    comes back: a reader that climbed out to find something that does exist
+    would be reading a tier nobody asked about.
+
+    THE PROPERTY THIS RESTS ON IS BYTE-IDENTITY, NOT INTENT. Rules 2 and 3 only
+    work because the string returned here and the `BASE_HOME` string in
+    `_base_env` both come from `_one_spelling`. Read that function before
+    changing either: adding a `.resolve()`, an `os.path.realpath`, a `.lower()`
+    or a short-path expansion to one side alone puts the defect back, and it
+    would look like a tidy-up.
+    """
+    if workspace is not None:
+        candidate = Path(workspace)
+        if (candidate / ".base").is_dir():
+            return _one_spelling(candidate)
+        from firm.services.graph_isolation import firm_base_home
+
+        return _existing(firm_base_home(candidate) / ".base-gbl", create,
+                         fallback=candidate)
+    home = os.environ.get("BASE_HOME")
+    root = Path(home) if home else Path.home()
+    return _existing(root / ".base-gbl", create, fallback=root)
+
+
 def _base_env(workspace: Path | str | None = None) -> dict[str, str]:
     """Explicit env for every `base` call — a systemd-spawned hub has a bare PATH.
 
@@ -290,11 +466,39 @@ def _base_env(workspace: Path | str | None = None) -> dict[str, str]:
     for passthrough in ("BASE_HOME", "XDG_CONFIG_HOME"):
         value = os.environ.get(passthrough)
         if value:
-            env[passthrough] = value
+            # `BASE_HOME` THROUGH `_one_spelling` HERE TOO, and for the same
+            # reason the workspace branch below does it. base compares this
+            # value plus `/.base-gbl` against the working directory of the
+            # process it runs in, and RULE 3 TAKES THIS BRANCH: with no
+            # workspace there is nothing to isolate, so the ambient value is
+            # what gets exported. Carried through verbatim it was the only
+            # one of the two strings that had not been normalised, so a `..`,
+            # a trailing separator or a relative `BASE_HOME` made the pair
+            # disagree and base walked out of the tier.
+            #
+            # ON WINDOWS a `BASE_HOME` that is rooted but carries no DRIVE
+            # (`/tmp/scratch-tier`) takes the current drive of this process
+            # at the moment this runs. That is deterministic inside a
+            # process, it is the same drive the child's working directory
+            # gets from `base_cwd`, and there is no better source for a
+            # drive the value does not carry -- left alone, the child would
+            # resolve it against whichever drive IT happened to be on, and
+            # the two strings base compares would name different
+            # directories. Measured by CI run 35662050493.
+            #
+            # `XDG_CONFIG_HOME` is deliberately left alone: nothing compares
+            # it against a working directory, so normalising it would be a
+            # change with no measurement behind it.
+            env[passthrough] = (_one_spelling(value)
+                                if passthrough == "BASE_HOME" else value)
     if workspace is not None:
         from firm.services.graph_isolation import ensure_tier
 
-        env["BASE_HOME"] = str(ensure_tier(workspace))
+        # THROUGH `_one_spelling`, the same function `base_cwd` uses. base
+        # compares this value (plus `/.base-gbl`) with the working directory of
+        # the process it runs in, so the two must be one spelling. See
+        # `_one_spelling` for the three measured ways they used to diverge.
+        env["BASE_HOME"] = _one_spelling(ensure_tier(workspace))
     if os.name == "nt":
         # HOME is not how Windows finds a home directory. `Path.home()` reads
         # USERPROFILE, or HOMEDRIVE+HOMEPATH, and raises RuntimeError when it
@@ -380,7 +584,7 @@ def _rule_count(workspace: Path, firm_id: str) -> tuple[int | None, str]:
         listed = run_utf8(
             [base, "rule", "list", "--domain", firm_id],
             capture_output=True, timeout=60, require_output=True,
-            cwd=str(workspace), env=_base_env(workspace),
+            cwd=base_cwd(workspace), env=_base_env(workspace),
             stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return None, f"base rule list did not run: {exc}"
@@ -434,7 +638,7 @@ def _seed_rule_detail(workspace: Path, firm_id: str) -> tuple[bool, str]:
         added = run_utf8(
             [base, "rule", "add", "--domain", firm_id, "--text", _SEED_RULE],
             capture_output=True, timeout=60,
-            cwd=str(workspace), env=_base_env(workspace),
+            cwd=base_cwd(workspace), env=_base_env(workspace),
             stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, f"base rule add did not run: {exc}"
@@ -477,7 +681,7 @@ def scaffold_tier(workspace: Path) -> dict[str, Any]:
 
     from firm.sysconfig.service import base_absence_reason
 
-    result: dict[str, Any] = {"scaffolded": False, "detail": ""}
+    result: dict[str, Any] = {"scaffolded": False, "detail": "", "cwd": ""}
 
     # Point every Claude session opened in this firm at the firm's own tier
     # (#117, coverage row 3). Cadre's own calls and the Member runs it spawns
@@ -527,10 +731,15 @@ def scaffold_tier(workspace: Path) -> dict[str, Any]:
 
     try:
         # Explicit env, never ambient — a systemd-spawned hub's PATH is bare.
+        # #136: the directory is named, never inherited. `scaffold` takes an
+        # explicit target so the cwd does not decide where it writes, but it
+        # still reads `<cwd>/.base/base.toml` and the walk still decides which
+        # workspace tier it merges over.
+        result["cwd"] = base_cwd(workspace)
         proc = run_utf8(
             [base, "scaffold", str(workspace)],
             capture_output=True, timeout=120,
-            env=_base_env(workspace),
+            cwd=result["cwd"], env=_base_env(workspace),
         )
         if proc.returncode != 0:
             result["detail"] = (
