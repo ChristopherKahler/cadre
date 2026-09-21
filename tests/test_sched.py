@@ -322,7 +322,11 @@ def test_winsched_remove_takes_every_launcher_file(tmp_path, ok_cmd):
     mine = ["cadre-heartbeat-lab.pyw", "cadre-heartbeat-lab.json",
             "cadre-heartbeat-lab.log",
             # What cadre wrote before #119, still there on an upgraded install.
-            "cadre-heartbeat-lab.cmd"]
+            "cadre-heartbeat-lab.cmd",
+            # #141's containment record. This leg's NAME says every launcher
+            # file, and its input did not include this one, so it could not
+            # fail for the reason it claims (avocet, #146 FINDING 4).
+            "cadre-heartbeat-lab.containment.json"]
     theirs = ["cadre-heartbeat-other.json", "cadre-heartbeat-other.pyw"]
     for name in mine + theirs:
         (launchers / name).write_text("x", encoding="utf-8")
@@ -590,7 +594,11 @@ def test_winsched_remove_deletes_the_folder_when_it_is_empty(tmp_path,
     calls = _scripted_remove(monkeypatch, folder_reply=(0, "deleted"))
     launchers = tmp_path / "sched"
     launchers.mkdir()
-    for suffix in (".pyw", ".json"):
+    # ".containment.json" is #141's record, and it belongs in this fixture
+    # because THIS is the leg that says the directory goes when its last
+    # launcher does -- the behaviour #141 took away by leaving a file behind
+    # (avocet, #146 FINDING 4).
+    for suffix in (".pyw", ".json", ".containment.json"):
         (launchers / f"cadre-heartbeat-lab{suffix}").write_text(
             "x", encoding="utf-8")
 
