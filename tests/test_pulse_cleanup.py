@@ -293,3 +293,210 @@ def test_l5_heartbeat_disable_cleans_up_after_the_task_it_removed(
     assert payload["cleanup"]["runs_finalized"] == ["RUN-001"], payload
     assert _status_of(ws, "RUN-001") == "failed"
     assert _holder(ws) is None
+
+
+# ---------------------------------------------------------------------------
+# L6 -- `firm pulse --abort` uses THIS module instead of its own copy
+# ---------------------------------------------------------------------------
+#
+# This module's own docstring recorded the duplication rather than hiding it:
+# "`cli/pulse.py`'s `_handle_abort` does the same two things with its own copy
+# of the code, and should end up calling this function. It is not changed here
+# because PR 142 is open on that file." PR 142 landed on 2026-09-21 at 18:18:12
+# (main `5b8781042d15`), so the reason has expired and the copy comes out.
+#
+# TWO COPIES OF A RULE ARE TWO RULES. The guard that decides whether a lock may
+# be cleared lives in one of them; a fix applied to one copy leaves the other
+# deciding the old way, and nothing in the suite would say so.
+#
+# WHAT ABORT KEEPS, because it is abort's and not the cleanup's: signalling the
+# holder, counting what it signalled, and telling "cleared" (a holder it killed)
+# apart from "stale-cleared" (a holder already dead when it looked). The cleanup
+# never signals anything.
+
+def test_l6_cli_pulse_keeps_no_second_orphan_finalizer():
+    """The copy is gone, not merely unused.
+
+    Asserted on the module rather than on behaviour because an unused copy is
+    exactly what the next person edits by mistake: it still imports, still
+    reads as live code, and passes every test that goes through the CLI.
+    """
+    from firm.cli import pulse as cli_pulse
+
+    assert not hasattr(cli_pulse, "_finalize_orphans"), (
+        "cli/pulse.py still carries its own orphan finalizer beside "
+        "firm.pulse.cleanup's, so the two can drift apart silently")
+
+
+def test_l6_abort_calls_the_shared_cleanup_and_names_itself(
+        cleanup, tmp_path, monkeypatch, capsys):
+    """Abort delegates the lock and the runs, and says which verb it was.
+
+    `by` reaches the Board: it is written into the finalized run's notes, so a
+    run closed this way says an abort ended it instead of looking like an
+    unexplained failure.
+    """
+    import socket
+
+    from firm.cli import pulse as cli_pulse
+
+    ws = _workspace(tmp_path)
+    _hold(ws, f"{socket.gethostname()}:424242:deadbeef")
+    monkeypatch.setattr(cli_pulse, "_pid_alive", lambda pid: False)
+
+    seen: dict = {}
+
+    def _spy(workspace, firm_id=None, **kwargs):
+        seen["workspace"] = workspace
+        seen["firm_id"] = firm_id
+        seen.update(kwargs)
+        return {"lock": "cleared", "runs_finalized": ["RUN-001"]}
+
+    monkeypatch.setattr(cleanup, "release_and_finalize", _spy)
+
+    rc = cli_pulse._handle_abort(ws, FIRM)
+    capsys.readouterr()
+
+    assert seen, (
+        "abort never called firm.pulse.cleanup.release_and_finalize, so it is "
+        "still clearing the lock and closing the runs with its own copy")
+    assert seen["by"] == "firm pulse --abort", seen
+    assert rc == 0
+
+
+def test_l6_abort_reports_a_holder_it_could_not_kill_as_signalled(
+        cleanup, tmp_path, monkeypatch, capsys):
+    """The word `signalled` is abort's, and delegation must not lose it.
+
+    `test_pulse_exit_contract.py` pins it: a holder that ignores SIGTERM reports
+    `lock: signalled`, `aborted: 1`, exit 0. The shared cleanup calls that same
+    state `held-by-a-live-pulse`, which is the right word for `heartbeat
+    disable` and the wrong one for a caller that has just signalled the holder.
+    """
+    import socket
+
+    from firm.cli import pulse as cli_pulse
+
+    ws = _workspace(tmp_path)
+    _hold(ws, f"{socket.gethostname()}:424242:deadbeef")
+    monkeypatch.setattr(cli_pulse, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(cli_pulse.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(cli_pulse.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(
+        cleanup, "release_and_finalize",
+        lambda *a, **k: {"lock": "held-by-a-live-pulse",
+                         "runs_finalized": ["RUN-001"]})
+
+    rc = cli_pulse._handle_abort(ws, FIRM)
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+
+    assert out["lock"] == "signalled", out
+    assert out["aborted"] == 1, out
+    assert rc == 0
+
+
+def test_l6_a_caller_that_owns_a_live_holders_runs_can_close_them(
+        cleanup, tmp_path, monkeypatch):
+    """The one real difference between the two callers, named as a parameter.
+
+    `heartbeat disable` finds a live holder on a host where containment failed:
+    that pulse is still working and its runs are not disable's to close.
+    `firm pulse --abort` has just told the holder to die and OWNS closing them
+    -- its own docstring says so, and without it the row stays `running`
+    forever.
+
+    The lock is still left alone in both cases. That guard outranks this
+    parameter and this arm proves the two are independent.
+
+    #148 is open on the fact that abort finalizes a run whose Member is still
+    alive. That defect is PRESERVED here on purpose: this leg removes a
+    duplicate, it does not change what abort does, and changing both at once
+    would leave neither measured.
+    """
+    import socket
+
+    ws = _workspace(tmp_path)
+    holder = f"{socket.gethostname()}:424242:deadbeef"
+    _hold(ws, holder)
+    monkeypatch.setattr(cleanup, "_pid_alive", lambda pid: True)
+
+    out = cleanup.release_and_finalize(ws, FIRM, by="firm pulse --abort",
+                                       finalize_live_runs=True)
+
+    assert out["lock"] == "held-by-a-live-pulse", out
+    assert _holder(ws) == holder, (
+        "a LIVE pulse's lock was cleared; the caller owning the runs must not "
+        "also take the lock")
+    assert out["runs_finalized"] == ["RUN-001"], out
+    assert _status_of(ws, "RUN-001") == "failed", out
+
+
+def test_l6_a_row_that_cannot_be_closed_is_reported_rather_than_swallowed(
+        cleanup, tmp_path, monkeypatch):
+    """One bad row never stops the rest, and never disappears either.
+
+    `cli/pulse.py` printed a `warn` line for a row it could not close. The
+    shared copy caught the exception and moved on with nothing said, so
+    delegating without this would make a silent failure out of a loud one.
+    """
+    import socket
+
+    ws = _workspace(tmp_path)
+    _hold(ws, f"{socket.gethostname()}:424242:deadbeef")
+    monkeypatch.setattr(cleanup, "_pid_alive", lambda pid: False)
+
+    import firm.hooks.run_record as run_record
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("records are unwritable")
+
+    monkeypatch.setattr(run_record, "on_run_end", _boom)
+
+    out = cleanup.release_and_finalize(ws, FIRM, by="firm pulse --abort")
+
+    assert out["runs_finalized"] == [], out
+    assert out.get("runs_not_finalized"), (
+        "a member_run that could not be closed left no trace in the result, so "
+        "the caller reports a clean cleanup over a row still marked running")
+    assert "RUN-001" in json.dumps(out["runs_not_finalized"])
+
+
+def test_l6_abort_carries_an_unclosed_row_in_its_result_not_on_its_own_line(
+        cleanup, tmp_path, monkeypatch, capsys):
+    """A row that could not be closed reaches the reader, and does not displace
+    the reader's answer.
+
+    The private finalizer printed a `warn` line of its own. Moving the same
+    information into `_handle_abort` as a print made
+    `test_every_way_out_of_the_pulse_goes_through_the_exit_function` fail, which
+    is that guard doing its job: every reader of `firm pulse` takes the LAST
+    stdout line as the result (#128), so a second line printed beside it is a
+    reader taking a warning for an outcome.
+
+    So the fact travels inside the result. This arm pins both halves: it is
+    there, and there is still exactly one line.
+    """
+    import socket
+
+    from firm.cli import pulse as cli_pulse
+
+    ws = _workspace(tmp_path)
+    _hold(ws, f"{socket.gethostname()}:424242:deadbeef")
+    monkeypatch.setattr(cli_pulse, "_pid_alive", lambda pid: False)
+    monkeypatch.setattr(
+        cleanup, "release_and_finalize",
+        lambda *a, **k: {"lock": "cleared", "runs_finalized": [],
+                         "runs_not_finalized": [
+                             {"run_id": "RUN-001", "error": "unwritable"}]})
+
+    rc = cli_pulse._handle_abort(ws, FIRM)
+    lines = [ln for ln in capsys.readouterr().out.strip().splitlines() if ln]
+
+    assert len(lines) == 1, (
+        f"abort printed {len(lines)} lines; a reader taking the last one no "
+        f"longer gets the result: {lines}")
+    out = json.loads(lines[0])
+    assert out["runs_not_finalized"] == [
+        {"run_id": "RUN-001", "error": "unwritable"}], out
+    assert out["lock"] == "stale-cleared", out
+    assert rc == 0
