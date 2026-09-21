@@ -21,6 +21,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from firm.core.proc import popen_utf8
+
 
 def _which_windows_terminal() -> str | None:
     wt = shutil.which("wt.exe")
@@ -104,9 +106,12 @@ def _write_script(cwd: str, prompt: str, claude: str, suffix: str = ".sh") -> st
 
 
 def _spawn(argv: list[str]) -> str | None:
+    # Through firm.core.proc like every child (#119). The Co-Board window is
+    # still opened, on purpose, by `start` or Windows Terminal; what the rule
+    # hides is only the short-lived console of the program handed that job.
     try:
-        subprocess.Popen(argv, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL)
+        popen_utf8(argv, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL)
         return None
     except OSError as exc:
         return str(exc)
