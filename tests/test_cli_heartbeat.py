@@ -209,3 +209,92 @@ def test_status_empty_ok(tmp_path, capsys, ctl):
     rc = hb.run_status(unit_dir=tmp_path)
     assert rc == 0
     assert json.loads(capsys.readouterr().out)["heartbeats"] == []
+
+
+def test_status_carries_the_containment_answer_to_the_operator(
+        tmp_path, capsys, monkeypatch):
+    """Condition C3: the operator is told the pulse tree is NOT contained, and why.
+
+    avocet's FINDING 3. The answer is produced one layer down and dropped
+    before anybody sees it: `WindowsScheduler.status` puts `contained`,
+    `containment_reason` and `containment_flags` on its dict, and `run_status`
+    copies `next_fire` and `last_fire` out of that dict and nothing else. K4
+    calls `status` directly, so every existing leg reads the layer BELOW the
+    one an operator uses, and all of them pass over this.
+
+    avocet measured both layers side by side: status() said contained false
+    with the reason "CreateJobObjectW failed, GetLastError=5 (Access is
+    denied.)", and `firm heartbeat status` printed firm_id, timer, state,
+    scheduler and interpreter -- nothing about containment at all.
+
+    This arm drives the CLI verb, which is the surface C3 names.
+    """
+    ws = _workspace_with_db(tmp_path)
+    unit_dir = tmp_path / "units"
+    unit_dir.mkdir()
+
+    class _Sched:
+        name = "winsched"
+
+        def list_installed(self, prefix):
+            return [prefix + "lab"]
+
+        def status(self, stem):
+            return {"installed": True, "state": "ready", "failed": False,
+                    "workdir": str(ws), "next_fire": "tomorrow",
+                    "contained": False,
+                    "containment_reason": "CreateJobObjectW failed, "
+                                          "GetLastError=5 (Access is denied.)",
+                    "containment_flags": "0x00002000"}
+
+    monkeypatch.setattr(hb, "_sched", lambda unit_dir=None: _Sched())
+    monkeypatch.setattr(hb, "_service_python", lambda stem, unit_dir: None)
+
+    rc = hb.run_status(unit_dir=unit_dir)
+
+    assert rc == 0
+    entry = json.loads(capsys.readouterr().out)["heartbeats"][0]
+    assert entry.get("contained") is False, (
+        f"`firm heartbeat status` does not tell the operator whether the pulse "
+        f"tree is contained; it printed {sorted(entry)}")
+    assert "Access is denied" in (entry.get("containment_reason") or ""), (
+        "the reason the tree is not contained never reaches the operator, so "
+        "they are told there is a problem with no way to act on it")
+    assert entry.get("containment_flags") == "0x00002000", entry
+
+
+def test_status_says_nothing_about_containment_when_the_layer_below_does_not(
+        tmp_path, capsys, monkeypatch):
+    """The control. A scheduler with no answer must not grow an invented one.
+
+    Without this, copying the keys through could be written as
+    `entry["contained"] = st.get("contained")` and every systemd and launchd
+    heartbeat would start reporting `contained: null` -- a claim about a
+    mechanism those hosts do not have. Absent is the honest answer there, and
+    it is the same distinction `supported` draws one layer down.
+    """
+    ws = _workspace_with_db(tmp_path)
+    unit_dir = tmp_path / "units"
+    unit_dir.mkdir()
+
+    class _Sched:
+        name = "systemd"
+
+        def list_installed(self, prefix):
+            return [prefix + "lab"]
+
+        def status(self, stem):
+            return {"installed": True, "state": "active", "failed": False,
+                    "workdir": str(ws)}
+
+    monkeypatch.setattr(hb, "_sched", lambda unit_dir=None: _Sched())
+    monkeypatch.setattr(hb, "_service_python", lambda stem, unit_dir: None)
+
+    rc = hb.run_status(unit_dir=unit_dir)
+
+    assert rc == 0
+    entry = json.loads(capsys.readouterr().out)["heartbeats"][0]
+    for key in ("contained", "containment_reason", "containment_flags"):
+        assert key not in entry, (
+            f"{key} was invented for a scheduler that never answered it: "
+            f"{entry}")
