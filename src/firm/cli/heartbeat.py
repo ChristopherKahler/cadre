@@ -358,6 +358,23 @@ def run_status(*, unit_dir: Path | None = None) -> int:
         for k in ("next_fire", "last_fire"):
             if st.get(k):
                 entry[k] = st[k]
+        # CONDITION C3 IS ABOUT THIS SURFACE, not the layer below it. The
+        # scheduler answers whether the pulse tree is contained; this verb is
+        # where an operator reads it, and until now the answer was produced and
+        # then dropped here -- every leg that checked it called `status()`
+        # directly, one layer down, so all of them passed over the gap
+        # (avocet, #146 FINDING 3).
+        #
+        # `in st`, NEVER `st.get(k)`: `contained` is False in exactly the case
+        # this exists to report, and a truthiness test would drop the one
+        # answer that matters while keeping the harmless one.
+        #
+        # Copied only when the scheduler answered. systemd and launchd have no
+        # job objects and say nothing here; inventing `contained: null` for
+        # them would be a claim about a mechanism those hosts never had.
+        for k in ("contained", "containment_reason", "containment_flags"):
+            if k in st:
+                entry[k] = st[k]
         entry["interpreter"] = _service_python(stem, unit_dir)
         entries.append(entry)
 
