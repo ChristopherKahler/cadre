@@ -51,6 +51,31 @@ class TestSeedDemo:
         assert unit is not None
         assert unit["claimed_by"] is None
 
+    def test_first_pulse_dispatches_the_writer(self, tmp_path, capsys) -> None:
+        """A freshly seeded demo firm must have someone the pulse can run.
+
+        `compute_load` counts a Unit only when a Member has claimed it or it is
+        assigned to that Member. UNT-001 used to be neither, so both Members were
+        skipped at `load=0 (no queued Units)`, `_run_member` never ran, and the
+        firm pulsed forever without dispatching anyone while printing
+        `ok: true` (issue #119, lane F arms A1-A3). It stays unclaimed on
+        purpose -- `detect_gaps` reads `claimed_by` -- so only the assignee is set.
+
+        Driven through `run_pulse` and asserted on the JSON it prints, which is
+        the channel the heartbeat and the hub actually read.
+        """
+        from firm.cli.pulse import run_pulse
+
+        assert run_init(tmp_path, demo=True) == 0
+        capsys.readouterr()
+
+        rc = run_pulse(tmp_path, dry_run=True, firm_id="demo")
+        out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+
+        assert rc == 0
+        assert out["ran"] == 1, out
+        assert [d["member"] for d in out["ran_details"]] == ["MEM-001"], out
+
     def test_idempotent(self) -> None:
         conn = _fresh_conn()
         seed_demo(conn)
