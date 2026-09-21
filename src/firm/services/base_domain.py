@@ -350,10 +350,13 @@ def base_cwd(workspace: Path | str | None = None, *,
     walking up from the directory the process runs in, and `BASE_HOME` does not
     move that walk (`config.rs:49-59`, `home.rs:25-46`). So a call that does not
     name its directory reads whichever `.base` sits above wherever the caller
-    stood. Measured on the operator's Windows machine 2026-09-14: the hub's
-    interpreter ran in `C:/Users/Chris/.base-gbl/scripts`, so the rule listing
-    inside founding's install read his own 37.9 MB global graph as if it were
-    the firm's workspace tier.
+    stood. Measured doing exactly that at #136: the Windows hub's interpreter
+    ran from a scripts folder inside the operator's own global tier, so the rule
+    listing inside founding's install read the operator's own graph as if it
+    were the firm's workspace tier. The paths and sizes are on the issue and in
+    its fork document; they are not repeated here, because a named home
+    directory in product source resolves on one machine and means nothing
+    anywhere else.
 
     Three rules, and every one of them ends up inside the tier the call's env
     names:

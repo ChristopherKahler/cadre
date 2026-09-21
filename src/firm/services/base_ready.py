@@ -132,10 +132,11 @@ def _probe_cwd(workspace: Path | str | None) -> str:
 
     #136: the no-workspace branch used to stand in `Path.cwd()`, which is the
     caller's directory and decides which workspace tier base resolves. On the
-    operator's Windows hub that was `C:/Users/Chris/.base-gbl/scripts`, one
-    level under his own global graph. It now asks the seam, which returns the
-    tier the call's env names -- a directory base short-circuits to instead of
-    walking from.
+    Windows hub that directory sat inside the operator's own global tier, so the
+    probe reported on the operator's graph rather than on anything about this
+    firm. It now asks the seam, which returns the tier the call's env names -- a
+    directory base short-circuits to instead of walking from. The measured path
+    is on #136 and in its fork document, deliberately not here.
     """
     from firm.services.base_domain import base_cwd
 
