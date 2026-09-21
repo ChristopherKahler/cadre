@@ -551,3 +551,214 @@ def test_the_graph_read_failure_text_names_the_directory(
         "real collision from a call that read the wrong tier without it.\n"
         "  reason: %s\n  wanted the phrase: 'read in %s'"
         % (result["reason"], expected))
+
+
+# ---------------------------------------------------------------------------
+# C7 -- the READER arms (`create=False`). WHERE A READER STANDS WHEN THERE IS
+# NO TIER YET.  (G2 finding 1)
+# ---------------------------------------------------------------------------
+#
+# `create=True` is the writing path and it makes the tier, so it always has a
+# directory inside the firm to hand back. A READER must not create what it is
+# reporting on (`base_ready`'s contract, and
+# `test_a_firm_with_no_tier_is_reported_and_no_tier_is_created`), so with the
+# tier absent it has to fall back to something else -- and WHICH something is
+# what these legs pin.
+#
+# The fallback used to be derived from the tier path's own NAME:
+# `tier.parent.parent.parent if tier.name == ".base-gbl"`. That is correct for
+# rule 2, whose tier is `<firm>/.firm/base-home/.base-gbl` and whose firm is
+# exactly three parents up. Rule 3's tier is `<BASE_HOME>/.base-gbl`, whose
+# name is ALSO `.base-gbl`, and three parents up from there is two levels ABOVE
+# `BASE_HOME`. Measured on the unfixed head (`probe144.py`, temp directories
+# only): with `BASE_HOME` set to an empty directory, `base_cwd(None,
+# create=False)` returned the system temp root -- outside everything the env
+# named. On a Windows box whose global tier does not exist yet, the readiness
+# probe would have stood in the drive root.
+#
+# So the caller passes the fallback and `_existing` derives nothing from a
+# name. These legs assert the RELATION (the returned directory IS the root, and
+# is never an ancestor of it) rather than a spelling, so they are independent of
+# `_one_spelling` -- a leg that recomputed the seam's own normalisation would be
+# the fix grading its own homework.
+
+
+def _contents(root: Path) -> set:
+    """Everything under `root`, so "nothing was created" is read, not asserted."""
+    return set(root.rglob("*")) if root.exists() else set()
+
+
+def test_c7_rule_3_reader_with_no_tier_stands_in_the_root_the_env_names(
+        tmp_path, monkeypatch, _every_leg_controls_its_cwd):
+    """Rule 3 + `create=False` + no tier: the root `BASE_HOME` names, never above it.
+
+    The discriminating assertion is the second one. `Path(got) in root.parents`
+    is true for EVERY ancestor, so it catches the name arithmetic at any depth,
+    not only at three parents -- an arithmetic changed to two or four would
+    still redden this leg.
+    """
+    root = tmp_path / "envhome-empty"
+    root.mkdir()
+    monkeypatch.setenv("BASE_HOME", str(root))
+    before = _contents(root)
+
+    got = base_domain.base_cwd(None, create=False)
+
+    assert Path(got) == root, (
+        "rule 3's reader stood in %r; the tier is absent, so it must stand in "
+        "the root the env names, %r. base takes its workspace tier by walking "
+        "up from the directory it runs in, so a directory outside the root is "
+        "a reading of whatever .base happens to sit above it."
+        % (got, str(root)))
+    assert Path(got) not in root.parents, (
+        "rule 3's reader stood in %r, which is an ANCESTOR of the root %r it "
+        "was given" % (got, str(root)))
+    assert _contents(root) == before, (
+        "a reader created something under %r: %r"
+        % (str(root), sorted(str(p) for p in _contents(root) - before)))
+    assert not (root / _TIER).exists(), (
+        "a reader created the tier it was reporting on")
+
+
+def test_c7_rule_2_reader_with_no_tier_stands_in_the_firm(
+        tmp_path, monkeypatch, _every_leg_controls_its_cwd):
+    """Rule 2 + `create=False` + no tier: the firm itself, and nothing made.
+
+    This arm was already correct under the arithmetic, and it is pinned here so
+    that removing the arithmetic cannot move it. Law 45: it is a regression
+    guard, not evidence for the fix -- it is green on both sides of the change,
+    and it is the reason the fix has to pass the firm as the fallback rather
+    than simply return the tier.
+    """
+    ws = _firm(tmp_path, with_base_dir=False)
+    before = _contents(ws)
+
+    got = base_domain.base_cwd(ws, create=False)
+
+    assert Path(got) == ws, (
+        "rule 2's reader stood in %r, not in the firm %r" % (got, str(ws)))
+    assert _contents(ws) == before, (
+        "a reader created something under the firm: %r"
+        % sorted(str(p) for p in _contents(ws) - before))
+    assert not firm_base_home(ws).exists(), (
+        "a reader created the firm's base-home directory")
+
+
+def test_c7_a_reader_whose_root_does_not_exist_gets_the_root_and_never_raises(
+        tmp_path, monkeypatch, stub_base, _every_leg_controls_its_cwd):
+    """`BASE_HOME` naming a directory that is not there: still the root, still no write.
+
+    Ruling 2 of the G2 finding leaves this arm to be measured rather than
+    assumed. What is asserted here is the contract `base_ready` states in its
+    own module docstring -- NEITHER FUNCTION RAISES, and nothing is written --
+    and not the sentence `check` ends up producing, which belongs to whichever
+    error the OS gives for a working directory that is absent.
+
+    A cwd that does not exist makes `subprocess` raise `FileNotFoundError`,
+    which is an `OSError`, which `check` already catches at its `--version`
+    probe and turns into a reason. That is a better outcome than standing two
+    levels above the root and succeeding, because it reports the host problem
+    instead of silently reading a stranger's tier.
+    """
+    root = tmp_path / "envhome-absent"          # deliberately never created
+    monkeypatch.setenv("BASE_HOME", str(root))
+    assert not root.exists(), "the arm's own precondition failed"
+
+    got = base_domain.base_cwd(None, create=False)
+
+    assert Path(got) == root, (
+        "the reader stood in %r rather than the absent root %r the env names"
+        % (got, str(root)))
+    assert Path(got) not in root.parents, (
+        "the reader stood in an ancestor %r of the root it was given" % got)
+    assert not root.exists(), "the seam created the root it was only reading"
+
+    state = base_ready.check()                  # must not raise: module contract
+    assert isinstance(state, dict), "check() did not return its result dict"
+    assert state["probe_cwd"] == got, (
+        "the probe reported standing in %r while the seam handed out %r"
+        % (state["probe_cwd"], got))
+    assert not root.exists(), (
+        "the readiness check created %r; it writes nothing" % str(root))
+
+
+# ---------------------------------------------------------------------------
+# C8 -- RULE 3 RESTS ON THE SAME BYTE-IDENTITY RULE 2 DOES.  (G2 finding 2)
+# ---------------------------------------------------------------------------
+#
+# R2-a above proves byte-identity for rule 2, and it can only ever prove it for
+# rule 2: `install(workspace=...)` always takes `_base_env`'s WORKSPACE branch,
+# which builds `BASE_HOME` through `_one_spelling`. Rule 3 has no workspace, so
+# it takes the PASSTHROUGH branch instead, and that branch copied the ambient
+# `BASE_HOME` through verbatim. Two different branches, one of them normalised.
+#
+# So the pair base compares -- the working directory Cadre chose and the
+# `BASE_HOME` Cadre exported -- could disagree for rule 3 while every existing
+# leg stayed green: R2-a never reaches this branch, and the C6 leg sets a
+# canonical `BASE_HOME`, which is the one spelling for which verbatim and
+# normalised are the same string.
+#
+# The leg below hands the branch a `..` round-trip, the same non-canonical
+# spelling the R2-a primary arm uses and for the same reason: it is
+# non-canonical on every platform CI runs, so the arm discriminates everywhere
+# rather than only on a case-insensitive filesystem. Both sides of its
+# assertion are values the PRODUCTION code emitted and the spy recorded.
+
+
+def test_c8_rule_3_exports_the_same_spelling_it_stands_in(
+        tmp_path, stub_base, calls, monkeypatch, _every_leg_controls_its_cwd):
+    """No workspace, a `..` in the ambient `BASE_HOME`: cwd and `BASE_HOME` still agree.
+
+    base short-circuits to the global tier only when the directory it runs in
+    EQUALS `BASE_HOME` plus the tier, compared as `std::path::Path` equality
+    (`config.rs:49-59`). `Path` compares components, so a `..` component is not
+    the same path as the directory it resolves to -- which is why this arm can
+    fail at all, and why the C6 leg above (canonical `BASE_HOME`) cannot see it.
+
+    The assertion is the same one R2-a makes, on the same kind of recorded
+    values, for the branch R2-a can never reach.
+    """
+    home = tmp_path / "envhome"
+    (home / _TIER).mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("BASE_HOME", non_canonical(home))
+
+    base_ready.check()
+
+    call = calls.one("--version")
+    recorded_cwd, recorded_home = call["cwd"], call["base_home"]
+    assert recorded_home, (
+        "the --version probe recorded no BASE_HOME, so there is nothing to "
+        "compare against and this leg measured nothing")
+    assert recorded_cwd == recorded_home + os.sep + _TIER, (
+        "rule 3 exported one spelling and stood in another.\n"
+        "  recorded cwd       : %r\n"
+        "  recorded BASE_HOME : %r\n"
+        "  expected cwd       : %r\n"
+        "base compares these two as Path equality and short-circuits only when "
+        "they are the same, so base walked out of the tier -- with no workspace "
+        "in play, which is the branch R2-a cannot reach."
+        % (recorded_cwd, recorded_home, recorded_home + os.sep + _TIER))
+
+
+def test_c8_the_passthrough_leaves_xdg_config_home_alone(
+        tmp_path, stub_base, calls, monkeypatch, _every_leg_controls_its_cwd):
+    """Only `BASE_HOME` is normalised; the other passthrough is carried verbatim.
+
+    A control, and a boundary. Nothing base does with `XDG_CONFIG_HOME` is
+    compared against a working directory, so normalising it would be a change
+    with no measurement behind it -- and this leg is what would notice if a
+    later tidy-up widened the rule to the whole loop.
+    """
+    home = tmp_path / "envhome"
+    (home / _TIER).mkdir(parents=True, exist_ok=True)
+    spelled = non_canonical(tmp_path / "xdg")
+    (tmp_path / "xdg").mkdir(exist_ok=True)
+    monkeypatch.setenv("BASE_HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", spelled)
+
+    env = base_domain._base_env(None)
+
+    assert env.get("XDG_CONFIG_HOME") == spelled, (
+        "XDG_CONFIG_HOME was rewritten to %r; it is passed through verbatim "
+        "because nothing compares it with a working directory"
+        % env.get("XDG_CONFIG_HOME"))
