@@ -353,3 +353,40 @@ def test_a_windows_status_code_reaches_task_scheduler_whole(winlaunch,
     assert done.returncode & 0xFFFFFFFF == 0xC000013A, (
         f"{done.returncode & 0xFFFFFFFF:#010x}; log: "
         f"{stub.with_suffix('.log').read_text(encoding='utf-8')}")
+
+
+def test_a_reinstall_drops_the_previous_launchers_containment_answer(
+        winlaunch, tmp_path):
+    """#141: `write_launcher` unlinks the old containment record. NO leg held it.
+
+    avocet's FINDING 2, and it is a missing leg rather than a defect: the
+    behaviour is correct and commented, and removing the `unlink` turned
+    nothing red. A rule nothing can fail is a rule that leaves the day someone
+    tidies the line away.
+
+    WHY THE BEHAVIOUR IS RIGHT, which is what this pins. The record answers
+    "is THIS launcher's tree contained". A record left by the launcher a
+    reinstall just replaced is an answer about a process that no longer
+    exists, and `status()` would report a freshly installed task as contained
+    before any launcher of this install had run -- a true-LOOKING reading,
+    which is worse than no reading at all. Absent until answered is the honest
+    state.
+
+    The record is built with `record_containment`, the function that writes it
+    in production, so this cannot pass against a file shaped differently from
+    the real one.
+    """
+    from firm.sched import winjob
+
+    _write(winlaunch, tmp_path)
+    sched = tmp_path / "sched"
+    record = winlaunch.record_containment(
+        sched, STEM, winjob.Containment(True, "", 0x00002000))
+    assert record.exists(), "precondition: the arm never wrote a record"
+
+    _write(winlaunch, tmp_path)
+
+    assert not record.exists(), (
+        "a reinstall kept the PREVIOUS launcher's containment answer, so "
+        "`heartbeat status` reports a task that has never run as contained, "
+        "on the word of a process that no longer exists")
