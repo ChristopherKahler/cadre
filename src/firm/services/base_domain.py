@@ -513,7 +513,7 @@ def _rule_count(workspace: Path, firm_id: str) -> tuple[int | None, str]:
         listed = run_utf8(
             [base, "rule", "list", "--domain", firm_id],
             capture_output=True, timeout=60, require_output=True,
-            cwd=str(workspace), env=_base_env(workspace),
+            cwd=base_cwd(workspace), env=_base_env(workspace),
             stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return None, f"base rule list did not run: {exc}"
@@ -567,7 +567,7 @@ def _seed_rule_detail(workspace: Path, firm_id: str) -> tuple[bool, str]:
         added = run_utf8(
             [base, "rule", "add", "--domain", firm_id, "--text", _SEED_RULE],
             capture_output=True, timeout=60,
-            cwd=str(workspace), env=_base_env(workspace),
+            cwd=base_cwd(workspace), env=_base_env(workspace),
             stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, f"base rule add did not run: {exc}"

@@ -161,9 +161,19 @@ class BaseVaultProvider:
         return probe.returncode == 0 and "unknown command" not in blob
 
     def _run(self, workspace: Path, *args: str) -> str:
+        # #136: the directory is named, never inherited. NOTE that this call
+        # carries `os.environ.copy()` rather than the firm's `_base_env`, so its
+        # `BASE_HOME` is the operator's. Under rule 1 (the firm has its own
+        # `.base`) the seam returns the firm and this is exactly what it passed
+        # before. Under rule 2 the seam names the firm's tier, which this env
+        # does NOT name, so base walks from there just as it walks from the firm
+        # today: no worse and no better. The env is gadwall's adjacent finding
+        # on this file, tracked separately, not fixed here.
+        from firm.services.base_domain import base_cwd
+
         proc = run_utf8(
             ["base", "env", *args],
-            capture_output=True, timeout=30, cwd=str(workspace),
+            capture_output=True, timeout=30, cwd=base_cwd(workspace),
             env=os.environ.copy(),
         )
         if proc.returncode != 0:

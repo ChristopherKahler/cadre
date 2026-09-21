@@ -549,10 +549,15 @@ def tool_install(
         raise ValueError(f"manifest is not valid TOML: {exc}")
     verb = "add" if manifest.get("dist") else "install"
     try:
+        # #136: the directory is named, never inherited. Same env caveat as
+        # `secrets/provider._run`: this carries `os.environ.copy()`, so the seam
+        # is correct under rule 1 and neutral under rule 2.
+        from firm.services.base_domain import base_cwd
+
         proc = run_utf8(
             ["base", "ext", verb, str(local)],
             capture_output=True, timeout=180,
-            cwd=str(workspace), env=os.environ.copy(),
+            cwd=base_cwd(workspace), env=os.environ.copy(),
         )
     except subprocess.TimeoutExpired:
         raise ValueError(f"base ext {verb} timed out after 180s")
