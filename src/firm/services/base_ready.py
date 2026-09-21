@@ -128,15 +128,18 @@ def _blank() -> dict[str, Any]:
 
 
 def _probe_cwd(workspace: Path | str | None) -> str:
-    """The directory every probe stands in, named out loud (see module docstring)."""
-    if workspace is not None:
-        candidate = Path(workspace)
-        if candidate.is_dir():
-            return str(candidate)
-    try:
-        return str(Path.cwd())
-    except OSError:
-        return ""
+    """The directory every probe stands in, named out loud (see module docstring).
+
+    #136: the no-workspace branch used to stand in `Path.cwd()`, which is the
+    caller's directory and decides which workspace tier base resolves. On the
+    operator's Windows hub that was `C:/Users/Chris/.base-gbl/scripts`, one
+    level under his own global graph. It now asks the seam, which returns the
+    tier the call's env names -- a directory base short-circuits to instead of
+    walking from.
+    """
+    from firm.services.base_domain import base_cwd
+
+    return base_cwd(workspace)
 
 
 def _env(workspace: Path | str | None) -> dict[str, str]:

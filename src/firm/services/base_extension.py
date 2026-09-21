@@ -316,7 +316,8 @@ def manifest_domains(rendered: str) -> list[tuple[str, list[str]]]:
     return [(f"ext:{ext}:{d['name']}", list(d.get("rules", []))) for d in blocks]
 
 
-def graph_rules(base: str, domain: str, env: dict[str, str]) -> list[str]:
+def graph_rules(base: str, domain: str, env: dict[str, str],
+                cwd: str | None = None) -> list[str]:
     """What base's graph will serve for this domain, from the CURRENT directory.
 
     cwd is load-bearing and is the caller's to control. base resolves the
@@ -344,23 +345,26 @@ def graph_rules(base: str, domain: str, env: dict[str, str]) -> list[str]:
     # failed read, and without this it would parse to [] and read as CLEAN.
     from firm.core.proc import NoOutput
 
+    where = f" read in {cwd}" if cwd else ""
     try:
         listed = run_utf8(
             [base, "rule", "list", "--domain", domain],
             capture_output=True, timeout=60, require_output=True,
-            env=env, stdin=subprocess.DEVNULL)
+            cwd=cwd, env=env, stdin=subprocess.DEVNULL)
     except NoOutput as exc:
         raise GraphReadFailed(
-            f"`base rule list --domain {domain}` printed nothing, so what the "
-            f"graph serves is unknown: {exc}") from exc
+            f"`base rule list --domain {domain}`{where} printed nothing, so "
+            f"what the graph serves is unknown: {exc}") from exc
     if listed.returncode != 0:
         raise GraphReadFailed(
-            f"`base rule list --domain {domain}` exited {listed.returncode}: "
+            f"`base rule list --domain {domain}`{where} exited "
+            f"{listed.returncode}: "
             f"{(listed.stderr or listed.stdout).strip()[:300]}")
     return parse_rule_listing(listed.stdout)
 
 
-def foreign_rules(rendered: str, base: str, env: dict[str, str]) -> list[dict[str, Any]]:
+def foreign_rules(rendered: str, base: str, env: dict[str, str],
+                  cwd: str | None = None) -> list[dict[str, Any]]:
     """Rules the graph will serve that this manifest did not write.
 
     One entry per domain that carries any. An empty list means every domain
@@ -369,13 +373,18 @@ def foreign_rules(rendered: str, base: str, env: dict[str, str]) -> list[dict[st
     """
     findings: list[dict[str, Any]] = []
     for domain, mine in manifest_domains(rendered):
-        served = graph_rules(base, domain, env)
+        served = graph_rules(base, domain, env, cwd)
         if not served:
             continue
         unknown = [r for r in served if r not in mine]
         if unknown:
+            # `cwd` rides the finding because a rule count without its
+            # directory is not a measurement -- `graph_rules`' own docstring
+            # says so, and without it an operator cannot tell a real collision
+            # from a call that read the wrong tier.
             findings.append({"domain": domain, "serving": served,
-                             "foreign": unknown, "manifest": mine})
+                             "foreign": unknown, "manifest": mine,
+                             "cwd": cwd or ""})
     return findings
 
 
@@ -465,11 +474,20 @@ def install(framework_dir: Path | str | None = None,
         # own with `_base_env()` runs in the operator's tier while the rest run
         # in the firm's, and nothing downstream reads differently.
         env = _base_env(workspace)
+        # ONE working directory too, bound beside the one env and for the same
+        # reason (#136). base finds its workspace tier by walking up from the
+        # directory it runs in, so a call left on the caller's directory reads
+        # whatever `.base` sits above it -- on the operator's hub that was his
+        # own global graph. `base_cwd` and `_base_env` share one normalisation,
+        # so the two strings base compares cannot drift.
+        from firm.services.base_domain import base_cwd
+
+        cwd = base_cwd(workspace)
 
         checked = run_utf8(
             [base, "extension", "validate", str(staged)],
             capture_output=True, timeout=60,
-            env=env, stdin=subprocess.DEVNULL)
+            cwd=cwd, env=env, stdin=subprocess.DEVNULL)
         if checked.returncode != 0:
             result["reason"] = ("the manifest did not validate, so nothing was "
                                 f"installed: {(checked.stderr or checked.stdout).strip()[:300]}")
@@ -479,7 +497,7 @@ def install(framework_dir: Path | str | None = None,
         placed = run_utf8(
             [base, "extension", "install", str(staged)],
             capture_output=True, timeout=60,
-            env=env, stdin=subprocess.DEVNULL)
+            cwd=cwd, env=env, stdin=subprocess.DEVNULL)
         if placed.returncode != 0:
             result["reason"] = ("validated but the install failed: "
                                 f"{(placed.stderr or placed.stdout).strip()[:300]}")
@@ -535,7 +553,7 @@ def install(framework_dir: Path | str | None = None,
             ran = run_utf8(
                 [base, "cadre", "--help"],
                 capture_output=True, timeout=60,
-                cwd=str(Path.cwd()), env=env, stdin=subprocess.DEVNULL)
+                cwd=cwd, env=env, stdin=subprocess.DEVNULL)
         except (OSError, subprocess.TimeoutExpired) as exc:
             result["reason"] = f"the handler could not be run: {exc}"
             return result
@@ -564,9 +582,12 @@ def install(framework_dir: Path | str | None = None,
         # the collision is blocking. The install's job is to stop this being
         # SILENT. Whether it should also REFUSE is an open ruling; if it
         # becomes one, it goes here and nowhere else.
-        result["cwd"] = os.getcwd()
+        # The directory the CALLS ran in, not the one the process stood in.
+        # `os.getcwd()` here reported a directory none of the calls used, which
+        # is a recorded value that cannot be used to check the thing it names.
+        result["cwd"] = cwd
         try:
-            found = foreign_rules(rendered, base, env)
+            found = foreign_rules(rendered, base, env, cwd)
         except GraphReadFailed as exc:
             result["graph_read"] = False
             result["reason"] = (

@@ -259,6 +259,84 @@ _SEED_RULE = ("Members of this firm read the firm's own graph before acting and 
               "this one finished.")
 
 
+def _one_spelling(path: Path | str) -> str:
+    """The ONE lexical normalisation both `BASE_HOME` and the working directory
+    pass through, so the two strings base compares can never disagree.
+
+    `os.path.abspath`, and deliberately NOT `Path.resolve()`. Measured on this
+    machine 2026-09-21 with the real `base.exe` 0.15.2:
+
+      * base decides whether to use a tier directly or to WALK by comparing the
+        process's working directory with `<BASE_HOME>/.base-gbl` as
+        `std::path::Path` equality (`config.rs:49-59` at `0ace1bae`). The
+        comparison is byte-wise after component normalisation.
+      * A `BASE_HOME` differing from the on-disk form in the CASE of one
+        directory name made base walk straight out of the tier (probe arm A5).
+        `resolve()` canonicalises case, so resolving one side and not the other
+        reintroduces exactly that. `abspath` preserves case (question 5).
+      * Windows COLLAPSES a `..` component when it sets a child's working
+        directory, while `BASE_HOME` keeps it verbatim (`home.rs:30-34` takes
+        the variable as given). So a `..` on both sides still walked, because
+        the OS rewrote one of them (probe arm A10). `abspath` collapses `..`
+        here, on both sides, before the OS can collapse only one.
+      * A RELATIVE workspace would leave base walking from wherever the process
+        happened to stand, which is this issue. `normpath` does not fix that;
+        `abspath` does (question 5e). For a relative input it joins against the
+        process's directory, which is why the seam RECORDS the value it used.
+
+    One function, called from both `_base_env` and `base_cwd`, because two
+    normalisations are two chances for the pair to drift -- the same reason
+    this module has one env builder and `base_extension` and `base_ready`
+    delegate to it rather than copying it.
+    """
+    return os.path.abspath(str(path))
+
+
+def base_cwd(workspace: Path | str | None = None) -> str:
+    """The directory every `base` call Cadre makes for a firm runs in.
+
+    base takes its GLOBAL tier from `BASE_HOME` and finds a WORKSPACE tier by
+    walking up from the directory the process runs in, and `BASE_HOME` does not
+    move that walk (`config.rs:49-59`, `home.rs:25-46`). So a call that does not
+    name its directory reads whichever `.base` sits above wherever the caller
+    stood. Measured on the operator's Windows machine 2026-09-14: the hub's
+    interpreter ran in `C:/Users/Chris/.base-gbl/scripts`, so the rule listing
+    inside founding's install read his own 37.9 MB global graph as if it were
+    the firm's workspace tier.
+
+    Three rules, and every one of them ends up inside the tier the call's env
+    names:
+
+    1. **A workspace with its own `.base`** gives the workspace itself. The walk
+       starts inside the firm and stops at the firm's `.base`.
+    2. **A workspace with no `.base` yet** gives `<BASE_HOME>/.base-gbl`, which
+       is the one directory base returns WITHOUT walking (`config.rs:50-53`
+       short-circuits when the working directory equals the tier root, and
+       returns it "existing or not"). Without this a firm with no `.base` would
+       climb out of the firm.
+    3. **No workspace** gives the same short-circuit for the tier the env names.
+       That is `founding.py:1082`'s readiness probe, which runs before a firm
+       exists and today stands in `Path.cwd()`.
+
+    THE PROPERTY THIS RESTS ON IS BYTE-IDENTITY, NOT INTENT. Rules 2 and 3 only
+    work because the string returned here and the `BASE_HOME` string in
+    `_base_env` both come from `_one_spelling`. Read that function before
+    changing either: adding a `.resolve()`, an `os.path.realpath`, a `.lower()`
+    or a short-path expansion to one side alone puts the defect back, and it
+    would look like a tidy-up.
+    """
+    if workspace is not None:
+        candidate = Path(workspace)
+        if (candidate / ".base").is_dir():
+            return _one_spelling(candidate)
+        from firm.services.graph_isolation import firm_base_home
+
+        return _one_spelling(firm_base_home(candidate) / ".base-gbl")
+    home = os.environ.get("BASE_HOME")
+    root = Path(home) if home else Path.home()
+    return _one_spelling(root / ".base-gbl")
+
+
 def _base_env(workspace: Path | str | None = None) -> dict[str, str]:
     """Explicit env for every `base` call — a systemd-spawned hub has a bare PATH.
 
@@ -294,7 +372,11 @@ def _base_env(workspace: Path | str | None = None) -> dict[str, str]:
     if workspace is not None:
         from firm.services.graph_isolation import ensure_tier
 
-        env["BASE_HOME"] = str(ensure_tier(workspace))
+        # THROUGH `_one_spelling`, the same function `base_cwd` uses. base
+        # compares this value (plus `/.base-gbl`) with the working directory of
+        # the process it runs in, so the two must be one spelling. See
+        # `_one_spelling` for the three measured ways they used to diverge.
+        env["BASE_HOME"] = _one_spelling(ensure_tier(workspace))
     if os.name == "nt":
         # HOME is not how Windows finds a home directory. `Path.home()` reads
         # USERPROFILE, or HOMEDRIVE+HOMEPATH, and raises RuntimeError when it
@@ -477,7 +559,7 @@ def scaffold_tier(workspace: Path) -> dict[str, Any]:
 
     from firm.sysconfig.service import base_absence_reason
 
-    result: dict[str, Any] = {"scaffolded": False, "detail": ""}
+    result: dict[str, Any] = {"scaffolded": False, "detail": "", "cwd": ""}
 
     # Point every Claude session opened in this firm at the firm's own tier
     # (#117, coverage row 3). Cadre's own calls and the Member runs it spawns
@@ -527,10 +609,15 @@ def scaffold_tier(workspace: Path) -> dict[str, Any]:
 
     try:
         # Explicit env, never ambient — a systemd-spawned hub's PATH is bare.
+        # #136: the directory is named, never inherited. `scaffold` takes an
+        # explicit target so the cwd does not decide where it writes, but it
+        # still reads `<cwd>/.base/base.toml` and the walk still decides which
+        # workspace tier it merges over.
+        result["cwd"] = base_cwd(workspace)
         proc = run_utf8(
             [base, "scaffold", str(workspace)],
             capture_output=True, timeout=120,
-            env=_base_env(workspace),
+            cwd=result["cwd"], env=_base_env(workspace),
         )
         if proc.returncode != 0:
             result["detail"] = (
