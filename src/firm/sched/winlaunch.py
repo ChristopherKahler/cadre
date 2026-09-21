@@ -195,10 +195,31 @@ def main(spec_path: str | os.PathLike[str], log: IO[str], *,
     supervise = bool(spec.get("supervise"))
 
     held = contain()
-    record_containment(Path(spec_path).parent, spec["stem"], held)
+    try:
+        record_containment(Path(spec_path).parent, spec["stem"], held)
+        record_failure = ""
+    except Exception as exc:                    # noqa: BLE001
+        # THE RECORD MUST NOT BE ABLE TO KILL THE PULSE. Anything raised out of
+        # `main` is caught by the stub, written to the log as a traceback, and
+        # exited 3 -- with the command never started. So an unguarded write
+        # here would mean a read-only launcher directory or a full disk stops
+        # the heartbeat, and it would stop it in order to fail to write a note
+        # SAYING the heartbeat is fine.
+        #
+        # It is the same rule the containment itself follows: a host that
+        # cannot make a job still gets its pulse. The record reports a degraded
+        # state; it is never allowed to cause one. What it does instead is say
+        # so in the log, because a `status()` silent about containment with no
+        # reason anywhere is the one outcome an operator cannot act on.
+        record_failure = (
+            f"winlaunch: the containment record could not be written, so "
+            f"`heartbeat status` will not say whether this tree is contained: "
+            f"{exc}")
 
     while True:
         _fresh(log)
+        if record_failure:
+            print(record_failure, file=log, flush=True)
         if held.supported and not held.contained:
             # Inside the loop, AFTER `_fresh`: a supervised command truncates
             # this log on every restart, so a line printed once before the loop

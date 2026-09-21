@@ -350,3 +350,39 @@ def test_k5_containment_off_windows_is_reported_not_pretended(winjob):
     assert got.contained is False
     assert got.reason, "containment failed with no reason given"
     assert got.limit_flags is None
+
+
+def test_k7_a_record_that_cannot_be_written_does_not_kill_the_pulse(
+        winlaunch, winjob, tmp_path, monkeypatch):
+    """The command still runs when the containment record cannot be written.
+
+    Found by reading, not by a failure, and it is the same rule the rest of
+    this file already follows: a host that cannot contain still gets its pulse.
+    A record whose whole job is to REPORT a degraded state must never be able
+    to cause one -- and an unguarded write in the launcher does exactly that,
+    because the stub turns any exception out of `main` into exit 3 with the
+    command never started.
+
+    The failure is still named in the log. Silence here would leave an operator
+    with a pulse that runs and a `status()` that says nothing about
+    containment, with no way to find out why.
+    """
+    spec = _spec(winlaunch, tmp_path)
+    rec = _Recorder(winjob.Containment(contained=True, reason="", limit_flags=0x2000))
+    log = _Log()
+
+    def _explode(directory, stem, held):
+        raise OSError(13, "Permission denied", str(directory))
+
+    monkeypatch.setattr(winlaunch, "record_containment", _explode)
+
+    code = winlaunch.main(spec, log, run=rec.run, contain=rec.contain)
+
+    assert rec.events == ["contain", "run"], (
+        "the command did not run (%r): a launcher that cannot write a note "
+        "about itself killed the pulse it exists to run" % (rec.events,))
+    assert code == 0
+    assert "Permission denied" in log.text, (
+        "the log does not say the containment record could not be written, so "
+        "an operator sees `status()` silent about containment with no reason "
+        "anywhere: %r" % log.text)
