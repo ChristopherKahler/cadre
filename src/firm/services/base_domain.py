@@ -476,6 +476,16 @@ def _base_env(workspace: Path | str | None = None) -> dict[str, str]:
             # a trailing separator or a relative `BASE_HOME` made the pair
             # disagree and base walked out of the tier.
             #
+            # ON WINDOWS a `BASE_HOME` that is rooted but carries no DRIVE
+            # (`/tmp/scratch-tier`) takes the current drive of this process
+            # at the moment this runs. That is deterministic inside a
+            # process, it is the same drive the child's working directory
+            # gets from `base_cwd`, and there is no better source for a
+            # drive the value does not carry -- left alone, the child would
+            # resolve it against whichever drive IT happened to be on, and
+            # the two strings base compares would name different
+            # directories. Measured by CI run 35662050493.
+            #
             # `XDG_CONFIG_HOME` is deliberately left alone: nothing compares
             # it against a working directory, so normalising it would be a
             # change with no measurement behind it.
