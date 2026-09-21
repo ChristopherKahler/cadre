@@ -199,21 +199,32 @@ class TestRunPulseCli:
 
         exit_code = run_pulse(tmp_path)
 
-        assert exit_code == 0
         captured = capsys.readouterr()
         output = json.loads(captured.out)
         assert output["ok"] is False
         assert output["reason"] == "db-not-found"
+        # Was `exit_code == 0` beside `ok is False`, so a scheduler recorded a
+        # pulse that found no firm as a clean run (#128). The code now follows
+        # `ok`; this goes red again the day the branch returns 0.
+        assert exit_code == 1
 
     def test_abort_no_processes(self, tmp_path, capsys):
         from firm.cli.pulse import run_pulse
 
         exit_code = run_pulse(tmp_path, abort=True)
 
-        assert exit_code == 0
         captured = capsys.readouterr()
         output = json.loads(captured.out)
         assert output["aborted"] == 0
+        # tmp_path holds no firm database, so abort could not look at any lock.
+        # This used to print ok: true and exit 0, which told a caller with a
+        # mistyped --workspace that the abort worked while the real firm's
+        # pulse kept running (#128, osprey's G0 item 1). A real firm with
+        # nothing to abort still exits 0, pinned in test_pulse_exit_contract.py.
+        assert output["lock"] == "no-db"
+        assert output["ok"] is False
+        assert output["reason"] == "db-not-found"
+        assert exit_code == 1
 
 
 # ---------------------------------------------------------------------------
@@ -374,9 +385,13 @@ def test_drain_queue_abandons_on_lock_timeout(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(pulse_cli, "_QUEUE_LOCK_WAIT_SEC", 0)
 
     rc = pulse_cli.run_pulse(ws, drain_queue=True)
-    assert rc == 0
     out = _json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert out["drained"] == 1 and out["results"][0]["reason"] == "lock-wait-timeout"
+    # Was `rc == 0` over an abandoned request: the Board's turn never ran and
+    # the scheduler saw a clean exit (#128 U1). The drain now ends through the
+    # same function as every pulse, so its ok and its exit code agree.
+    assert out["ok"] is False
+    assert rc == 1
 
     conn = connect(firm_dir / "firm.db")
     try:
