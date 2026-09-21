@@ -39,11 +39,19 @@ A REMOTE HOLDER IS NEVER TOUCHED. The lock is shared across every machine that
 pulses this firm. A row held from another host belongs to that host's pulse,
 and its TTL frees it if that pulse is dead.
 
-OWED, and recorded rather than done quietly: ``cli/pulse.py``'s
-``_handle_abort`` does the same two things with its own copy of the code, and
-should end up calling this function. It is not changed here because PR 142 is
-open on that file (osprey's ruling, 2026-09-21). Until then the duplication is
-deliberate and this sentence is the record of it.
+PAID. That debt was recorded here rather than left to be found: ``cli/pulse.py``'s
+``_handle_abort`` held its own copy of the same two steps, and was left alone
+only because PR 142 was open on that file (osprey's ruling, 2026-09-21). PR 142
+landed at 18:18 that day, so the copy came out and ``_handle_abort`` now calls
+:func:`release_and_finalize`.
+
+WHAT ABORT KEEPS, because it is abort's and not this module's: signalling the
+holder, counting what it signalled, and telling ``cleared`` (a holder abort
+killed) apart from ``stale-cleared`` (a holder already dead when it looked).
+This module never signals anything. The one behavioural difference between the
+two callers -- whether a LIVE holder's runs get closed -- is the
+``finalize_live_runs`` parameter below, which is why there is one rule here
+instead of two rules in two files that drift apart without a test noticing.
 """
 
 from __future__ import annotations
@@ -125,7 +133,7 @@ def _wait_for_exit(pid: int, seconds: float, sleep: Any = None) -> float:
 
 
 def _finalize_orphans(conn: Any, firm_id: str, *, notes: str,
-                      error: dict) -> list[str]:
+                      error: dict) -> tuple[list[str], list[dict]]:
     """Close every ``member_run`` still marked running for this firm.
 
     Through ``on_run_end`` rather than an UPDATE, so the ``usage_event`` and
@@ -134,6 +142,13 @@ def _finalize_orphans(conn: Any, firm_id: str, *, notes: str,
 
     One bad row never stops the rest. A cleanup that gave up halfway would
     leave a firm in a state nobody asked for and no verb produces.
+
+    Returns ``(closed, failures)``. THE FAILURES ARE RETURNED RATHER THAN
+    SWALLOWED: ``cli/pulse.py`` printed a ``warn`` line for a row it could not
+    close, and this function catching the same exception with nothing said
+    would have turned a loud failure into a silent one the day abort started
+    calling it. A caller that reports ``runs_finalized: []`` with no reason is
+    reporting a clean cleanup over a row still marked running.
     """
     from firm.hooks.run_record import on_run_end
 
@@ -142,20 +157,22 @@ def _finalize_orphans(conn: Any, firm_id: str, *, notes: str,
         (firm_id,),
     ).fetchall()
     closed: list[str] = []
+    failures: list[dict] = []
     for row in rows:
         run_id = row["id"] if hasattr(row, "keys") else row[0]
         try:
             on_run_end(conn, firm_id=firm_id, run_id=run_id,
                        final_status="failed", notes=notes, error=error)
             closed.append(run_id)
-        except Exception:                              # noqa: BLE001
-            continue
-    return closed
+        except Exception as exc:                       # noqa: BLE001
+            failures.append({"run_id": run_id, "error": str(exc)})
+    return closed, failures
 
 
 def release_and_finalize(workspace: Path | str, firm_id: str | None = None, *,
                          by: str, wait_seconds: float = 0.0,
-                         sleep: Any = None) -> dict[str, Any]:
+                         sleep: Any = None,
+                         finalize_live_runs: bool = False) -> dict[str, Any]:
     """Clear this firm's pulse lock and close the runs its dead pulse left open.
 
     *by* names the verb doing it (``"heartbeat disable"``), and it reaches the
@@ -177,6 +194,19 @@ def release_and_finalize(workspace: Path | str, firm_id: str | None = None, *,
                   to close -- a different fact from the key being absent.
     ``reason``    why nothing was done, when nothing was.
     ``waited_seconds``  how long a live holder was given to exit, when one was.
+    ``runs_not_finalized``  present only when a row could not be closed, with
+                  the id and the error for each -- so a caller never reports an
+                  empty ``runs_finalized`` that means "nothing to do" and one
+                  that means "nothing worked" in the same words.
+
+    *finalize_live_runs* NAMES THE ONE DIFFERENCE BETWEEN THIS FUNCTION'S TWO
+    CALLERS, so that difference lives in a parameter instead of in a second
+    copy of the code. ``heartbeat disable`` leaves a live holder's runs alone:
+    that pulse is still working and its runs are not disable's to close.
+    ``firm pulse --abort`` has just signalled the holder and OWNS closing them
+    -- without it the row stays ``running`` for good. THE LOCK GUARD IS NOT
+    AFFECTED EITHER WAY: a live holder's lock is never cleared, whatever this
+    is set to, because clearing it admits a second pulse beside the first.
 
     ONE LIMIT, STATED RATHER THAN LEFT TO BE FOUND. The guard is "clear only
     when the holder is verifiably dead", and the strongest identity available
@@ -238,14 +268,19 @@ def release_and_finalize(workspace: Path | str, firm_id: str | None = None, *,
                         f"process {pid_str} still holds the lock after waiting "
                         f"{waited:.1f}s, so the pulse tree was not contained; "
                         "its own exit releases it")
-                    return result
-                dblock.release(conn, firm_id, holder)
-                result["lock"] = "cleared"
+                    if not finalize_live_runs:
+                        return result
+                else:
+                    dblock.release(conn, firm_id, holder)
+                    result["lock"] = "cleared"
 
-            result["runs_finalized"] = _finalize_orphans(
+            closed, failures = _finalize_orphans(
                 conn, firm_id,
                 notes=f"the pulse was ended by {by}",
                 error={"reason": "pulse-ended", "by": by})
+            result["runs_finalized"] = closed
+            if failures:
+                result["runs_not_finalized"] = failures
             conn.commit()
         finally:
             conn.close()
