@@ -500,3 +500,41 @@ def test_l6_abort_carries_an_unclosed_row_in_its_result_not_on_its_own_line(
         {"run_id": "RUN-001", "error": "unwritable"}], out
     assert out["lock"] == "stale-cleared", out
     assert rc == 0
+
+
+def test_l7_a_remote_database_is_not_a_missing_one(cleanup, tmp_path,
+                                                   monkeypatch):
+    """avocet's FINDING 5, and my abort refactor is what would ship it.
+
+    This module decides there is no database from the local .firm/firm.db file
+    alone. Four sites in src already pair that file check with
+    `db_is_remote()` before concluding anything -- including `cli/pulse.py`
+    inside `_handle_abort` itself. avocet measured the gap: the same empty
+    workspace with CADRE_DB_URL unset and then set returns the IDENTICAL
+    answer, `lock: no-db`, so the flag changes nothing.
+
+    On its own that was a gap in `heartbeat disable`. The moment `--abort`
+    delegates here it becomes a REGRESSION IN ABORT: abort passes its own
+    two-part guard on a shared database, hands over, and is told there is no
+    database at all -- so a firm on a shared database gets its lock left
+    wedged and is told it has no firm.
+
+    The assertion is `is not no-db` rather than a specific outcome on purpose.
+    What this leg owns is that a REMOTE database and a MISSING one stop being
+    the same answer; what happens next belongs to whatever the connection
+    does, and a test that pinned a fabricated remote result would be measuring
+    its own stub.
+    """
+    monkeypatch.setenv("CADRE_DB_URL", "libsql://example.invalid")
+
+    from firm.core.db import db_is_remote
+
+    assert db_is_remote(), (
+        "precondition: the flag did not move, so this arm proves nothing")
+
+    out = cleanup.release_and_finalize(tmp_path / "no-local-file", FIRM,
+                                       by="firm pulse --abort")
+
+    assert out["lock"] != "no-db", (
+        "a firm on a shared remote database was told it has no database, so "
+        "its pulse lock is left wedged for the full TTL")
