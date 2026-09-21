@@ -83,13 +83,13 @@ def _base() -> tuple[str | None, str]:
 
 
 def _run(workspace: Path, args: list[str], timeout: int = 30):
-    from firm.services.base_domain import _base_env
+    from firm.services.base_domain import _base_env, base_cwd
 
     binary, absent = _base()
     if not binary:
         raise FileNotFoundError(absent)
     return run_utf8([binary, "relay", *args], capture_output=True,
-                    timeout=timeout, cwd=str(workspace),
+                    timeout=timeout, cwd=base_cwd(workspace),
                     env=_base_env(workspace), stdin=subprocess.DEVNULL)
 
 

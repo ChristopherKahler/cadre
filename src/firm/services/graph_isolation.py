@@ -69,6 +69,15 @@ def _as_path(workspace: Path | str) -> Path:
     'WindowsPath' on your system" before reaching the assertion. Dividing an
     existing Path keeps its flavour, so the arm runs on every leg of CI instead
     of quietly covering nothing off its native platform.
+
+    IT MUST ALSO NOT CANONICALISE. Everything base compares -- the firm's
+    `BASE_HOME` and the working directory Cadre hands the child -- is built
+    from what this function returns, and the ONE normalisation both of those
+    strings pass through lives in `base_domain._one_spelling`. A second one
+    here would apply to only some of the paths and would put back exactly the
+    disagreement #136 closes, which is why a `.resolve()` or an
+    `os.path.realpath` added to this line would not be the tidy-up it looks
+    like.
     """
     return workspace if isinstance(workspace, Path) else Path(workspace)
 
