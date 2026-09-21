@@ -14,6 +14,7 @@ way ships a firm whose graph reaches nobody.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -255,16 +256,73 @@ def test_a_call_against_a_firm_is_pinned_to_that_firms_own_tier(monkeypatch, wir
     assert seen.get("BASE_HOME") == str(wired / ".firm" / "base-home")
 
 
-def test_a_call_with_no_firm_still_carries_the_ambient_tier(monkeypatch):
+def test_a_call_with_no_firm_still_carries_the_ambient_tier(monkeypatch, tmp_path):
     """The half of the old claim that survives, and the control on the one above.
 
     Without this, "the firm always wins" could be built as an unconditional
     overwrite, and every caller with no firm to isolate -- `extension install`,
     the fence in conftest -- would silently lose the tier it deliberately set.
     """
-    monkeypatch.setenv("BASE_HOME", "/tmp/scratch-tier")
+    ambient = str(tmp_path / "scratch-tier")
+    monkeypatch.setenv("BASE_HOME", ambient)
 
-    assert base_domain._base_env().get("BASE_HOME") == "/tmp/scratch-tier"
+    # A CANONICAL ABSOLUTE PATH FOR THE PLATFORM THIS RUNS ON, and no longer
+    # the literal "/tmp/scratch-tier". That literal is rooted with no DRIVE,
+    # and since #136 the passthrough sends `BASE_HOME` through
+    # `_one_spelling`, so `os.path.abspath` attaches the process's current
+    # drive on Windows and the value comes back `D:\tmp\scratch-tier`.
+    # Measured: CI run 35662050493, job `suite (windows-latest)`, the only
+    # failure in 2571 passed; ubuntu and macos were green because there the
+    # literal is already complete.
+    #
+    # `tmp_path` is absolute and drive-qualified on every platform CI runs, so
+    # normalisation leaves it byte-identical and the assertion still fails the
+    # moment an ambient tier is overwritten or dropped -- which is the whole
+    # point of the leg. It deliberately does NOT run its own input through
+    # `abspath` or `_one_spelling`: a leg that computed the fix's answer could
+    # never fail, whatever the fix did.
+    assert base_domain._base_env().get("BASE_HOME") == ambient
+
+
+def test_a_rooted_ambient_tier_with_no_drive_comes_back_drive_qualified(
+        monkeypatch):
+    """Windows: `/tmp/x` gains a drive, and it is the drive this process is on.
+
+    The behaviour the leg above stopped asserting, said out loud here rather
+    than left as something only a CI failure knows about. `BASE_HOME` and the
+    working directory `base_cwd` hands the child are compared by base as
+    `std::path::Path` equality, so a value missing a drive is not one spelling:
+    the child would resolve it against whatever drive IT was on. Attaching the
+    drive here removes that ambiguity at the only point where both strings are
+    still in Cadre's hands.
+
+    Gated on the MECHANISM rather than on a platform name: a rooted path with
+    no drive is a Windows shape, and on POSIX `/tmp/scratch-tier` is already
+    complete, so this arm would assert that nothing happened.
+    """
+    if os.name != "nt":
+        pytest.skip(
+            "a rooted path with no drive is a Windows shape; on POSIX "
+            "'/tmp/scratch-tier' is already a complete path and this arm would "
+            "be asserting that nothing happened")
+    driveless = "/tmp/scratch-tier"
+    monkeypatch.setenv("BASE_HOME", driveless)
+
+    got = base_domain._base_env().get("BASE_HOME")
+    drive, tail = os.path.splitdrive(got or "")
+
+    assert drive, (
+        "a rooted BASE_HOME with no drive came back with no drive either (%r), "
+        "so base and the child could resolve it against different drives" % got)
+    assert drive == os.path.splitdrive(os.getcwd())[0], (
+        "the drive attached (%r) is not the one this process is on (%r); the "
+        "value has to land on the same drive the child's working directory "
+        "gets, and the process's own is the only source for one the value does "
+        "not carry" % (drive, os.path.splitdrive(os.getcwd())[0]))
+    assert tail == os.path.normpath(driveless), (
+        "the path under the drive is %r, not %r -- the drive was attached but "
+        "the directory named is a different one"
+        % (tail, os.path.normpath(driveless)))
 
 
 # ---------------------------------------------------------------------------

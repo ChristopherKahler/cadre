@@ -128,15 +128,25 @@ def _blank() -> dict[str, Any]:
 
 
 def _probe_cwd(workspace: Path | str | None) -> str:
-    """The directory every probe stands in, named out loud (see module docstring)."""
-    if workspace is not None:
-        candidate = Path(workspace)
-        if candidate.is_dir():
-            return str(candidate)
-    try:
-        return str(Path.cwd())
-    except OSError:
-        return ""
+    """The directory every probe stands in, named out loud (see module docstring).
+
+    #136: the no-workspace branch used to stand in `Path.cwd()`, which is the
+    caller's directory and decides which workspace tier base resolves. On the
+    Windows hub that directory sat inside the operator's own global tier, so the
+    probe reported on the operator's graph rather than on anything about this
+    firm. It now asks the seam, which returns the tier the call's env names -- a
+    directory base short-circuits to instead of walking from. The measured path
+    is on #136 and in its fork document, deliberately not here.
+    """
+    from firm.services.base_domain import base_cwd
+
+    # `create=False`: THIS MODULE WRITES NOTHING. A readiness probe that made
+    # the tier it is reporting on would answer a different question, and
+    # `test_a_firm_with_no_tier_is_reported_and_no_tier_is_created` is the guard
+    # that says so. With no tier the seam hands back the firm itself, which
+    # exists and is inside the firm; what it never hands back is the caller's
+    # own directory, which is what this row used to report.
+    return base_cwd(workspace, create=False)
 
 
 def _env(workspace: Path | str | None) -> dict[str, str]:

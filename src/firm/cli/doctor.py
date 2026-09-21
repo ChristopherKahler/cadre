@@ -410,8 +410,11 @@ def diagnose(workspace: Path, firm_id: str, *,
                 # this card reports on the operator's tier, which no Member of
                 # this firm uses: clean over a firm that collides, and a
                 # collision over a firm that is clean.
+                from firm.services.base_domain import base_cwd as _base_cwd
+
                 _foreign = _base_extension.foreign_rules(
-                    _rendered, _base_bin, _base_extension._base_env(workspace))
+                    _rendered, _base_bin,
+                    _base_extension._base_env(workspace), _base_cwd(workspace))
             except _base_extension.GraphReadFailed as _exc:
                 # A zero here would mean "I could not see", which reads
                 # identically to "nothing is wrong". Say undeterminable.
