@@ -47,6 +47,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -393,6 +394,60 @@ def test_a_case_flipped_workspace_still_holds_byte_identity(
         assert call["cwd"] == str(call["base_home"]) + os.sep + _TIER, (
             "%s: cwd %r is not BASE_HOME %r plus the tier"
             % (call["verb"], call["cwd"], call["base_home"]))
+
+
+# ---------------------------------------------------------------------------
+# The OS side. THE ONLY LEG HERE THAT SEES IT.
+# ---------------------------------------------------------------------------
+
+def test_the_directory_the_seam_hands_out_survives_being_set_on_a_child(
+        tmp_path, stub_base):
+    """A child started in the seam's directory must REPORT that same directory.
+
+    THIS IS THE ONE LEG THAT SEES THE OPERATING SYSTEM. Every other leg in this
+    file reads the string Cadre PASSED, through a spy on `subprocess.run`, and
+    can never see what the child ends up with. So an OS that rewrites the
+    working directory it is handed leaves every one of them green while base
+    walks out of the tier in production.
+
+    That is not hypothetical. Probe arm A10, measured 2026-09-21 with the real
+    `base.exe` 0.15.2: Windows COLLAPSES a `..` component when it sets a child's
+    working directory, while `BASE_HOME` keeps the `..` verbatim
+    (`home.rs:30-34`). Both of Cadre's own strings agreed, byte for byte, and
+    base still walked -- because the OS had rewritten one of them after Cadre
+    let go of it. Arm A10n, same tree with both sides normalised, did not walk.
+
+    So the seam normalises `..` away itself, before the OS can do it to one side
+    only, and this leg is what proves the normalisation is still there. It is
+    the leg mutation (e) has to redden: with the `abspath` removed the seam hands
+    out a `..`-carrying directory, the child reports the collapsed form, and
+    these two strings stop matching.
+
+    A real child, deliberately: `subprocess.run` is spied everywhere else in
+    this file, and a spy cannot tell you anything about the OS.
+    """
+    ws = _firm(tmp_path, with_base_dir=False)
+    handed = base_domain.base_cwd(non_canonical(ws))
+
+    probe = subprocess.run(
+        [sys.executable, "-c", "import os; print(os.getcwd())"],
+        capture_output=True, text=True, cwd=handed, timeout=60)
+
+    # Control first: a leg that reports nothing about a child that never ran is
+    # not a measurement (law 23).
+    assert probe.returncode == 0, (
+        "the probe child did not run, so this leg measured nothing: rc %s, %r"
+        % (probe.returncode, probe.stderr))
+    reported = (probe.stdout or "").strip()
+    assert reported, "the probe child printed nothing"
+
+    assert reported == handed, (
+        "the seam handed out %r and the child ended up in %r.\n"
+        "base compares the directory it runs in against BASE_HOME plus the "
+        "tier, as Path equality, so a directory the OS rewrote after Cadre "
+        "chose it makes those two disagree and base walks -- with Cadre's own "
+        "two strings byte-identical. This is probe arm A10."
+        % (handed, reported))
 
 
 # ---------------------------------------------------------------------------

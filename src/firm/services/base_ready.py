@@ -139,7 +139,13 @@ def _probe_cwd(workspace: Path | str | None) -> str:
     """
     from firm.services.base_domain import base_cwd
 
-    return base_cwd(workspace)
+    # `create=False`: THIS MODULE WRITES NOTHING. A readiness probe that made
+    # the tier it is reporting on would answer a different question, and
+    # `test_a_firm_with_no_tier_is_reported_and_no_tier_is_created` is the guard
+    # that says so. With no tier the seam hands back the firm itself, which
+    # exists and is inside the firm; what it never hands back is the caller's
+    # own directory, which is what this row used to report.
+    return base_cwd(workspace, create=False)
 
 
 def _env(workspace: Path | str | None) -> dict[str, str]:

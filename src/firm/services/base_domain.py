@@ -292,7 +292,58 @@ def _one_spelling(path: Path | str) -> str:
     return os.path.abspath(str(path))
 
 
-def base_cwd(workspace: Path | str | None = None) -> str:
+def _existing(tier: Path, create: bool) -> str:
+    """The tier directory, created if it is not there, as one spelling.
+
+    base RETURNS this path whether or not it exists -- `config.rs:36-37` says
+    "existing or not" -- but Cadre does not merely name it, it starts a process
+    in it, and `subprocess` raises FileNotFoundError for a working directory
+    that is absent. So mirroring base's wording literally meant the base call
+    did not run at all:
+
+        FileNotFoundError: [Errno 2] No such file or directory:
+        '.../firms/acme/.firm/base-home/.base-gbl'
+
+    Found by the A10 real-child leg on its first run. Inside `install` the
+    fault was invisible, because `_base_env` runs first and `ensure_tier`
+    creates the directory as a side effect -- so the seam worked there by an
+    ordering nothing stated, and broke for any caller that reached it first.
+
+    Created here for the same reason `_base_env` creates the tier it names:
+    this is the one place every base subprocess in this package gets its
+    directory from, and creating it here is what removes the dependency on
+    which of the two functions a caller happens to call first. `exist_ok`, so
+    it is idempotent, and only ever inside the tier the call's env already
+    names.
+    """
+    if create:
+        tier.mkdir(parents=True, exist_ok=True)
+        return _one_spelling(tier)
+    # A READER MUST NOT CREATE WHAT IT REPORTS ON. `base_ready` asks whether
+    # base runs and whether this firm's extension is installed; its `_env`
+    # docstring states that the module writes nothing, and
+    # `test_a_firm_with_no_tier_is_reported_and_no_tier_is_created` enforces it.
+    # A probe that made the tier would turn "this firm has no tier" into "this
+    # firm has an empty tier", which is a different answer to a different
+    # question.
+    #
+    # With the tier absent there is no directory inside the firm that base
+    # short-circuits to, so the caller gets the firm itself: it exists, it is
+    # deterministic, it is recorded, and it is inside the firm. base will walk
+    # up from it, which is what rule 2 exists to stop for a call that WRITES --
+    # and the probe's two verbs, `--version` and `cadre --help`, read no
+    # workspace tier at all (base's command registry is global only:
+    # `plugin/mod.rs:654-665`, `extension/mod.rs:279-285`). What it is NOT is
+    # the caller's own arbitrary directory, which is what this issue is about
+    # and what `probe_cwd` reported before.
+    if tier.is_dir():
+        return _one_spelling(tier)
+    return _one_spelling(tier.parent.parent.parent if tier.name == ".base-gbl"
+                         else tier)
+
+
+def base_cwd(workspace: Path | str | None = None, *,
+             create: bool = True) -> str:
     """The directory every `base` call Cadre makes for a firm runs in.
 
     base takes its GLOBAL tier from `BASE_HOME` and finds a WORKSPACE tier by
@@ -331,10 +382,10 @@ def base_cwd(workspace: Path | str | None = None) -> str:
             return _one_spelling(candidate)
         from firm.services.graph_isolation import firm_base_home
 
-        return _one_spelling(firm_base_home(candidate) / ".base-gbl")
+        return _existing(firm_base_home(candidate) / ".base-gbl", create)
     home = os.environ.get("BASE_HOME")
     root = Path(home) if home else Path.home()
-    return _one_spelling(root / ".base-gbl")
+    return _existing(root / ".base-gbl", create)
 
 
 def _base_env(workspace: Path | str | None = None) -> dict[str, str]:
