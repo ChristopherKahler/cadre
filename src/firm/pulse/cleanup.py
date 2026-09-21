@@ -218,12 +218,21 @@ def release_and_finalize(workspace: Path | str, firm_id: str | None = None, *,
     a start time to the holder identity would close it properly and belongs to
     ``dblock``, not here.
     """
-    from firm.core.db import connect, get_db_path
+    from firm.core.db import connect, db_is_remote, get_db_path
 
     result: dict[str, Any] = {"lock": NO_LOCK, "runs_finalized": []}
     try:
         db_path = get_db_path(Path(workspace))
-        if not db_path.exists():
+        # A REMOTE DATABASE IS NOT A MISSING ONE. The local file is absent by
+        # design when the firm's rows live on a shared database, and deciding
+        # from that file alone told a firm on CADRE_DB_URL that it has no
+        # database at all -- leaving its pulse lock wedged for the full TTL
+        # (avocet, #146 FINDING 5). The same two-part guard is already used at
+        # `pulse/environment.py`, `cli/pulse.py` in `run_pulse`, and in
+        # `_handle_abort` itself -- which is what made this a REGRESSION rather
+        # than a gap the moment abort started delegating here: abort passes its
+        # own guard on a shared database and was then told there was none.
+        if not db_is_remote() and not db_path.exists():
             result["lock"] = "no-db"
             result["reason"] = f"no firm database at {db_path}"
             return result
