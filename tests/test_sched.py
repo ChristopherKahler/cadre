@@ -673,3 +673,42 @@ def test_unit_files_are_utf8_whatever_the_locale_is(tmp_path, monkeypatch):
         raw = (tmp_path / ("enc-probe" + suffix)).read_bytes()
         assert name in raw.decode("utf-8"), (
             suffix + " was not written as UTF-8: " + repr(raw[:200]))
+
+
+def test_winsched_remove_takes_the_containment_record_too(tmp_path, ok_cmd):
+    """DoD D5: remove leaves nothing. #141 added a file it did not know about.
+
+    avocet's FINDING 4, and it is a REGRESSION rather than a gap: before #141
+    the launcher directory held the stub, the spec, the log and, on an upgraded
+    install, the old .cmd -- remove took all four, the directory was then empty
+    and remove deleted the directory too. #141 writes `<stem>.containment.json`
+    beside them, remove does not name it, so the file survives, the directory
+    is no longer empty, and THE DIRECTORY IS NO LONGER REMOVED. A behaviour
+    that used to hold stopped holding, and nothing said so.
+
+    The assertion is on the DIRECTORY, not only on the file. Asserting the file
+    is gone would pass the day someone deletes it by a second spelling of its
+    name; the directory being gone is the property D5 actually states, and it
+    can only be true when every file this scheduler wrote has been taken.
+
+    The name comes from `winlaunch.containment_path`, the one producer of it,
+    so this leg cannot drift from the writer the way remove's own list did.
+    """
+    launchers = tmp_path / "sched"
+    launchers.mkdir()
+    stem = "cadre-heartbeat-lab"
+    record = winlaunch.containment_path(launchers, stem)
+    mine = [f"{stem}.pyw", f"{stem}.json", f"{stem}.log", f"{stem}.cmd",
+            record.name]
+    for name in mine:
+        (launchers / name).write_text("x", encoding="utf-8")
+
+    out = WindowsScheduler(launcher_dir=launchers).remove(stem)
+
+    assert record.name in out["removed"], (
+        f"the containment record is not in what remove reports it took: "
+        f"{out['removed']}")
+    assert not launchers.exists(), (
+        f"the launcher directory survived remove because "
+        f"{sorted(p.name for p in launchers.iterdir())} was left in it; before "
+        f"#141 this directory was deleted and D5 says remove leaves nothing")
