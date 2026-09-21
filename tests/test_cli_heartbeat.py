@@ -298,3 +298,50 @@ def test_status_says_nothing_about_containment_when_the_layer_below_does_not(
         assert key not in entry, (
             f"{key} was invented for a scheduler that never answered it: "
             f"{entry}")
+
+
+def test_status_carries_a_CONTAINED_tree_through_with_its_flags(
+        tmp_path, capsys, monkeypatch):
+    """The other arm, and the one that makes the first one able to fail.
+
+    avocet's FINDING 6, measured as mutations on a 23-file set: `run_status`
+    could report EVERY contained tree as not contained (N2) and drop
+    `containment_flags` entirely (N1) with 0 legs red. A single arm that only
+    ever looks at an uncontained tree cannot catch a copy that hard-codes
+    False, because False is what it expects.
+
+    So the good case is asserted too: contained TRUE, with the flags the
+    kernel agreed to. `contained` and `contained is True` are different
+    assertions here -- the first passes on the string "no", which is what a
+    copy through the wrong key would produce.
+    """
+    ws = _workspace_with_db(tmp_path)
+    unit_dir = tmp_path / "units"
+    unit_dir.mkdir()
+
+    class _Sched:
+        name = "winsched"
+
+        def list_installed(self, prefix):
+            return [prefix + "lab"]
+
+        def status(self, stem):
+            return {"installed": True, "state": "ready", "failed": False,
+                    "workdir": str(ws), "contained": True,
+                    "containment_reason": "",
+                    "containment_flags": "0x00002000"}
+
+    monkeypatch.setattr(hb, "_sched", lambda unit_dir=None: _Sched())
+    monkeypatch.setattr(hb, "_service_python", lambda stem, unit_dir: None)
+
+    rc = hb.run_status(unit_dir=unit_dir)
+
+    assert rc == 0
+    entry = json.loads(capsys.readouterr().out)["heartbeats"][0]
+    assert entry.get("contained") is True, (
+        f"a CONTAINED tree is not reported as contained to the operator; "
+        f"the entry said {entry.get('contained')!r}")
+    assert entry.get("containment_flags") == "0x00002000", (
+        f"the flags the kernel agreed to never reach the operator: {entry}")
+    assert entry.get("containment_reason") == "", (
+        f"a contained tree grew a reason it does not have: {entry}")
