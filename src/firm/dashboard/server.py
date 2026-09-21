@@ -2911,7 +2911,10 @@ def hub_summary(firms: dict[str, dict[str, Any]],
             ).fetchone()[0]
             firm_row = repo.get(conn, "firm", fid) or {}
             founded = firm_row.get("created_at")
-            schedule = firm_row.get("schedule")
+            # The cadence is firm.pulse_interval (#134). firm.schedule is the
+            # firm's business hours: when it may work, never whether anything
+            # will wake it.
+            cadence = firm_row.get("pulse_interval")
         finally:
             conn.close()
         cards.append({
@@ -2922,8 +2925,9 @@ def hub_summary(firms: dict[str, dict[str, Any]],
             # operational", a different state from "healthy and idle", and
             # the whole portfolio sat in the first while wearing the second
             # (fork 005). Manual-only Boards read it as a statement of fact.
-            "schedule": schedule,
-            "operational": bool(schedule),
+            # The key keeps its old name for the payload's readers.
+            "schedule": cadence,
+            "operational": bool(cadence),
             "workspace": str(info["workspace"]),
             "needs_you": len(gates) + len(escalations),
             "gates_pending": len(gates),
