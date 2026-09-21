@@ -386,3 +386,123 @@ def test_k7_a_record_that_cannot_be_written_does_not_kill_the_pulse(
         "the log does not say the containment record could not be written, so "
         "an operator sees `status()` silent about containment with no reason "
         "anywhere: %r" % log.text)
+
+
+# ---------------------------------------------------------------------------
+# K8 -- reading the job's flags can never stop the pulse (avocet's FINDING 1)
+# ---------------------------------------------------------------------------
+#
+# K7 guarded the containment RECORD so a launcher directory that cannot be
+# written does not stop the heartbeat. The call ONE LINE ABOVE it was left
+# bare, and `contain_this_process` promises "Never raises" while calling
+# `job_limit_flags` unguarded twice -- once for a job it already holds, once
+# for the job it has just made. `job_limit_flags` raises `OSError` the moment
+# `QueryInformationJobObject` fails.
+#
+# avocet measured the consequence on the real stub: with that query made to
+# fail, the launcher exits 3 with THE COMMAND NEVER STARTED, traceback at
+# `winjob.py:198`; the unmutated control exits 0. So the mechanism that exists
+# to stop a pulse outliving its task would instead stop the pulse from ever
+# running -- and it would do it while reporting nothing, because the reason
+# lives in a traceback the stub writes to a log that the next supervised run
+# truncates.
+#
+# THE RULE, and it is the same one K7 follows: a host that cannot contain still
+# gets its pulse. Containment is a property the launcher reports, never a
+# precondition it enforces. These arms hold that rule at all three sites.
+#
+# NOTHING HERE ASSIGNS THE TEST RUNNER TO A JOB. That is this file's standing
+# refusal -- pytest in a kill-on-close job ends its own children when the
+# handle closes -- so the flag read is exercised through the one-line helper
+# that both call sites go through, which needs no job and no platform.
+
+
+def test_k8_a_flag_read_that_fails_answers_with_none_and_a_reason(winjob,
+                                                                  monkeypatch):
+    """The helper both call sites go through. It cannot raise.
+
+    Asserted on the helper rather than only through `contain_this_process`
+    because the two call sites are what the defect was: one of them raising is
+    enough, and a test that only drives the easy path would have passed over
+    the one avocet measured.
+    """
+    def _boom(handle):
+        raise OSError("QueryInformationJobObject failed, GetLastError=5")
+
+    monkeypatch.setattr(winjob, "job_limit_flags", _boom)
+
+    flags, reason = winjob._flags_or_none(object())
+
+    assert flags is None, flags
+    assert "QueryInformationJobObject" in reason, (
+        "the flags could not be read and the reason does not name the call "
+        "that failed, so an operator reading the record learns nothing")
+
+
+def test_k8_containment_survives_a_flag_read_that_fails_on_a_held_job(
+        winjob, monkeypatch):
+    """The idempotent path: a second call for a job this process already holds.
+
+    The process IS in the job -- that was settled on the first call -- so it is
+    contained, and the only thing missing is the number. `contained: true` with
+    `limit_flags: null` and a reason is the honest record; an exception here is
+    the launcher killing its own pulse over a failed read of a field it only
+    prints.
+    """
+    def _boom(handle):
+        raise OSError("QueryInformationJobObject failed, GetLastError=5")
+
+    monkeypatch.setattr(winjob, "_WINDOWS", True)
+    monkeypatch.setattr(winjob, "_held", object())
+    monkeypatch.setattr(winjob, "job_limit_flags", _boom)
+
+    held = winjob.contain_this_process()
+
+    assert held.contained is True, (
+        "a process already inside its job was reported UNCONTAINED because a "
+        "read of the job's flags failed")
+    assert held.limit_flags is None
+    assert held.reason, "the degraded read left no reason anywhere"
+
+
+def test_k8_the_launcher_runs_its_command_when_contain_itself_raises(
+        winlaunch, tmp_path):
+    """The outermost guard, and the one avocet's mutation actually tripped.
+
+    `winlaunch.main` called `contain()` bare. `contain_this_process` says it
+    never raises, and the two unguarded flag reads made that untrue -- but the
+    launcher must not depend on that promise being kept, because the cost of it
+    being broken is every scheduled pulse on the machine. A raise from
+    containment is recorded and the command runs.
+    """
+    spec = tmp_path / "k8.json"
+    ran = tmp_path / "k8.ran"
+    spec.write_text(json.dumps({
+        "stem": "k8", "argv": ["unused"], "env": {}, "cwd": str(tmp_path),
+        "supervise": False}), encoding="utf-8")
+
+    def _boom():
+        raise OSError("QueryInformationJobObject failed, GetLastError=5")
+
+    class _Done:
+        returncode = 0
+
+    def _run(argv, **kwargs):
+        ran.write_text("yes", encoding="utf-8")
+        return _Done()
+
+    with open(tmp_path / "k8.log", "w", encoding="utf-8") as log:
+        code = winlaunch.main(spec, log, run=_run, contain=_boom)
+
+    assert ran.exists(), (
+        "containment raised and the command never started, so the mechanism "
+        "that stops a pulse outliving its task stopped the pulse instead")
+    assert code == 0
+    log_text = (tmp_path / "k8.log").read_text(encoding="utf-8")
+    assert "QueryInformationJobObject" in log_text, (
+        "the containment failure is nowhere in the log, so the launcher ran "
+        "the pulse and told nobody the tree is unprotected")
+    record = json.loads(
+        winlaunch.containment_path(tmp_path, "k8").read_text(encoding="utf-8"))
+    assert record["contained"] is False, record
+    assert "QueryInformationJobObject" in record["reason"], record
