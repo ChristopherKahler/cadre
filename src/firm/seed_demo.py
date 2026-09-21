@@ -109,13 +109,19 @@ def seed_demo(conn: sqlite3.Connection) -> dict[str, str]:
         })
     ids["project"] = "PRJ-001"
 
-    # Intentionally unclaimed — demonstrates detect_gaps on first run.
+    # Unclaimed on purpose, so detect_gaps has something to surface on first run
+    # (it reads claimed_by). Assigned to the Writer on purpose too: compute_load
+    # only counts a Unit that is claimed by or assigned to a Member, so an
+    # unassigned one left every Member at load=0 and the demo firm's pulse
+    # dispatched nobody while reporting ok (issue #119). founding.py assigns its
+    # first units for the same reason.
     if not repo.get(conn, "unit", "UNT-001"):
         repo.create(conn, "unit", {
             "id": "UNT-001",
             "firm_id": "demo",
             "project_id": "PRJ-001",
             "name": "Write the welcome post",
+            "assignee_member_id": "MEM-001",
             "status": "pending",
             "depends_on": json.dumps([]),
             "acceptance_criteria": json.dumps([
