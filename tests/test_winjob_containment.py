@@ -190,10 +190,30 @@ def test_k3_a_launcher_that_cannot_be_contained_says_so_and_still_runs(
 # K4 -- an operator asking about the heartbeat is told
 # ---------------------------------------------------------------------------
 
-def test_k4_status_reports_a_tree_that_is_not_contained_and_why(tmp_path):
+def _task_looks_installed(monkeypatch):
+    """schtasks answers as it does for a task that exists and has never run.
+
+    Needed because `status()` stops at `installed: False` when schtasks does not
+    know the task, and it is right to: containment is not a fact about a task
+    that does not exist. The first draft of the K4 leg asked about a task
+    nobody had installed, which is why it stayed red after the fix -- the
+    leg's INPUT was wrong, not its assertion, and the assertion below is
+    unchanged from the red commit.
+    """
+    def _fake(cmd, timeout=None):
+        return 0, ("TaskName: \\Cadre\\%s\n"
+                   "Status: Ready\n"
+                   "Last Result: 267011\n" % STEM)
+
+    monkeypatch.setattr("firm.sched.winsched.run_cmd", _fake)
+
+
+def test_k4_status_reports_a_tree_that_is_not_contained_and_why(
+        tmp_path, monkeypatch):
     """`status()` carries containment, so condition C3 has somewhere to land."""
     from firm.sched.winsched import WindowsScheduler
 
+    _task_looks_installed(monkeypatch)
     sched = WindowsScheduler(launcher_dir=tmp_path / "sched")
     (tmp_path / "sched").mkdir(parents=True, exist_ok=True)
     (tmp_path / "sched" / f"{STEM}.containment.json").write_text(json.dumps({
@@ -213,7 +233,7 @@ def test_k4_status_reports_a_tree_that_is_not_contained_and_why(tmp_path):
 
 
 def test_k4_status_without_a_containment_record_says_unknown_not_contained(
-        tmp_path):
+        tmp_path, monkeypatch):
     """Absent is not False. A task installed before this shipped has no record.
 
     Reporting "not contained" for a task whose launcher never wrote a record
@@ -223,6 +243,7 @@ def test_k4_status_without_a_containment_record_says_unknown_not_contained(
     """
     from firm.sched.winsched import WindowsScheduler
 
+    _task_looks_installed(monkeypatch)
     sched = WindowsScheduler(launcher_dir=tmp_path / "sched")
     (tmp_path / "sched").mkdir(parents=True, exist_ok=True)
 
@@ -271,6 +292,46 @@ def test_k5_the_product_job_is_kill_on_close_with_neither_breakaway_flag(winjob)
     assert not flags & winjob.JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK, (
         "SILENT_BREAKAWAY_OK is set (0x%08x); a child would leave the job "
         "without even failing, so nothing would notice" % flags)
+
+
+def test_k6_a_host_with_no_job_objects_is_absent_not_failed(winjob, winlaunch,
+                                                            tmp_path):
+    """NEW IN THE FIX COMMIT, and it is here because the fix needed it.
+
+    The first version of this change printed "the pulse tree is NOT contained"
+    into every launcher log on a host with no job objects, and two existing legs
+    caught it: they assert a launcher's log holds exactly its command's bytes,
+    and they were right to. Absent is not failed. A Windows machine whose job
+    could not be made has a problem an operator can act on; a host whose kernel
+    has no job objects has nothing to fix and is not running this scheduler in
+    the first place.
+
+    So `Containment.supported` is the third state, and the log line fires only
+    where the mechanism exists. The RECORD still says not contained, with the
+    reason, everywhere -- condition C3 is about the record, and it is unchanged.
+    """
+    spec = _spec(winlaunch, tmp_path)
+    unsupported = winjob.Containment(
+        contained=False, reason="no job objects on this host", supported=False)
+    rec = _Recorder(unsupported)
+    log = _Log()
+
+    winlaunch.main(spec, log, run=rec.run, contain=rec.contain)
+
+    assert log.text == "", (
+        "the launcher wrote %r into the log on a host that has no job objects "
+        "to begin with; a log an operator opens should hold the command's "
+        "output, not a standing complaint about a kernel feature this host "
+        "never had" % log.text)
+    got = json.loads((tmp_path / "sched" / f"{STEM}.containment.json")
+                     .read_text(encoding="utf-8"))
+    assert got["contained"] is False, (
+        "an unsupported host reported itself contained, which is a claim "
+        "nothing backs")
+    assert got["supported"] is False, (
+        "the record does not distinguish a host without the mechanism from one "
+        "where it failed, so an operator cannot tell which they have")
+    assert got["reason"], "not contained, with no reason given"
 
 
 def test_k5_containment_off_windows_is_reported_not_pretended(winjob):
