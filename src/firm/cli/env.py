@@ -14,6 +14,7 @@ import os
 import sys
 from pathlib import Path
 
+from firm.core.proc import exec_in_place
 from firm.secrets.provider import (
     FIRM_TIER,
     GLOBAL_TIER,
@@ -94,7 +95,8 @@ def run_env_exec(workspace: Path, cmd: list[str]) -> int:
     env = dict(merged)
     env.update(os.environ)
     try:
-        os.execvpe(cmd[0], cmd, env)
+        # An exec everywhere it cannot open a window; firm.core.proc decides.
+        return exec_in_place(cmd, env)
     except OSError as exc:
         print(json.dumps({"ok": False, "error": f"cannot exec {cmd[0]!r}: {exc}"}))
         return 1

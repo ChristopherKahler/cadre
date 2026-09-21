@@ -18,6 +18,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from firm.core.proc import popen_utf8
 from firm.sched.base import SchedulerError, interval_to_seconds, run_cmd
 
 
@@ -146,7 +147,7 @@ class LaunchdScheduler:
                        unit: str | None = None) -> dict[str, Any]:
         full_env = dict(os.environ)
         full_env.update(env)
-        proc = subprocess.Popen(
+        proc = popen_utf8(
             argv, cwd=str(workdir), env=full_env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True,
