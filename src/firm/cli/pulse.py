@@ -556,7 +556,13 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
         result["lock"] = lock
         if outcome.get("reason"):
             result["message"] = outcome["reason"]
-    if "runs_finalized" in outcome:
+    if lock != "remote-holder" and "runs_finalized" in outcome:
+        # OMITTED for a remote holder, which is what abort did before it
+        # delegated: those runs belong to the other machine, and abort never
+        # looked at them. The cleanup always initialises the key, so copying it
+        # unconditionally would put `runs_finalized: []` on a remote-holder
+        # result -- a number abort never had the standing to report. Absent and
+        # empty are different claims (avocet, 18:51).
         result["runs_finalized"] = outcome["runs_finalized"]
     if outcome.get("runs_not_finalized"):
         # One bad row never stops the rest, and never disappears either. This
