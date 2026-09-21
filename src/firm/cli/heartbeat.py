@@ -196,18 +196,22 @@ def run_enable(
         _emit({"ok": False, "reason": str(exc)})
         return 1
 
-    # firm.schedule is the single source of truth for cadence (fork 005) —
+    # firm.pulse_interval is the single source of truth for cadence (fork 005) —
     # the hub reads it to tell "not operational" from "healthy and idle",
     # two states that looked identical while the whole portfolio sat in the
     # first one. The timer is the mechanism; the row is the record. A DB that
     # can't take the write (mid-init, unmigrated) doesn't undo a timer that
     # is already running — but the miss is reported, never swallowed.
+    #
+    # Never firm.schedule: that column is the firm's business hours, and an
+    # interval written over them reads as "always open" to the pulse's
+    # business-hours gate (#134). The payload key keeps its old name.
     schedule_recorded = True
     try:
         from firm.core import repo
         conn = connect(get_db_path(workspace))
         try:
-            repo.update(conn, "firm", firm_id, {"schedule": interval})
+            repo.update(conn, "firm", firm_id, {"pulse_interval": interval})
         finally:
             conn.close()
     except Exception:
@@ -251,7 +255,8 @@ def run_disable(firm_id: str | None = None, *, unit_dir: Path | None = None) -> 
         return 1
 
     # The workspace path lives in the installed unit — read it BEFORE the
-    # removal, so firm.schedule can be nulled after the units are gone.
+    # removal, so firm.pulse_interval can be cleared after the units are gone.
+    # Never firm.schedule, which holds the firm's business hours (#134).
     ws_str = st.get("workdir")
 
     sched.remove(stem)
@@ -264,7 +269,7 @@ def run_disable(firm_id: str | None = None, *, unit_dir: Path | None = None) -> 
             if db.exists():
                 conn = connect(db)
                 try:
-                    repo.update(conn, "firm", firm_id, {"schedule": None})
+                    repo.update(conn, "firm", firm_id, {"pulse_interval": None})
                     schedule_recorded = True
                 finally:
                     conn.close()
