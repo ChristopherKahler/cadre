@@ -787,11 +787,45 @@ def test_u8_ensure_with_no_workspace_never_installs(monkeypatch, machine):
 # ---------------------------------------------------------------------------
 
 def test_the_reading_says_which_directory_it_was_taken_from(monkeypatch, machine):
+    """#136: the directory is the seam's, and both of its rules are proven here.
+
+    This used to assert `str(firm)` with a workspace and `str(Path.cwd())`
+    without one. The second of those was the defect: with no firm there is no
+    tier to point at, so the probe stood in the caller's directory and base
+    walked up from it. On the operator's Windows hub that directory was
+    `C:/Users/Chris/.base-gbl/scripts`, one level under his own global graph.
+
+    `machine` calls `ensure_tier` but not `scaffold_tier`, so its firm has no
+    `.base` of its own. That is the seam's rule 2 and the probe stands in the
+    firm's own tier -- the one directory base returns WITHOUT walking. A fully
+    founded firm does have `.base`, which is rule 1 and returns the firm
+    itself, so the old value is unchanged there and the arm below proves it.
+    """
+    from firm.services.base_domain import base_cwd
+
     _, firm = machine
     monkeypatch.setattr(subprocess, "run", _Base())
 
+    # Rule 2: this fixture's firm has no `.base`, so the probe stands in the
+    # firm's tier. Asserted against the seam, never against a path this test
+    # builds, so the two cannot drift apart.
+    assert base_ready.check(firm)["probe_cwd"] == base_cwd(firm)
+    assert base_ready.check(firm)["probe_cwd"] != str(Path.cwd()), (
+        "the probe stood in the caller's directory, which is the #136 defect")
+
+    # Rule 1: give the same firm its own `.base` and the probe stands in the
+    # firm, exactly as it did before this issue. This is the arm that shows the
+    # change is scoped to the no-`.base` case rather than being a new contract
+    # for every caller.
+    (firm / ".base").mkdir(parents=True, exist_ok=True)
     assert base_ready.check(firm)["probe_cwd"] == str(firm)
-    assert base_ready.check()["probe_cwd"] == str(Path.cwd())
+
+    # Rule 3: no workspace. The tier the env names, never the process's
+    # directory. `machine` sets BASE_HOME to the operator tier it built.
+    with_no_firm = base_ready.check()["probe_cwd"]
+    assert with_no_firm == base_cwd(None)
+    assert with_no_firm != str(Path.cwd()), (
+        "with no firm the probe still stood in the caller's directory")
 
 
 def test_neither_function_raises_when_base_explodes(monkeypatch, machine):

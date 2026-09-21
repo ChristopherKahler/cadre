@@ -153,7 +153,7 @@ def _base_learn(workspace: Path, domain: str, entity: str, text: str,
     """
     import subprocess
 
-    from firm.services.base_domain import _base_env
+    from firm.services.base_domain import _base_env, base_cwd
     from firm.sysconfig.service import which_base
 
     base = which_base()
@@ -166,7 +166,7 @@ def _base_learn(workspace: Path, domain: str, entity: str, text: str,
             [base, "learn", "--domain", domain, "--entity", entity,
              "--type", note_type, "--text", text],
             capture_output=True, timeout=60,
-            cwd=str(workspace), env=_base_env(workspace),
+            cwd=base_cwd(workspace), env=_base_env(workspace),
             stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"ok": False, "graph": "failed", "detail": str(exc)}
