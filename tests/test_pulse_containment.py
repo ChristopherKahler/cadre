@@ -47,6 +47,7 @@ import socket
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from pathlib import Path
 
@@ -68,9 +69,9 @@ FIRM = "containco"
 #: signal and therefore runs everywhere.
 posix_only = pytest.mark.skipif(
     os.name != "posix",
-    reason=("drives a real holder tree and a SIGTERM the holder handles; "
-            "Windows has neither shape here, and its arm is the live leg on "
-            "CI's Windows job (R1b)"))
+    reason=("needs a POSIX-only shape: a zombie, or a `/proc` walk. The tree "
+            "itself is a plain Popen chain and runs everywhere, so only the "
+            "legs that genuinely need POSIX carry this mark"))
 
 
 # ---------------------------------------------------------------------------
@@ -160,31 +161,58 @@ class _StopAtFirstSpawn(Exception):
 #: way the #147 live leg's recorder does: a pipe can be read before the writer
 #: has produced everything, and a test that guesses which pid is which is a
 #: test whose failures cannot be read.
+#: NO `fork`, ON PURPOSE, AND IT IS A CORRECTNESS POINT RATHER THAN PORTABILITY
+#: HOUSEKEEPING. The Windows descendant walk (`Win32_Process` by
+#: `ParentProcessId`) is different code from the POSIX one. A fork-built tree
+#: skips every tree leg on Windows, which would leave that walk exercised only
+#: by the live leg -- and the live leg asserts `alive_after` is EMPTY, which an
+#: walk that returns nothing passes falsely. A `Popen` chain runs everywhere,
+#: so the same legs grade both walks.
+#:
+#: Each stage reports ITS OWN pid and creation time. Self-reporting avoids
+#: reading another process's creation time from the test, which on Windows
+#: would mean `OpenProcess` -- the very call R5b forbids the product's read to
+#: use, and not a call this file should normalise either.
 _STAGE = textwrap.dedent("""\
-    import os, signal, subprocess, sys, time
+    import os, subprocess, sys, time
 
-    label, out, nxt = sys.argv[1], sys.argv[2], sys.argv[3]
+    label, out, nxt, script = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
-    if label == "holder":
-        if os.fork() != 0:
-            os._exit(0)
-        os.setsid()
 
-    kid = None
+    def creation():
+        if os.name == "posix":
+            raw = open("/proc/%d/stat" % os.getpid()).read()
+            return raw[raw.rindex(")") + 1:].split()[19]
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        # EVERY PROTOTYPE DECLARED. GetCurrentProcess returns the pseudo-handle
+        # -1; without restype ctypes assumes c_int and a 64-bit HANDLE
+        # parameter receives 0x00000000FFFFFFFF instead. winjob.py documents
+        # this exact trap and it bites the same way here.
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        k32.GetCurrentProcess.argtypes = []
+        k32.GetProcessTimes.restype = wintypes.BOOL
+        k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [
+            ctypes.POINTER(wintypes.FILETIME)] * 4
+        made, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
+        if not k32.GetProcessTimes(k32.GetCurrentProcess(),
+                                   ctypes.byref(made), ctypes.byref(exited),
+                                   ctypes.byref(kernel), ctypes.byref(user)):
+            raise OSError("GetProcessTimes failed: %d"
+                          % ctypes.get_last_error())
+        return "%d-%d" % (made.dwHighDateTime, made.dwLowDateTime)
+
+
     if nxt != "none":
-        kid = subprocess.Popen([sys.executable, "-c", open(sys.argv[4]).read(),
-                                nxt, out,
-                                "leaf" if nxt == "middle" else "none",
-                                sys.argv[4]])
+        subprocess.Popen([sys.executable, script, nxt, out,
+                          "leaf" if nxt == "middle" else "none", script])
 
     with open(out, "a") as fh:
-        stat = open("/proc/%d/stat" % os.getpid()).read()
-        started = stat[stat.rindex(")") + 1:].split()[19]
-        fh.write("%s %d %s\\n" % (label, os.getpid(), started))
+        fh.write("%s %d %s\\n" % (label, os.getpid(), creation()))
         fh.flush()
         os.fsync(fh.fileno())
 
-    signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
     time.sleep(300)
     """)
 
@@ -213,14 +241,25 @@ def _generation(pid: int | None) -> tuple[int, str] | None:
 
 
 def _alive(pid: int | None) -> bool:
-    """Is this pid a live process?
+    """Is this pid a live process? A harness reader, for preconditions.
 
-    Refuses 0 and None outright. `os.kill(0, 0)` asks about the caller's whole
-    PROCESS GROUP, not about a process, so it answers True for a pid that does
-    not exist -- a liveness reader that cannot say "no" is worse than none.
+    TWO REFUSALS AND A PLATFORM SPLIT, each for a measured reason:
+
+    * 0 and None are refused outright. `os.kill(0, 0)` asks about the caller's
+      whole PROCESS GROUP, not about a process, so it answers True for a pid
+      that does not exist -- a liveness reader that cannot say "no" is worse
+      than none.
+    * ON WINDOWS THIS MUST NOT USE `os.kill` AT ALL. Anything but the `CTRL_*`
+      events routes to `TerminateProcess`, so `os.kill(pid, 0)` KILLS the
+      process it was asked about. The product says so in its own comment at
+      `cli/pulse.py:543` and probes with `OpenProcess` instead. A test helper
+      that got this wrong would quietly kill the holder it was checking on and
+      then measure the corpse.
     """
     if not pid:
         return False
+    if os.name != "posix":
+        return _present(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -284,6 +323,15 @@ def _present(pid: int | None, started: str | None = None) -> bool:
     """
     if not pid:
         return False
+    if os.name != "posix":
+        # The process table, read without opening the process: `tasklist` is
+        # the cheapest reader that needs no handle and therefore no permission,
+        # which is R5b's whole point. Windows has no zombies, so presence is
+        # the answer.
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+            capture_output=True, text=True, timeout=60).stdout
+        return str(pid) in out
     gen = _generation(pid)
     if gen is None:
         return False
@@ -324,9 +372,15 @@ class _Tree:
         script.write_text(_STAGE, encoding="utf-8")
         nxt = "middle" if depth >= 3 else "none"
         self.proc = subprocess.Popen(
-            [sys.executable, "-c", _STAGE, "holder", str(self.record), nxt,
+            [sys.executable, str(script), "holder", str(self.record), nxt,
              str(script)])
-        self.proc.wait(timeout=20)     # the double-fork parent, already gone
+        # THE HOLDER IS REAPED THE MOMENT IT DIES. It is this pytest process's
+        # own child now that nothing forks, so an exited holder would sit as a
+        # zombie until someone waited on it -- and abort's `_pid_alive` reads a
+        # zombie as alive (R5a), which would send every leg down the
+        # `signalled` branch instead of `cleared`. The exit contract's
+        # `_live_holder` reaps on a thread for exactly this reason.
+        threading.Thread(target=self.proc.wait, daemon=True).start()
         self.stages = self._await(depth)
         self.holder = self.stages["holder"][0]
         self.middle = self.stages.get("middle", (None, None))[0]
@@ -415,7 +469,6 @@ def _abort(ws: Path, timeout: int = 120) -> tuple[int, dict | None, str]:
 # so a red leg below means the product and not the instrument.
 # ---------------------------------------------------------------------------
 
-@posix_only
 def test_control_the_tree_is_three_generations_deep_and_all_are_alive(tree):
     """Without this, every leg below could pass by measuring a tree that was
     never built, and the leaf assertions would be vacuous."""
@@ -743,7 +796,6 @@ def test_abort_names_the_live_holder_in_alive_after(tmp_path, monkeypatch,
 # R5, condition 2: abort snapshots, re-reads, and only then claims
 # ---------------------------------------------------------------------------
 
-@posix_only
 def test_abort_reports_the_leaf_that_outlived_the_holder_and_refuses_ok(
         tmp_path, tree):
     """THE LEG #148 EXISTS FOR, and the one that is red at `4218ab74`.
@@ -777,7 +829,6 @@ def test_abort_reports_the_leaf_that_outlived_the_holder_and_refuses_ok(
     assert rc == 1, output
 
 
-@posix_only
 def test_abort_takes_its_snapshot_while_the_holder_is_still_alive(tmp_path,
                                                                  tree):
     """R5's order property: the snapshot is taken BEFORE the signal.
@@ -803,7 +854,6 @@ def test_abort_takes_its_snapshot_while_the_holder_is_still_alive(tmp_path,
         f"the snapshot missed the middle generation {tree.middle}\n{output}")
 
 
-@posix_only
 def test_abort_says_ok_only_when_the_holder_is_dead_and_nothing_survived(
         tmp_path, lonely_tree):
     """The other half of the same rule, in the same file: when the tree really
@@ -924,7 +974,6 @@ def test_a_zombie_child_is_not_a_survivor(tmp_path, monkeypatch, capsys):
                     pass
 
 
-@posix_only
 def test_the_descendant_read_never_asks_permission_to_signal(tmp_path, tree,
                                                              monkeypatch,
                                                              capsys):
@@ -979,7 +1028,6 @@ def test_the_descendant_read_never_asks_permission_to_signal(tmp_path, tree,
         f"\n{result}")
 
 
-@posix_only
 def test_alive_after_is_present_whenever_a_holder_was_signalled(tmp_path, tree):
     """The KEY, asserted by presence. `alive_after: []` and no key at all are
     different claims: the first says abort looked and found nothing, the second
