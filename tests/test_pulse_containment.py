@@ -623,9 +623,17 @@ def test_control_the_tree_is_three_generations_deep_and_all_are_alive(
     # while the comment that used to sit here claimed the log stated the
     # reader. It did not. Remove the `disabled()` and this print goes back to
     # telling nobody anything.
-    reader = "proc" if _HAS_PROCFS else "ps"
+    # NAME THE READER THIS HOST ACTUALLY USES. This line said "posix reader:
+    # ps" on every platform, so on Windows it named `ps` while `_host_table()`
+    # was reading the CIM table -- a label claiming to say which reader
+    # produced the green, saying the wrong one. The POSIX wording is unchanged
+    # so the macOS log reads exactly as it was ruled to.
+    if os.name == "posix":
+        line = f"[148] posix reader: {'proc' if _HAS_PROCFS else 'ps'}"
+    else:
+        line = "[148] windows reader: cim"
     with capsys.disabled():
-        print(f"[148] posix reader: {reader}")
+        print(line)
         print(f"[148] tree depth 3: holder={tree.holder} "
               f"middle={tree.middle} leaf={tree.leaf}")
 
