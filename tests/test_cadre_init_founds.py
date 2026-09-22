@@ -909,25 +909,60 @@ def test_r12b_the_dashboard_patches_still_change_what_the_agent_receives(
         "the real house documents reached the agent despite the patch")
 
 
-def test_r12c_the_prompt_never_rides_the_command_line():
+def test_r12c_the_prompt_never_rides_the_command_line(tmp_path,
+                                                      monkeypatch):
     """Windows caps a command line at 32,767 characters and the two house
-    documents are 29,949 of them. Read on the source, because the argv a
-    fake records is the argv of one run and this is a rule about all of
-    them."""
+    documents are 29,949 of them. So the prompt travels on stdin, and argv
+    carries the binary and the flags and NOTHING ELSE.
+
+    ASSERTED AS AN EQUALITY, not as the absence of a flag. The first version
+    of this leg grepped the source for `"-p"`, and `claude --print <prompt>`
+    carries the prompt positionally with no flag to find: the grep passed
+    while the command line was back over the ceiling. A leg that forbids one
+    spelling is a leg about that spelling.
+
+    The source half stays beside it, because a door that opens no stdin pipe
+    has nowhere to put the prompt and would fail later and further away.
+    """
     import inspect
 
     from firm.dashboard import founding as dash
     from firm.services import founding as svc
 
+    expected = ["/usr/bin/claude", *svc._FOUNDING_FLAGS]
+
+    hub = _FakeAgent(_chart_proposal())
+    monkeypatch.setattr(dash, "popen_utf8", hub, raising=True)
+    monkeypatch.setattr(dash, "resolve_claude_bin",
+                        lambda: ("/usr/bin/claude", "fake"))
+    monkeypatch.setattr(dash, "_house_rules", lambda: "(rules)")
+    monkeypatch.setattr(dash, "_inventory", lambda: ("(arsenal)", {}))
+    dash._jobs["J12c"] = {"status": "running", "proc": None, "narration": []}
+    try:
+        dash._run_founding("J12c", "a two-person writing firm")
+    finally:
+        dash._jobs.pop("J12c", None)
+
+    door_b = _FakeAgent(_chart_proposal())
+    monkeypatch.setattr(svc, "popen_utf8", door_b, raising=True)
+    monkeypatch.setattr("firm.pulse.spawn.resolve_claude_bin",
+                        lambda: ("/usr/bin/claude", "fake"))
+    monkeypatch.setattr(svc, "_house_rules", lambda: "(rules)")
+    monkeypatch.setattr(svc, "_inventory", lambda: ("(arsenal)", {}))
+    svc.found_from_brief(tmp_path / "nowhere", "a two-person writing firm")
+
+    for where, agent in (("the hub", hub), ("Door B", door_b)):
+        assert agent.one["argv"] == expected, (
+            f"{where} put something on the command line beyond the binary "
+            f"and the flags: {agent.one['argv'][len(expected):]!r}. With the "
+            f"house documents inlined that is 38,343 characters against "
+            f"Windows's 32,767 limit, whether it rides a flag or a position")
+        assert agent.prompt, f"{where} sent the agent nothing on stdin"
+
     for where, src in (("the hub", inspect.getsource(dash._run_founding)),
                        ("Door B", inspect.getsource(svc.found_from_brief))):
-        assert '"-p"' not in src, (
-            f"{where} puts the founding prompt on argv again; with the house "
-            f"documents inlined that is 38,343 characters against Windows's "
-            f"32,767 limit, and the spawn fails with WinError 206")
         assert "stdin=subprocess.PIPE" in src, (
-            f"{where} does not open a stdin pipe, so the prompt has nowhere "
-            f"to go")
+            f"{where} opens no stdin pipe, so the prompt has nowhere to go")
 
 
 def test_r19b_neither_door_composes_the_prompt_itself():
