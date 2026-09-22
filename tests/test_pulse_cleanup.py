@@ -538,3 +538,160 @@ def test_l7_a_remote_database_is_not_a_missing_one(cleanup, tmp_path,
     assert out["lock"] != "no-db", (
         "a firm on a shared remote database was told it has no database, so "
         "its pulse lock is left wedged for the full TTL")
+
+
+def test_l6_both_verbs_finalize_through_the_same_function(
+        cleanup, tmp_path, monkeypatch, capsys):
+    """One function, two callers, counted on one object (osprey, 18:51).
+
+    The two legs above prove each verb reaches `release_and_finalize`. Neither
+    proves it is the SAME one: two callers each reaching a function of their
+    own would pass both and still be two rules, which is the whole thing this
+    refactor exists to stop.
+
+    So a single spy is installed on the module attribute and BOTH CLI verbs
+    are driven through their own entry points. `cli/heartbeat.py` imports the
+    name inside the function body, at call time, which is why one patch
+    catches both.
+    """
+    import socket
+
+    from firm.cli import heartbeat as cli_heartbeat
+    from firm.cli import pulse as cli_pulse
+
+    ws = _workspace(tmp_path)
+    _hold(ws, f"{socket.gethostname()}:424242:deadbeef")
+    monkeypatch.setattr(cli_pulse, "_pid_alive", lambda pid: False)
+
+    callers: list[str] = []
+
+    def _spy(workspace, firm_id=None, *, by, **kwargs):
+        callers.append(by)
+        return {"lock": "cleared", "runs_finalized": []}
+
+    monkeypatch.setattr(cleanup, "release_and_finalize", _spy)
+
+    class _Sched:
+        name = "systemd"
+
+        def status(self, stem):
+            return {"installed": True, "state": "active", "workdir": str(ws)}
+
+        def remove(self, stem):
+            return {"removed": [stem]}
+
+    monkeypatch.setattr(cli_heartbeat, "_sched", lambda unit_dir=None: _Sched())
+
+    cli_pulse._handle_abort(ws, FIRM)
+    cli_heartbeat.run_disable(FIRM, unit_dir=tmp_path / "units")
+    capsys.readouterr()
+
+    assert sorted(callers) == ["firm pulse --abort", "heartbeat disable"], (
+        f"the two verbs did not both land on this one function: {callers}")
+
+
+def _workspace_with_two_runs(tmp_path):
+    """A firm with RUN-001 and RUN-002 both still marked running.
+
+    avocet's pair needs two: one row that closes and one that will not. A
+    single-row arm can prove the failure is REPORTED but not that the rest of
+    the work still happened, and "one bad row never stops the rest" is half
+    the rule.
+    """
+    from firm.core.db import connect, get_db_path
+
+    db = get_db_path(tmp_path)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    conn = connect(db)
+    apply_migrations(conn)
+    _seed(conn, running=("RUN-001", "RUN-002"))
+    conn.commit()
+    conn.close()
+    return tmp_path
+
+
+def test_l7_one_bad_row_is_named_and_the_rest_still_close(cleanup, tmp_path,
+                                                          monkeypatch):
+    """avocet's FINDING 7 pair, both halves on one arm.
+
+    Measured on the graded head: the control closed RUN-001 and RUN-002 and
+    both read `failed`; the arm where the second row raises closed RUN-001,
+    left RUN-002 reading `running`, and said NOTHING about it. The payload of
+    a firm with one stuck run looked exactly like the payload of a firm that
+    only ever had one orphan.
+
+    Two properties, and neither is worth having alone: the good row still
+    closes, AND the bad one is named with its reason.
+    """
+    import socket
+
+    ws = _workspace_with_two_runs(tmp_path)
+    _hold(ws, f"{socket.gethostname()}:424242:deadbeef")
+    monkeypatch.setattr(cleanup, "_pid_alive", lambda pid: False)
+
+    import firm.hooks.run_record as run_record
+
+    real = run_record.on_run_end
+
+    def _one_bad(conn, *, firm_id, run_id, **kwargs):
+        if run_id == "RUN-002":
+            raise RuntimeError("records are unwritable for this row")
+        return real(conn, firm_id=firm_id, run_id=run_id, **kwargs)
+
+    monkeypatch.setattr(run_record, "on_run_end", _one_bad)
+
+    out = cleanup.release_and_finalize(ws, FIRM, by="heartbeat disable")
+
+    assert out["runs_finalized"] == ["RUN-001"], out
+    assert _status_of(ws, "RUN-001") == "failed"
+    assert _status_of(ws, "RUN-002") == "running", (
+        "precondition: the arm did not actually leave a row stuck")
+    named = json.dumps(out.get("runs_not_finalized") or [])
+    assert "RUN-002" in named, (
+        "a run left stuck at `running` is invisible to whoever ran the verb; "
+        f"the payload reads exactly like a firm with one orphan: {out}")
+    assert "unwritable" in named, (
+        "the row is named with no reason, so the operator knows something "
+        "failed and nothing about what to do")
+
+
+def test_l7_heartbeat_disable_carries_the_unclosed_row_to_the_operator(
+        cleanup, tmp_path, monkeypatch, capsys):
+    """The surface. `heartbeat disable` prints the whole cleanup dict.
+
+    It therefore carries `runs_not_finalized` for free -- and "for free" is
+    exactly why this leg exists. The key reached disable's payload as a side
+    effect of the abort refactor rather than as a property anybody pinned, and
+    a property nothing holds is a property that leaves on the next tidy-up
+    (avocet, 19:00).
+    """
+    from firm.cli import heartbeat as cli_heartbeat
+
+    ws = _workspace_with_two_runs(tmp_path)
+
+    monkeypatch.setattr(
+        cleanup, "release_and_finalize",
+        lambda *a, **k: {"lock": "cleared", "runs_finalized": ["RUN-001"],
+                         "runs_not_finalized": [
+                             {"run_id": "RUN-002", "error": "unwritable"}]})
+
+    class _Sched:
+        name = "systemd"
+
+        def status(self, stem):
+            return {"installed": True, "state": "active", "workdir": str(ws)}
+
+        def remove(self, stem):
+            return {"removed": [stem]}
+
+    monkeypatch.setattr(cli_heartbeat, "_sched", lambda unit_dir=None: _Sched())
+
+    rc = cli_heartbeat.run_disable(FIRM, unit_dir=tmp_path / "units")
+    # heartbeat._emit pretty-prints with indent=2, so the payload spans
+    # several lines and the LAST line is a closing brace. Parsing the
+    # whole of stdout is the only reading that matches what it writes.
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert payload["cleanup"]["runs_not_finalized"] == [
+        {"run_id": "RUN-002", "error": "unwritable"}], payload
