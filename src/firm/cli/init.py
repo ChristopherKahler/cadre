@@ -63,6 +63,26 @@ def _wire_base(workspace: Path, conn) -> None:
         print(f"    domain {firm_id!r} wired and its first rule seeded")
 
 
+def run_brief(root: Path, brief: Path) -> int:
+    """Found a firm from a written spec. `cadre init <root> --brief <f.md>`.
+
+    Door B. The product's own founding agent reads the spec — the command
+    still parses no markdown. Same exit contract as Door A: the result
+    object is the last stdout line, and 0 only when `ok` is exactly True.
+    """
+    from firm.cli.pulse import _exit_with
+    from firm.services.founding import found_from_brief
+
+    try:
+        text = brief.expanduser().read_text(encoding="utf-8")
+    except OSError as exc:
+        return _exit_with({"ok": False,
+                           "error": f"could not read the spec: {exc}"})
+    if not text.strip():
+        return _exit_with({"ok": False, "error": "the spec file is empty"})
+    return _exit_with(found_from_brief(root.expanduser(), text))
+
+
 def run_found(root: Path, proposal: Path) -> int:
     """Found a firm from a proposal file. `cadre init <root> --proposal <f>`.
 

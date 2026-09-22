@@ -1100,7 +1100,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "init":
-        from firm.cli.init import run_found, run_init
+        from firm.cli.init import run_brief, run_found, run_init
 
         if args.proposal_template:
             # The JSON goes to stdout and the legend to stderr, so
@@ -1126,10 +1126,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.proposal:
             return run_found(args.workspace, args.proposal)
         if args.brief:
-            print(json.dumps({"ok": False, "error":
-                              "--brief is not wired yet; turn the spec into a "
-                              "proposal and use --proposal"}))
-            return 1
+            return run_brief(args.workspace, args.brief)
 
         rc = run_init(
             args.workspace,

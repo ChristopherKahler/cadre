@@ -22,6 +22,7 @@ from typing import Any
 
 from firm.core import repo
 from firm.core.db import connect, get_db_path
+from firm.core.proc import popen_utf8
 
 _FIRM_ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,31}$")
 _MODEL_TIERS = ("fable", "opus", "sonnet", "haiku")
@@ -674,3 +675,398 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
         "base_cadre_runs": bool(base_state.get("ok")),
         "base_ready": base_state,
     }
+
+
+_TOP_TIER = "opus"
+
+
+_FOUNDING_FLAGS = [
+    "--print",
+    # Board ruling 2026-07-13: the firm only gets created once — architect it
+    # on the top tier at max effort, never the operator's session default. The
+    # stage choreography absorbs the latency; quality is the point. Shared by
+    # the wiring and Co-Board briefing agents (they import these flags).
+    # Alias, never a pinned id: a pin goes stale silently the next time
+    # Anthropic ships a tier (it sat on claude-opus-4-8 through Opus 5).
+    "--model", _TOP_TIER,
+    "--effort", "max",
+    "--output-format", "stream-json",
+    "--verbose",
+    # Token-level deltas. Without this a `--print` run is one silent assistant turn:
+    # the agent reads two docs, thinks for ninety seconds, and dumps a JSON blob. The
+    # Board stares at a bar. With it — plus a prompt that tells the agent to narrate —
+    # they watch it reason about their business in real time, which is the difference
+    # between a spinner and a deliberation.
+    "--include-partial-messages",
+    "--dangerously-skip-permissions",
+    "--strict-mcp-config",
+]
+
+
+NARRATION_CONTRACT = """\
+
+## Narrate as you work
+
+Think out loud where the Board can see it. Write lines beginning with `· ` (middot,
+space). The Board reads these while they wait — they are the only window into what
+you're doing, so make them worth reading.
+
+**Write your first line before you do anything else** — before you read a file, before
+you plan. The Board is staring at an empty screen until you speak.
+
+**Four to six lines. No more.** Each one is a *conclusion you reached*, stated whole —
+not a step in a checklist. Consolidate: if you made five small decisions that all serve
+one judgment, that is ONE line about the judgment. A line that only makes sense as item
+three of a list is the wrong line.
+
+Good: `· They record the talking head themselves — so nobody films, nobody directs.
+That kills two roles I'd otherwise have staffed, and it means the whole org sits
+downstream of the camera.`
+
+Bad (too granular, too many, reads as a checklist):
+`· Reviewing the brief.` `· Three platforms noted.` `· Deciding on operations.`
+`· Assigning gates.` `· Naming members.`
+
+Write them as you genuinely arrive at each judgment, not all at once at the end. Then
+output what you were asked for. Nothing between or after the `· ` lines except the
+output itself.
+"""
+
+
+_FOUNDING_PROMPT = """\
+You are the founding agent for a new Cadre firm. The Board has described a
+business in their own words. Design the organization that runs it.
+
+## The Board's brief
+
+{brief}
+
+## What Cadre is
+
+A Firm is a company of AI Members. Each Member has a Contract (what they may
+run and which skills they carry) and claims Units (atomic work) inside
+Operations (departments) toward Goals. A Gate is Board approval, required for
+anything significant. The Board is the human. They govern; they do not do the
+work.
+
+## House rules on org design
+
+The full house docs are inlined below — they are already in front of you.
+Do NOT read any files; everything you need is here.
+
+__HOUSE_RULES__
+
+## The operator's arsenal
+
+Everything below actually exists on the operator's machine. When you design
+the org, ALSO design its starting loadout — which of these this firm needs,
+and why. Recommend ONLY names that appear here, spelled exactly as written;
+anything invented is silently discarded. Be lean: recommend what the work
+needs, usually three to ten items across all three lists. The Board reviews
+your picks with your rationale next to each — the rationale is what they read.
+
+__INVENTORY__
+
+## How to design this org
+
+- Start from the work, not from a template. What must happen every week for
+  this business to move? Those are your Operations.
+- Staff the full shape. Roles are free: a Member with no work assigned is
+  skipped by the pulse and costs nothing, while a missing role hides the real
+  shape and forces another Member to double up. Prefer specialists to
+  generalists. When a spec is given, every role in it becomes a Member: none
+  merged, none dropped.
+- Every Member owns an outcome, not a tool. "Grows the audience" is a role.
+  "Uses Instagram" is not.
+- Name them like people, because the Board will talk to them like people.
+  One word. Distinct. No cute AI puns, no "Bot", no "AI" in the name.
+- Give exactly one Member the lead; the lead reports to the Board. Every other
+  Member names who they report to (reports_to). Build a multi-level chart with
+  a span of control near four, five at most, never a flat one where everyone
+  reports to the lead. A checker never reports to the people or the work it
+  checks; it reports to the lead, outside the operation it checks. When a spec
+  names the chart, use it as written.
+- Be explicit about what needs a Gate. Anything published, anything spent,
+  anything sent to another human. Default to gating; trust is earned later.
+- Staff the model like you staff the org. Every run bills the Board, and the
+  Member's model is the cost lever. Default to "sonnet". Reserve "opus" for a
+  role whose whole job is judgment — usually the lead, sometimes nobody. Use
+  "haiku" for mechanical, high-frequency work. A four-Member firm running
+  all-Opus bills like a law firm.
+- The firm gets ONE goal, not a list. Pick the single measurable outcome
+  that, if true at the end of a quarter, means this firm worked. A firm with
+  no number cannot fail — it can only be busy, which is worse. Give the Board
+  a number to argue with, not prose to admire.
+
+- An Operation may carry its own goal as well, one level down from the firm's.
+  The firm still has exactly ONE north star; an Operation's goal is how that
+  department knows it is holding up its end. Give one only where there is a
+  real number to give.
+- Name the Board's own approvals once, at the firm level, in "gates". Those
+  ride on every Member's contract on top of whatever that Member needs
+  approval for. A Member's own "gates" are the ones specific to their work.
+- Give every Member the base domains their role owns, in "domains" — the
+  narrow subjects that Member reads and writes. A specialist with its own
+  domain retrieves a tighter context on every run than one sharing the firm's.
+
+## Output
+
+Return ONLY a JSON object, no prose before or after, no code fence:
+
+{{
+  "firm_id": "kebab-case-slug, max 32 chars, letters/digits/hyphens, starts with a letter",
+  "name": "The firm's display name, title case",
+  "premise": "One sentence: what this company exists to do. The Board's words, sharpened.",
+  "north_star": {{
+    "target": "The firm's ONE goal — a sentence with a number in it. If it is true at the end of the quarter, the firm worked.",
+    "metric_value": 5,
+    "metric_unit": "what the number counts, e.g. pages/week — '' if the target has no clean unit",
+    "why": "One line: why THIS number proves the premise."
+  }},
+  "gates": ["What the Board must approve before it happens — applies to every Member"],
+  "operations": [
+    {{
+      "name": "Department name",
+      "purpose": "One line — what this department is accountable for.",
+      "goal": {{"target": "This department's own measurable outcome — omit the whole key if there is no real number", "metric_value": 3, "metric_unit": "what the number counts", "why": "One line."}}
+    }}
+  ],
+  "members": [
+    {{
+      "name": "Onename",
+      "role": "Their title",
+      "owns": "One sentence: the outcome they are accountable for.",
+      "operation": "The name of the Operation they work in — must match one above exactly",
+      "leads": true or false,
+      "reports_to": "The NAME of the Member they report to — must match one above exactly. null for the lead, who reports to the Board.",
+      "domains": ["the base domains this role owns, e.g. backend, design — [] if none obvious"],
+      "model": "opus, sonnet, or haiku — the Claude tier this Member runs on (fable exists above opus; do not use it unless the Board asks)",
+      "skills": ["skill or command names they'd carry — [] if none obvious"],
+      "gates": ["what this Member must get Board approval for, in plain words"]
+    }}
+  ],
+  "first_units": [
+    {{"name": "The first real piece of work", "member": "Onename", "why": "One line."}}
+  ],
+  "reroll_tips": [
+    "Advice to the Board on how to brief me better, if they don't like this org."
+  ],
+  "loadout": {{
+    "mcp": [{{"name": "exact server name from the arsenal", "why": "who uses it, for what — one line"}}],
+    "skills": [{{"name": "exact skill name from the arsenal", "why": "one line"}}],
+    "commands": [{{"name": "exact command name from the arsenal", "why": "one line"}}]
+  }}
+}}
+
+Exactly one Member has "leads": true, and only the lead has "reports_to": null.
+Every other Member's "reports_to" names a Member above them in this same list,
+with no cycles. Every Member's "operation" matches an Operation name exactly.
+Every Member's "model" is one of opus, sonnet, haiku.
+Give two to four first_units — real work this firm could start on tonight,
+not setup chores.
+
+`reroll_tips`: two or three specific things the Board could have told you that
+would have produced a sharper org. Name what you had to *guess* at — the thing
+you inferred because they didn't say. "You didn't say whether you publish or
+just draft, so I gated everything" is a useful tip. "Be more specific" is not.
+Write them as instructions to the Board, not observations about yourself.
+"""
+
+
+def _framework_root() -> Path:
+    """Repo root — where the house docs and the framework tree are READ from.
+
+    It is not where the founding agent runs, and the sentence that said so was
+    wrong even before #143 moved that working directory: `_house_rules()` reads
+    both documents through `root / rel`, an absolute path, and inlines their
+    TEXT into the prompt, so the agent is never handed a path to open. The old
+    sentence is what made the tier fix look as though it would break doc
+    resolution, and it put a wrong fact into a design document before anyone
+    read the code it described.
+    """
+    return Path(__file__).resolve().parents[3]
+
+
+def _extract_json(text: str) -> dict[str, Any]:
+    """Pull the proposal object out of the agent's final message."""
+    text = text.strip()
+    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
+    if fence:
+        text = fence.group(1)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("founding agent returned no JSON object")
+    return json.loads(text[start:end + 1])
+
+
+def _inventory() -> tuple[str, dict[str, set[str]]]:
+    """The operator's real arsenal, compacted for the founding prompt.
+
+    The founding agent recommends the firm's starting loadout — so it must
+    see what actually exists, and _validate drops anything it invents.
+    Skills carry a line of description; commands ride as names only (there
+    are ~150 of them — the whole point is that the Board stops scrolling
+    through that list). Returns (prompt_text, validation_index).
+    """
+    from firm.dashboard import discovery, exclusions, inventory
+
+    # The Armory is the survey of record (machine tier, shared with Train and
+    # the Floor's equip picker) — founding demands fresh CLI identity probes
+    # because its prompt promises "probed just now". The operator's global
+    # exclusion list is a hard boundary: an excluded item never enters the
+    # agent's head, and the validation index drops it even if the agent
+    # hallucinates the name.
+    ex = exclusions.load()
+    inv = inventory.ensure(max_cli_age_sec=3600)
+    mcp = [s for s in inv.get("mcp") or []
+           if s.get("available") and s["name"] not in set(ex["mcp"])]
+    skills = [sk for sk in inv.get("skills") or []
+              if sk["name"] not in set(ex["skills"])]
+    commands = [c for c in inv.get("commands") or []
+                if c["name"] not in set(ex["commands"])]
+    clis = [c for c in inv.get("cli") or []
+            if c["present"] and c["name"] not in set(ex["clis"])]
+
+    lines = ["### MCP servers (firm-wide armory — every Member shares these)",
+             "BASE is NOT in this list and never will be: it is a CLI tool with "
+             "its own card, and its graph is read and written through the `base` "
+             "CLI. Never describe any MCP server as the surface for BASE or its "
+             "graph."]
+    for s in mcp:
+        keys = f" (needs {', '.join(s['needs_keys'])})" if s.get("needs_keys") else ""
+        lines.append(f"- {s['name']}{keys}")
+    lines.append("")
+    lines.append("### CLI tools (host machine — every Member can shell out to these)")
+    lines.append(
+        "Probed on this machine moments ago; this list is ground truth. A tool "
+        "marked LIVE is installed AND signed in — design the org around it. "
+        "Never treat a capability as absent when a LIVE tool below provides it: "
+        "a firm was once founded believing it had no email while a signed-in "
+        "Google Workspace CLI sat right here. Do not repeat that.")
+    for c in clis:
+        lines.append(f"- {discovery.cli_prompt_line(c)}")
+    lines.append("")
+    lines.append("### Skills (attachable per Member)")
+    for sk in skills:
+        desc = (sk.get("description") or "").strip().replace("\n", " ")[:90]
+        lines.append(f"- {sk['name']} — {desc}" if desc else f"- {sk['name']}")
+    lines.append("")
+    lines.append("### Commands (attachable per Member; names only)")
+    lines.append(", ".join(c["name"] for c in commands))
+
+    index = {
+        "mcp": {s["name"] for s in mcp},
+        "skills": {sk["name"] for sk in skills},
+        "commands": {c["name"] for c in commands},
+    }
+    return "\n".join(lines), index
+
+
+def _house_rules() -> str:
+    """The org-design house docs, inlined verbatim into the prompt.
+
+    Identical input to what the agent used to fetch itself — but each Read
+    was a full model round-trip, and the two of them were most of the silent
+    first minute. Inlining is lossless: same text, zero tool turns.
+    """
+    root = _framework_root()
+    parts = []
+    for rel in ("docs/FIRM-SCAFFOLDING-GUIDE.md",
+                "claude/cadre-framework/frameworks/org-design.md"):
+        try:
+            parts.append(f"### {rel}\n\n{(root / rel).read_text(encoding='utf-8')}")
+        except OSError:
+            parts.append(f"### {rel}\n\n(unavailable — design from the rules above)")
+    return "\n\n".join(parts)
+
+
+def founding_prompt(brief: str, arsenal: str) -> str:
+    """The founding agent's prompt, built once for both doors.
+
+    House rules and the arsenal are token-swapped AFTER `.format`, because
+    the inlined documents contain literal braces that `str.format` would
+    choke on. That ordering is not decoration and it is why this is a
+    function rather than two call sites doing the same three steps.
+    """
+    return (_FOUNDING_PROMPT.format(brief=brief)
+            .replace("__HOUSE_RULES__", _house_rules())
+            .replace("__INVENTORY__", arsenal)
+            + NARRATION_CONTRACT)
+
+
+def found_from_brief(root: Path, brief: str, *,
+                     timeout_sec: int = 900) -> dict[str, Any]:
+    """Door B: run the founding agent on a written spec, then commit it.
+
+    The hub's agent, not a new one — same flags, same prompt, same
+    validation, same `commit`. The difference is only that this waits for
+    the answer instead of handing a job id back to a browser.
+
+    The session gets a scratch tier of its own (#143): founding runs before
+    a firm exists, so there is no firm tier to point at, and without one the
+    agent's base hooks walk up out of the install and into whatever `.base`
+    sits above it — on the operator's machine, his own workspace graph.
+
+    Returns `commit`'s own result object, or an `{"ok": False, "error": ...}`
+    of the same shape, so the caller has one thing to print and one thing to
+    exit on.
+    """
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+
+    from firm.pulse.spawn import resolve_claude_bin
+    from firm.services.base_domain import session_spawn
+
+    claude_bin, detail = resolve_claude_bin()
+    if not claude_bin:
+        return {"ok": False, "error": f"claude runtime not wired: {detail}"}
+
+    arsenal, inv = _inventory()
+    argv = [claude_bin, *_FOUNDING_FLAGS, "-p", founding_prompt(brief, arsenal)]
+    env = dict(os.environ)
+    env.pop("CADRE_DB_URL", None)      # a founding run has no firm yet
+    env.pop("CADRE_DB_TOKEN", None)
+    scratch = tempfile.mkdtemp(prefix="cadre-founding-")
+    try:
+        cwd, env["BASE_HOME"] = session_spawn(home=scratch)
+        try:
+            proc = popen_utf8(argv, cwd=cwd, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, env=env)
+        except OSError as exc:
+            return {"ok": False,
+                    "error": f"could not spawn the founding agent: {exc}"}
+
+        final = ""
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "result":
+                    final = event.get("result") or ""
+            proc.wait(timeout=timeout_sec)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            return {"ok": False, "error": "the founding agent took too long"}
+
+        if not final:
+            # A mute failure is the worst kind. Say what the runtime said.
+            err = (proc.stderr.read() if proc.stderr else "").strip()
+            tail = (err.splitlines()[-1][:200] if err
+                    else f"exit code {proc.returncode}")
+            return {"ok": False,
+                    "error": f"the founding agent returned nothing — {tail}"}
+
+        try:
+            proposal = _validate(_extract_json(final), inv=inv)
+        except (ValueError, json.JSONDecodeError) as exc:
+            return {"ok": False,
+                    "error": f"the founding agent's org did not hold up: {exc}"}
+        return commit(root, proposal)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)

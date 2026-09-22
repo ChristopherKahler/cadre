@@ -31,6 +31,7 @@ that fact from the product's own probe and says which branch it took.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from pathlib import Path
 from typing import Any
@@ -447,72 +448,48 @@ def test_r10_no_site_in_the_door_opens_a_window():
 # R12 -- the move must not unhook the hub's own tests
 # ---------------------------------------------------------------------------
 
-def test_r12_the_re_export_binds_the_name_into_the_dashboard_module(
-        monkeypatch, tmp_path):
-    """The move must not unhook the one test that patches a moved name.
+def test_r12_the_re_export_binds_the_names_into_the_dashboard_module(
+        monkeypatch):
+    """The move must not unhook the tests that patch the moved names.
 
-    MEASURED BEFORE THIS LEG WAS WRITTEN, because the G0 flagged this as
-    unverified and a guess here would be worse than no leg. Across `tests/`:
+    MEASURED BEFORE THIS LEG WAS WRITTEN. Across `tests/`: nothing patches
+    `founding.commit`; three files CALL it through the dashboard module and a
+    re-export keeps them working; `cli/test_base_wire_reporting.py:294`
+    patches by string path (`firm.services.base_domain.wire_workspace`),
+    which survives; and `test_child_output_is_decoded_as_utf8.py` patches
+    `founding._validate`, `_house_rules` and `_inventory` ON THE DASHBOARD
+    MODULE, all three of which now live in services.
 
-      * NOTHING patches `founding.commit`. Three files CALL it through the
-        dashboard module (`test_founding_validates_base.py`,
-        `cli/test_base_wire_reporting.py`, `services/test_base_export.py`)
-        and a re-export keeps every one of them working.
-      * `cli/test_base_wire_reporting.py:294` patches by string path,
-        `"firm.services.base_domain.wire_workspace"`, which survives the
-        move because `commit` imports `base_domain` inside its own body and
-        looks the attribute up at call time.
-      * `test_child_output_is_decoded_as_utf8.py:262` DOES patch
-        `founding._validate` on the dashboard module, and `_run_founding`,
-        which stays in that module, is what uses it.
+    So the hazard is exact: the re-export must bind the NAMES into
+    `dashboard/founding.py`'s globals. Holding the module instead and calling
+    `_svc._validate(...)` would leave those patches pointing at nothing and
+    the tests green over unpatched runs.
 
-    So the hazard is exact and small: the re-export must bind the NAME into
-    `dashboard/founding.py`'s globals (`from firm.services.founding import
-    _validate`). Re-exporting by holding the module instead and calling
-    `_svc._validate(...)` would leave that patch pointing at nothing and the
-    test green over an unpatched run.
-
-    The CLI is deliberately NOT part of this leg. It calls the services
-    module, patching the dashboard name does not reach it, and that is
-    correct -- written down here so nobody later "fixes" it by importing the
-    dashboard from the CLI, which is the import direction this build exists
-    to undo.
+    Both halves are mechanical. Identity says the two modules name one
+    object. The globals check says the dashboard function resolves the name
+    from the dict `monkeypatch.setattr` writes into — which is the whole of
+    what "the patch still works" means. An earlier draft of this leg drove
+    `_run_founding` against a fake runtime instead and proved nothing,
+    because the spawn fails before `_validate` is ever reached.
     """
     from firm.dashboard import founding as dash
     from firm.services import founding as svc
 
-    assert dash.commit is svc.commit, (
-        "the dashboard's `commit` is not the same object as the services "
-        "one, so the two doors are two paths again")
-    assert dash._validate is svc._validate
+    moved = ("commit", "_validate", "_house_rules", "_inventory",
+             "_FOUNDING_FLAGS", "NARRATION_CONTRACT", "_FOUNDING_PROMPT")
+    for name in moved:
+        assert hasattr(svc, name), f"{name} did not move to services"
+        assert getattr(dash, name) is getattr(svc, name), (
+            f"dashboard.{name} is not the same object as services.{name}, so "
+            f"the two doors are two paths again")
 
-    seen: list[dict[str, Any]] = []
-
-    def spy(proposal, inv=None):
-        seen.append(proposal)
-        return svc._validate(proposal, inv)
-
+    spy = object()
     monkeypatch.setattr(dash, "_validate", spy)
-    monkeypatch.setattr(dash, "resolve_claude_bin",
-                        lambda: ("/usr/bin/claude", "test"))
-    monkeypatch.setattr(dash, "_house_rules", lambda: "(elided)")
-    monkeypatch.setattr(dash, "_inventory", lambda: ("(no arsenal)", {}))
-    monkeypatch.setattr(dash, "popen_utf8", _never_spawns, raising=True)
-
-    dash._jobs["J12"] = {"status": "running", "proc": None, "narration": []}
-    dash._run_founding("J12", "a two-person writing firm")
-
-    # The spawn never happens (the fake runtime raises), so `_validate` is
-    # reached only if the hub's own path still resolves the patched name.
-    # This leg asserts the WIRE, not the outcome: if `_run_founding` stops
-    # calling `_validate` at all one day, this goes red and says so.
-    assert dash._jobs["J12"]["status"] == "failed", (
-        "the founding job did not finish through the error path, so this "
-        "leg did not exercise what it claims to")
-
-
-def _never_spawns(argv, **kwargs):
-    raise OSError("the re-export leg never spawns")
+    assert dash._run_founding.__globals__["_validate"] is spy, (
+        "_run_founding does not resolve `_validate` from the dashboard "
+        "module's globals, so every test that patches it there is testing "
+        "nothing")
+    assert dash._run_reshuffle.__globals__["_validate"] is spy
 
 
 # ---------------------------------------------------------------------------
@@ -655,3 +632,114 @@ def test_r17b_the_hub_prompt_asks_for_the_keys_and_the_shape():
         assert must_not not in prompt, (
             f"the prompt still says {must_not!r}, which tells the agent to "
             f"produce the firm the old schema could hold")
+
+
+# ---------------------------------------------------------------------------
+# R11 (fake runtime) and R18 -- Door B, and the direction of its imports
+# ---------------------------------------------------------------------------
+
+class _FakeAgent:
+    """Answers the way `claude --print --output-format stream-json` does.
+
+    Records the call first. A real `claude.exe` is not spawned from this
+    seat at all: the acceptance arm at G2 does that, in a slot, and this leg
+    is about the wiring around it — the argv, the working directory, the
+    tier, and what the command does with the JSON that comes back.
+    """
+
+    def __init__(self, proposal: dict[str, Any]) -> None:
+        self.proposal = proposal
+        self.calls: list[dict[str, Any]] = []
+        self.returncode = 0
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append({"argv": list(argv), "cwd": kwargs.get("cwd"),
+                           "env": dict(kwargs.get("env") or {})})
+        self.stdout = iter([
+            json.dumps({"type": "assistant", "message": "thinking"}) + "\n",
+            json.dumps({"type": "result",
+                        "result": json.dumps(self.proposal)}) + "\n",
+        ])
+        self.stderr = io.StringIO("")
+        return self
+
+    def wait(self, timeout=None):
+        return 0
+
+    def kill(self):
+        raise AssertionError("the fake agent was killed; it answered already")
+
+    @property
+    def one(self) -> dict[str, Any]:
+        assert len(self.calls) == 1, f"expected one spawn, got {len(self.calls)}"
+        return self.calls[0]
+
+
+def test_r11_door_b_runs_the_agent_and_commits_what_it_returns(
+        root, tmp_path, capsys, monkeypatch):
+    """A spec goes in, the agent's proposal comes back, a firm exists.
+
+    Three things are asserted about the run itself, not just the outcome,
+    because the outcome would be identical if Door B quietly built its own
+    prompt or ran in the wrong place:
+
+      * the prompt carries the spec text and the house rules, so it is the
+        hub's prompt and not a new one;
+      * the working directory is a `cadre-founding-` scratch tier, not the
+        framework root, which is #143's rule for a session that runs before
+        a firm exists;
+      * that tier is gone afterwards.
+    """
+    from firm.services import founding as svc
+
+    agent = _FakeAgent(_chart_proposal())
+    monkeypatch.setattr(svc, "popen_utf8", agent, raising=True)
+    monkeypatch.setattr("firm.pulse.spawn.resolve_claude_bin",
+                        lambda: ("/usr/bin/claude", "fake"))
+    monkeypatch.setattr(svc, "_inventory", lambda: ("(no arsenal)", {}))
+
+    spec = tmp_path / "spec.md"
+    spec.write_text("# A two-person writing firm\n\nIt writes things.\n",
+                    encoding="utf-8")
+
+    rc, result, _ = _run(["init", str(root), "--brief", str(spec)], capsys)
+
+    assert rc == 0 and result and result.get("ok") is True, result
+    call = agent.one
+    prompt = call["argv"][-1]
+    assert "A two-person writing firm" in prompt, (
+        "Door B did not put the spec in the prompt")
+    assert "FIRM-SCAFFOLDING-GUIDE.md" in prompt, (
+        "Door B built a prompt of its own instead of the hub's")
+
+    tier = Path(call["cwd"])
+    assert "cadre-founding-" in str(tier), (
+        f"Door B ran the agent in {tier}, which is not a scratch tier of its "
+        f"own — its base hooks will walk up out of the install (#143)")
+    assert not tier.exists(), "the scratch tier survived the run"
+
+    assert [m["name"] for m in _rows(root / FIRM_ID, "member")], (
+        "the agent's proposal was not committed")
+    assert _chart(root / FIRM_ID) == {"Ada": None, "Brac": "Ada",
+                                      "Cass": "Brac", "Dov": "Ada"}, (
+        "Door B committed a different firm than the one the agent returned")
+
+
+def test_r18_the_cli_does_not_import_the_dashboard():
+    """The direction this build exists to undo, pinned on the source.
+
+    Read rather than exercised: an import inside one branch of one function
+    fires only on that branch, so a behavioural leg would sit green until
+    the day someone takes it. `cli/board.py` importing `dashboard.auth` is a
+    pre-existing wart with its own issue; this leg is about the founding
+    door.
+    """
+    import inspect
+
+    from firm.cli import init as cli_init
+
+    src = inspect.getsource(cli_init)
+    assert "firm.dashboard" not in src, (
+        "cli/init.py imports the dashboard. The founding path lives in "
+        "services precisely so the CLI does not have to, and an import here "
+        "puts the cycle back one call at a time")
