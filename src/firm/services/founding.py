@@ -989,16 +989,31 @@ def _house_rules() -> str:
     return "\n\n".join(parts)
 
 
-def founding_prompt(brief: str, arsenal: str) -> str:
+def founding_prompt(brief: str, arsenal: str, house_rules: str) -> str:
     """The founding agent's prompt, built once for both doors.
 
     House rules and the arsenal are token-swapped AFTER `.format`, because
     the inlined documents contain literal braces that `str.format` would
     choke on. That ordering is not decoration and it is why this is a
     function rather than two call sites doing the same three steps.
+
+    BOTH TEXTS ARRIVE AS ARGUMENTS, and that is not a style choice. The
+    first version of this function called `_house_rules()` itself, which
+    resolved the name in THIS module — so
+    `test_child_output_is_decoded_as_utf8.py`, which patches
+    `dashboard.founding._house_rules` to keep the prompt small, stopped
+    reaching it. The real 30 KB of house rules went into the command line
+    and Windows refused the spawn outright: `[WinError 206] The filename or
+    extension is too long`. Caught by CI on windows-latest; invisible on
+    Linux, where the same run simply carried a prompt nobody meant to send.
+
+    The lesson is worth more than the fix: binding a moved name back into
+    its old module keeps a patch of THAT NAME working, but a moved FUNCTION
+    resolves its own dependencies in its NEW module. Passing them in leaves
+    nothing hidden to defeat.
     """
     return (_FOUNDING_PROMPT.format(brief=brief)
-            .replace("__HOUSE_RULES__", _house_rules())
+            .replace("__HOUSE_RULES__", house_rules)
             .replace("__INVENTORY__", arsenal)
             + NARRATION_CONTRACT)
 
@@ -1033,19 +1048,38 @@ def found_from_brief(root: Path, brief: str, *,
         return {"ok": False, "error": f"claude runtime not wired: {detail}"}
 
     arsenal, inv = _inventory()
-    argv = [claude_bin, *_FOUNDING_FLAGS, "-p", founding_prompt(brief, arsenal)]
+    prompt = founding_prompt(brief, arsenal, _house_rules())
+    argv = [claude_bin, *_FOUNDING_FLAGS]
     env = dict(os.environ)
     env.pop("CADRE_DB_URL", None)      # a founding run has no firm yet
     env.pop("CADRE_DB_TOKEN", None)
     scratch = tempfile.mkdtemp(prefix="cadre-founding-")
     try:
         cwd, env["BASE_HOME"] = session_spawn(home=scratch)
+        # THE PROMPT GOES ON STDIN, NOT ON ARGV. Windows caps a command line at
+        # 32,767 characters and the two inlined house documents are 29,949 of
+        # them, so `-p <prompt>` put a real founding run 3,692 over the limit and
+        # the spawn failed with `[WinError 206] The filename or extension is too
+        # long`. `--print` reads the prompt from stdin when argv carries none.
+        #
+        # Written and closed BEFORE the stream is read: the child cannot finish
+        # answering until its input ends, and a reader that waits for output
+        # first would wait forever. A broken pipe here means the child is already
+        # gone, and the stream loop below reports that with the child's own
+        # words rather than this one's.
         try:
-            proc = popen_utf8(argv, cwd=cwd, stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE, env=env)
+            proc = popen_utf8(argv, cwd=cwd, stdin=subprocess.PIPE,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              env=env)
         except OSError as exc:
             return {"ok": False,
                     "error": f"could not spawn the founding agent: {exc}"}
+        try:
+            assert proc.stdin is not None
+            proc.stdin.write(prompt)
+            proc.stdin.close()
+        except OSError:
+            pass
 
         final = ""
         try:

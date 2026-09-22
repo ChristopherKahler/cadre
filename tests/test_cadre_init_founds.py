@@ -676,6 +676,23 @@ def test_r17b_the_hub_prompt_asks_for_the_keys_and_the_shape():
 # R11 (fake runtime) and R18 -- Door B, and the direction of its imports
 # ---------------------------------------------------------------------------
 
+class _PromptPipe(io.StringIO):
+    """A stdin pipe that remembers what went through it.
+
+    Production writes the prompt and then CLOSES the pipe, because the agent
+    cannot finish answering until its input ends. A plain `StringIO` honours
+    that close and then refuses `getvalue()`, so the text is captured at the
+    moment of closing rather than afterwards.
+    """
+
+    captured = ""
+
+    def close(self) -> None:
+        if not self.closed:
+            self.captured = self.getvalue()
+        super().close()
+
+
 class _FakeAgent:
     """Answers the way `claude --print --output-format stream-json` does.
 
@@ -691,8 +708,13 @@ class _FakeAgent:
         self.returncode = 0
 
     def __call__(self, argv, **kwargs):
+        # The prompt arrives on STDIN now, so the fake has to have one and
+        # has to record what was written to it. A fake missing the channel
+        # the product uses measures the channel it no longer uses.
+        self.stdin = _PromptPipe()
         self.calls.append({"argv": list(argv), "cwd": kwargs.get("cwd"),
-                           "env": dict(kwargs.get("env") or {})})
+                           "env": dict(kwargs.get("env") or {}),
+                           "stdin": self.stdin})
         self.stdout = iter([
             # A real assistant frame carries an OBJECT in `message`, and
             # `Narrator.feed` reads it as one. The first version of this
@@ -720,6 +742,14 @@ class _FakeAgent:
     def one(self) -> dict[str, Any]:
         assert len(self.calls) == 1, f"expected one spawn, got {len(self.calls)}"
         return self.calls[0]
+
+    @property
+    def prompt(self) -> str:
+        """What the agent was actually given, read off the channel it came
+        on. The whole point of R19 and R12b is that this is the text, not
+        whatever the caller believes it composed."""
+        pipe = self.one["stdin"]
+        return pipe.captured or (pipe.getvalue() if not pipe.closed else "")
 
 
 def test_r11_door_b_runs_the_agent_and_commits_what_it_returns(
@@ -753,7 +783,7 @@ def test_r11_door_b_runs_the_agent_and_commits_what_it_returns(
 
     assert rc == 0 and result and result.get("ok") is True, result
     call = agent.one
-    prompt = call["argv"][-1]
+    prompt = agent.prompt
     assert "A two-person writing firm" in prompt, (
         "Door B did not put the spec in the prompt")
     assert "FIRM-SCAFFOLDING-GUIDE.md" in prompt, (
@@ -813,6 +843,12 @@ def test_r19_both_doors_send_the_agent_the_same_prompt(tmp_path, monkeypatch):
                         lambda: ("/usr/bin/claude", "fake"))
     monkeypatch.setattr(dash, "_inventory", lambda: ("(arsenal)", {}))
     monkeypatch.setattr(svc, "_inventory", lambda: ("(arsenal)", {}))
+    # Patched on the DASHBOARD module, which is where the hub resolves it and
+    # where the rest of the suite patches it. If the composer ever goes back
+    # to looking `_house_rules` up itself, the prompt below carries the real
+    # 30 KB instead of this string and the comparison fails — which is the
+    # regression Windows CI caught once already, as [WinError 206].
+    monkeypatch.setattr(dash, "_house_rules", lambda: "(rules)")
 
     brief = "a two-person writing firm"
     dash._jobs["J19"] = {"status": "running", "proc": None, "narration": []}
@@ -821,8 +857,103 @@ def test_r19_both_doors_send_the_agent_the_same_prompt(tmp_path, monkeypatch):
     finally:
         dash._jobs.pop("J19", None)
 
-    sent = agent.one["argv"][-1]
-    assert sent == svc.founding_prompt(brief, "(arsenal)"), (
+    sent = agent.prompt
+    assert sent == svc.founding_prompt(brief, "(arsenal)", "(rules)"), (
         "the hub composes its own founding prompt instead of calling "
         "`founding_prompt`, so the two doors can send the agent different "
         "instructions from the same source tree")
+
+
+def test_r12b_the_dashboard_patches_still_change_what_the_agent_receives(
+        tmp_path, monkeypatch):
+    """The hazard R12 could not see, and Windows CI found for us.
+
+    Binding a moved name back into `dashboard/founding.py` keeps a patch of
+    THAT NAME working. It does not keep working once the CALLER moves: a
+    function living in services resolves ITS dependencies in services, so a
+    patch on the dashboard name lands on something nothing reads.
+
+    That is not hypothetical. `test_child_output_is_decoded_as_utf8.py`
+    patches `_house_rules` down to one short string on purpose — its own
+    comment says the real documents make a command line Windows refuses —
+    and for one commit the patch stopped reaching the prompt. The real 29,949
+    characters went in, the command line hit 38,343 against a 32,767 limit,
+    and the spawn died with `[WinError 206]`. On macOS and Ubuntu the same
+    run passed while sending a prompt nobody meant to send.
+
+    So the leg is about the BYTES the agent receives, through the module the
+    suite patches.
+    """
+    from firm.dashboard import founding as dash
+
+    agent = _FakeAgent(_chart_proposal())
+    monkeypatch.setattr(dash, "popen_utf8", agent, raising=True)
+    monkeypatch.setattr(dash, "resolve_claude_bin",
+                        lambda: ("/usr/bin/claude", "fake"))
+    monkeypatch.setattr(dash, "_house_rules", lambda: "(RULES-SENTINEL)")
+    monkeypatch.setattr(dash, "_inventory",
+                        lambda: ("(ARSENAL-SENTINEL)", {}))
+
+    dash._jobs["J12b"] = {"status": "running", "proc": None, "narration": []}
+    try:
+        dash._run_founding("J12b", "a two-person writing firm")
+    finally:
+        dash._jobs.pop("J12b", None)
+
+    assert "(RULES-SENTINEL)" in agent.prompt, (
+        "patching `_house_rules` on the dashboard module no longer changes "
+        "what the agent receives, so every test that shrinks the prompt that "
+        "way is sending the real documents instead")
+    assert "(ARSENAL-SENTINEL)" in agent.prompt
+    assert "FIRM-SCAFFOLDING-GUIDE" not in agent.prompt, (
+        "the real house documents reached the agent despite the patch")
+
+
+def test_r12c_the_prompt_never_rides_the_command_line():
+    """Windows caps a command line at 32,767 characters and the two house
+    documents are 29,949 of them. Read on the source, because the argv a
+    fake records is the argv of one run and this is a rule about all of
+    them."""
+    import inspect
+
+    from firm.dashboard import founding as dash
+    from firm.services import founding as svc
+
+    for where, src in (("the hub", inspect.getsource(dash._run_founding)),
+                       ("Door B", inspect.getsource(svc.found_from_brief))):
+        assert '"-p"' not in src, (
+            f"{where} puts the founding prompt on argv again; with the house "
+            f"documents inlined that is 38,343 characters against Windows's "
+            f"32,767 limit, and the spawn fails with WinError 206")
+        assert "stdin=subprocess.PIPE" in src, (
+            f"{where} does not open a stdin pipe, so the prompt has nowhere "
+            f"to go")
+
+
+def test_r19b_neither_door_composes_the_prompt_itself():
+    """One composer, read on the source.
+
+    R19 compares the bytes and cannot see this: mutation NR put the three
+    steps back in the hub and the bytes came out identical, because a
+    faithful copy is faithful until the day someone edits one of the two.
+    That day is the whole risk, and it is a source property.
+
+    The two names below are the seams of the composition — the token the
+    house rules are swapped into, and the contract appended at the end. A
+    door that mentions either is building the prompt rather than asking for
+    it.
+    """
+    import inspect
+
+    from firm.dashboard import founding as dash
+    from firm.services import founding as svc
+
+    for where, src in (("the hub", inspect.getsource(dash._run_founding)),
+                       ("Door B", inspect.getsource(svc.found_from_brief))):
+        assert "founding_prompt(" in src, (
+            f"{where} does not call `founding_prompt`")
+        for seam in ("__HOUSE_RULES__", "NARRATION_CONTRACT"):
+            assert seam not in src, (
+                f"{where} handles {seam} itself, so the prompt is composed in "
+                f"two places and the copies drift the first time either is "
+                f"edited")

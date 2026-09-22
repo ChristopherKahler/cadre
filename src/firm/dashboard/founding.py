@@ -239,17 +239,29 @@ def _run_founding(job_id: str, brief: str) -> None:
     # because the inlined documents carry literal braces that `str.format`
     # would choke on. R19 pins that both doors send the same bytes.
     arsenal, inv = _inventory()
-    argv = [claude_bin, *_FOUNDING_FLAGS, "-p",
-            founding_prompt(brief, arsenal)]
+    prompt = founding_prompt(brief, arsenal, _house_rules())
+    argv = [claude_bin, *_FOUNDING_FLAGS]
     env = dict(os.environ)
     env.pop("CADRE_DB_URL", None)   # a founding run has no firm yet
     env.pop("CADRE_DB_TOKEN", None)
     cwd, env["BASE_HOME"] = _scratch_session(job_id)
 
+    # THE PROMPT GOES ON STDIN, NOT ON ARGV. Windows caps a command line at
+    # 32,767 characters and the two inlined house documents are 29,949 of
+    # them, so `-p <prompt>` put a real founding run 3,692 over the limit and
+    # the spawn failed with `[WinError 206] The filename or extension is too
+    # long`. `--print` reads the prompt from stdin when argv carries none.
+    #
+    # Written and closed BEFORE the stream is read: the child cannot finish
+    # answering until its input ends, and a reader that waits for output
+    # first would wait forever. A broken pipe here means the child is already
+    # gone, and the stream loop below reports that with the child's own
+    # words rather than this one's.
     try:
         proc = popen_utf8(
             argv,
             cwd=cwd,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
@@ -257,6 +269,12 @@ def _run_founding(job_id: str, brief: str) -> None:
     except OSError as exc:
         _finish(job_id, error=f"could not spawn the founding agent: {exc}")
         return
+    try:
+        assert proc.stdin is not None
+        proc.stdin.write(prompt)
+        proc.stdin.close()
+    except OSError:
+        pass
 
     with _jobs_lock:
         if job_id in _jobs:
