@@ -702,7 +702,8 @@ def _abort_quietly(live) -> None:
 
 
 def _this_installs_firm_ran(case: str, live, state, results, capsys) -> None:
-    from tests.test_member_entry import NEW_KEYS, _entry_of, _own_version
+    from tests.test_member_entry import (NEW_KEYS, _entry_of, _own_version,
+                                         _ran_this_build)
 
     member_file = live.rec / "member.json"
     member = (json.loads(member_file.read_text(encoding="utf-8"))
@@ -724,7 +725,8 @@ def _this_installs_firm_ran(case: str, live, state, results, capsys) -> None:
 
     assert member is not None, f"the stand-in Member never ran; state {state}"
     assert not live.marker.exists(), "the stale firm.exe in .firm/bin ran"
-    assert member["version"]["out"] == version, (member["version"], version)
+    assert _ran_this_build(member["version"]["out"], version), (
+        member["version"], version)
     assert member["register"]["rc"] == 0, member["register"]
     assert state["runs"] == ["completed"], state
     assert state["documents"] == 1 and state["unit"] == "done", state

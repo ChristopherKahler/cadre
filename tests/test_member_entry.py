@@ -285,7 +285,8 @@ def test_a5_a_stale_copy_is_refreshed_and_a_refused_one_is_reported(
     monkeypatch.setattr(os, "replace", refuse)
     path, record = _member_path(host.ws)
     assert Path(copy).read_bytes() == b"STALE"
-    assert Path(copy).name in record.get("member_entry_note", ""), record
+    # Case-blind: `which` answers in PATHEXT's spelling (`firm.EXE`) on Windows.
+    assert Path(copy).name.lower() in record.get("member_entry_note", "").lower(), record
     assert sorted(p.name for p in entry.iterdir()) == sorted(
         [_file("cadre"), _file("firm")]), "a refused replace left a temp file"
 
@@ -548,11 +549,21 @@ def _need_git_bash() -> str:
 
 
 def _own_version(env: dict) -> str:
-    """What THIS install's `firm --version` prints, asked of the interpreter
-    directly rather than through any PATH."""
+    """THIS install's build, asked of the interpreter directly rather than
+    through any PATH: the last word of `python -m firm --version`. The program
+    name before it depends on how the CLI was started (`-m firm` prints
+    `cadre`, the `firm` launcher prints `firm`), so only the build is compared."""
     done = subprocess.run([sys.executable, "-m", "firm", "--version"], env=env,
                           capture_output=True, text=True, timeout=120)
-    return done.stdout.strip()
+    words = done.stdout.split()
+    return words[-1] if words else ""
+
+
+def _ran_this_build(output: str, build: str) -> bool:
+    """Did `firm --version` come from THIS install's `firm`? The decoys print
+    DECOY-166, and a `firm` that did not run prints nothing."""
+    words = output.split()
+    return len(words) == 2 and words[0] == "firm" and words[1] == build
 
 
 @pytest.fixture(scope="module")
@@ -627,9 +638,9 @@ def test_b1_a_hand_pulse_member_runs_this_installs_firm_and_the_unit_closes(
 
     assert h.member is not None, (
         f"the stand-in Member never ran. stdout: {h.stdout}\nstderr: {h.stderr}")
-    assert h.member["version"]["out"] == h.version, (
+    assert _ran_this_build(h.member["version"]["out"], h.version), (
         f"the `firm` that ran is not this install's: it printed "
-        f"{h.member['version']}, this install prints {h.version!r}")
+        f"{h.member['version']}, this install's build is {h.version!r}")
     assert h.member["register"]["rc"] == 0, h.member["register"]
     assert h.after["runs"] == h.before["runs"] + ["completed"], h.after
     assert h.after["documents"] == h.before["documents"] + 1, h.after
