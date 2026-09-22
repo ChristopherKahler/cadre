@@ -201,31 +201,89 @@ def test_r1_door_a_founds_the_whole_proposal(root, tmp_path, capsys):
 
 
 def test_r2_the_firms_own_tier_is_the_one_that_is_wired(root, tmp_path,
-                                                        capsys):
-    """Cadre's manifest lands in the FIRM's tier, and the leg says which host
-    it measured. With base absent the command still founds (R9) and this leg
-    asserts the degraded shape instead of asserting nothing."""
+                                                       capsys, monkeypatch):
+    """Cadre's manifest lands in the FIRM's tier and `base cadre` runs there.
+
+    THE SKIP NAMES THE FENCE, NOT THE HOST, because the fence is the truth.
+    This suite makes base absent for every test by two independent routes:
+    conftest's autouse `_base_home_is_never_the_operators` sets
+    `CADRE_NO_BASE=1` (conftest.py:96), which `sysconfig.service` binds as
+    `DISABLE_ENV` and `which_base` obeys (service.py:37, :47); and the
+    autouse `_no_ambient_base` patches `which_base` to return None outright.
+    `base_ready.check` asks `which_base` and answers `base_present: False` on
+    a falsy reply, so it answers False on EVERY host.
+
+    This leg's previous reason said "base is not on this host". That was a
+    false statement about the machine wherever base exists, and it meant DoD
+    line 2 — the firm's tier holds Cadre's manifest and `base cadre` runs
+    there — had never actually been measured anywhere.
+
+    It now runs for real under an explicit opt-in, `CADRE_REAL_BASE=1`, with
+    both fences lifted for this test only and `BASE_HOME` still pointed at
+    `tmp_path` by the autouse fixture, so a real base never sees the
+    operator's own tier.
+
+    WHAT IT REPORTS TODAY, AND WHY IT IS LEFT REPORTING IT. From a SOURCE
+    checkout the opt-in fails at the `base_cadre_runs` assertion on both
+    platforms, for issue #156: `base_extension.console_script()` prefers
+    `framework_root()/bin/cadre` whenever that file exists, and that shim is
+    bash (Windows refuses it outright: "%1 is not a valid Win32 application")
+    and resolves its entrypoint through `$CADRE_VENV` or a repo-local
+    `.venv`, which a git worktree has neither of ("bin/cadre: line 12: exec:
+    cadre: not found"). A deployed install is unaffected.
+
+    The assertion is NOT weakened to match. It states what DoD line 2
+    promises, it is opt-in so it reddens no CI run, and when #156 is fixed it
+    goes green without being touched. A leg edited to agree with a defect is
+    the defect's second home.
+    """
+    import os
+    import shutil
+
+    if os.environ.get("CADRE_REAL_BASE") != "1":
+        pytest.skip(
+            "the suite fences base off for every test (CADRE_NO_BASE=1 at "
+            "conftest.py:96, plus _no_ambient_base patching which_base), so "
+            "base_ready.check answers base_present False on every host "
+            "including one where base is installed. Set CADRE_REAL_BASE=1 "
+            "with base on PATH to run this leg for real")
+
+    real_base = shutil.which("base")
+    if not real_base:
+        pytest.skip("CADRE_REAL_BASE=1 but there is no `base` on PATH, so "
+                    "the opt-in cannot measure what it claims")
+
+    # Both fences lifted, and only here. BASE_HOME stays where the autouse
+    # fixture put it, under tmp_path, so a real base writes nowhere near the
+    # operator's tier.
+    monkeypatch.delenv("CADRE_NO_BASE", raising=False)
+    monkeypatch.setattr("firm.sysconfig.service.which_base",
+                        lambda: real_base)
+
     from firm.services import base_ready
 
-    present = bool(base_ready.check().get("base_present"))
+    assert base_ready.check().get("base_present") is True, (
+        "the fences are lifted and base still does not read as present, so "
+        "this leg would measure the degraded path under a name that promises "
+        "the opposite")
+
     rc, result, _ = _run(["init", str(root), "--proposal",
                           str(_write(tmp_path, _chart_proposal()))], capsys)
-    assert rc == 0 and result["ok"] is True
+    assert rc == 0 and result["ok"] is True, result
 
-    ws = root / FIRM_ID
-    tier = ws / ".firm" / "base-home" / ".base-gbl"
-    if not present:
-        assert result["base_present"] is False
-        assert result["base_cadre_runs"] is False
-        pytest.skip("base is not on this host; R9 owns the degraded case and "
-                    "this leg has no tier to read")
-    manifests = sorted(p.name for p in (tier / "extensions").glob("*"))
-    assert manifests == ["cadre"] or "cadre" in manifests, (
+    tier = root / FIRM_ID / ".firm" / "base-home" / ".base-gbl"
+    # STEMS, not names. The first run of this leg under the opt-in reported
+    # `['cadre.toml']` against a guessed `['cadre']`: the manifest is a TOML
+    # file. The claim is about WHICH extension is installed in the firm's
+    # tier, so comparing stems states that and stops the leg resting on a
+    # file extension nobody had measured.
+    manifests = sorted(p.stem for p in (tier / "extensions").glob("*"))
+    assert manifests == ["cadre"], (
         f"the firm's tier holds {manifests}, which is not exactly Cadre's "
         f"manifest")
     assert result["base_cadre_runs"] is True, (
-        "`base cadre` does not run in the firm's own tier, so a Member told "
-        "to run it cannot")
+        f"`base cadre` does not run in the firm's own tier, so a Member told "
+        f"to run it cannot: {result.get('base_ready')}")
 
 
 def test_r3_the_operators_own_tier_is_untouched(root, tmp_path, capsys,
@@ -401,18 +459,21 @@ def test_r8_the_bare_form_says_the_firm_is_not_founded(tmp_path, capsys):
 def test_r9_base_absent_is_degraded_not_broken(root, tmp_path, capsys):
     """base absent must not refuse, and the output must say what is missing.
 
-    NOTHING IS PATCHED HERE, and that is the point. This suite already runs
-    with base absent for every test: conftest's autouse `_no_ambient_base`
-    replaces `firm.sysconfig.service.which_base` with one that answers None.
-    So the leg drives the product's own probe in the state the suite puts it
-    in. The first draft of this leg invented a return value for
-    `base_ready.check` instead and died inside `base_ready.ensure` on
-    `KeyError: 'base_runs'` — a key the real probe returns and the invented
-    one had not thought of. A stub of a thing you did not read is a second,
-    wrong copy of it.
+    NOTHING IS PATCHED HERE, and that is the point. The suite makes base
+    absent for every test by two routes — `CADRE_NO_BASE=1` at
+    conftest.py:96, which `sysconfig.service.which_base` obeys, and the
+    autouse `_no_ambient_base` patching that function to None — so this leg
+    drives the product's own probe in the state the suite puts it in. An
+    earlier draft invented a return value for `base_ready.check` instead and
+    died inside `base_ready.ensure` on `KeyError: 'base_runs'`, a key the
+    real probe returns and the invented one had not thought of.
 
-    The base-PRESENT control cannot live in this suite for the same reason,
-    and it is not missing: it is arm S1 at G2, against a real base.
+    WHAT THIS LEG PROVES, STATED PRECISELY. Inside this suite it measures the
+    DEGRADED path only, and it can never measure anything else, because the
+    fence is unconditional. Its "control: base present" does not live here:
+    it is R2 under `CADRE_REAL_BASE=1`, or it is nothing. Saying so matters
+    because the earlier wording implied the absence was a fact about the host
+    that had been measured, and it is a fact about the fixtures.
     """
     from firm.services import base_ready
 
