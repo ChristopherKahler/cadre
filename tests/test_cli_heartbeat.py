@@ -345,3 +345,55 @@ def test_status_carries_a_CONTAINED_tree_through_with_its_flags(
         f"the flags the kernel agreed to never reach the operator: {entry}")
     assert entry.get("containment_reason") == "", (
         f"a contained tree grew a reason it does not have: {entry}")
+
+
+def test_status_carries_a_contained_tree_that_could_not_read_its_flags(
+        tmp_path, capsys, monkeypatch):
+    """The third state, and it is new as of the FINDING 1 fix (avocet, 19:01).
+
+    `contain_this_process` used to answer contained-with-an-empty-reason or
+    not-contained-with-a-reason, and nothing else. Guarding the flag read
+    added a third: CONTAINED, with the membership settled and read back, and a
+    NON-EMPTY reason saying the limit flags could not be read. The tree is
+    protected; only the number is missing.
+
+    So this arm exists to stop the CLI copy from ever growing a branch on
+    `reason` being non-empty, which would read this state as a failure and
+    tell an operator their contained tree is loose. The copy branches on
+    nothing -- it carries whatever the scheduler answered -- and that is the
+    property held here.
+    """
+    ws = _workspace_with_db(tmp_path)
+    unit_dir = tmp_path / "units"
+    unit_dir.mkdir()
+
+    class _Sched:
+        name = "winsched"
+
+        def list_installed(self, prefix):
+            return [prefix + "lab"]
+
+        def status(self, stem):
+            return {"installed": True, "state": "ready", "failed": False,
+                    "workdir": str(ws), "contained": True,
+                    "containment_reason":
+                        "the job was made and this process is in it, but its "
+                        "limit flags could not be read: "
+                        "QueryInformationJobObject failed, GetLastError=5"}
+
+    monkeypatch.setattr(hb, "_sched", lambda unit_dir=None: _Sched())
+    monkeypatch.setattr(hb, "_service_python", lambda stem, unit_dir: None)
+
+    rc = hb.run_status(unit_dir=unit_dir)
+
+    assert rc == 0
+    entry = json.loads(capsys.readouterr().out)["heartbeats"][0]
+    assert entry.get("contained") is True, (
+        f"a CONTAINED tree whose flags could not be read was reported as "
+        f"{entry.get('contained')!r}; the operator is told their pulse tree "
+        f"is loose when it is not")
+    assert "could not be read" in (entry.get("containment_reason") or ""), (
+        f"the degraded read left no trace on the surface an operator uses: "
+        f"{entry}")
+    assert "containment_flags" not in entry, (
+        f"flags were invented for a reading that failed: {entry}")
