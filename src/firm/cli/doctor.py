@@ -93,6 +93,7 @@ def diagnose(workspace: Path, firm_id: str, *,
     from firm.cli.heartbeat import _UNIT_PREFIX, _sched
     from firm.cli.install_hooks import POLICY_HOOK_COMMAND, POLICY_HOOK_SCRIPT_NAME
     from firm.pulse import preflight
+    from firm.services import pulse_ledger
     from firm.services import policy as policy_svc
 
     sched = _sched(unit_dir)
@@ -324,6 +325,53 @@ def diagnose(workspace: Path, firm_id: str, *,
             "ghost-units", "No failed scheduler ghosts", not ghost, "mechanical",
             f"{stem} sits failed with its files gone" if ghost else "clean",
             fix="clear the scheduler's failure residue"))
+
+        # 8a. a timer whose stored command carries no --source — OPERATOR
+        #
+        # ROUTED TO THE OPERATOR, AND THAT IS A RULING RATHER THAN A DEFAULT.
+        # `fix()` selects on route == "mechanical" and dispatches per key, so
+        # "mechanical" is a promise that `--fix` performs the repair. The repair
+        # here is re-running `heartbeat enable`, which rewrites a LIVE timer
+        # (`systemctl enable --now`, `schtasks /Create`) -- something the doctor
+        # has never done -- and on Windows that is #147: enable over a running
+        # heartbeat re-creates the task and leaves the old pulse running. A
+        # `--fix` that can leave two pulses running is worse than a card that
+        # prints one command. The #28 rule is still satisfied: the command
+        # exists, and this card prints it with the firm's own values.
+        #
+        # THREE STATES, THREE ANSWERS (law 48). `source` absent means the stored
+        # command could not be read, which is not the same finding as a command
+        # read and carrying no flag -- so absent is "undeterminable" and says
+        # WHAT it could not read, rather than sending an operator to re-enable a
+        # timer on the strength of a reading that never happened.
+        if not st.get("installed"):
+            # The `schedule` card above owns "there is no timer". Two cards for
+            # one condition is two findings an operator has to reconcile.
+            checks.append(_check(
+                "timer-source", "The timer says which command installed it",
+                True, "operator", "no timer installed, nothing to label"))
+        elif "source" not in st:
+            checks.append(_check(
+                "timer-source", "The timer says which command installed it",
+                False, "operator",
+                f"could not read the stored command for {stem} from "
+                f"{sched.name}, so whether it carries --source is unknown",
+                state="undeterminable"))
+        elif st["source"] is None:
+            checks.append(_check(
+                "timer-source", "The timer says which command installed it",
+                False, "operator",
+                f"{stem} was installed before --source existed, so its pulses "
+                f"record {pulse_ledger.UNSET!r} and nothing says why",
+                fix=("cadre heartbeat enable --workspace "
+                     f"{workspace} --firm-id {firm_id}"
+                     + (f" --interval {pulse_interval}" if pulse_interval
+                        else ""))))
+        else:
+            checks.append(_check(
+                "timer-source", "The timer says which command installed it",
+                True, "operator",
+                f"{stem} labels its pulses {st['source']!r}"))
 
         # 8b. business hours an interval overwrote — board (#134)
         #
