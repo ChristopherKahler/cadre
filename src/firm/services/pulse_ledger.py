@@ -21,7 +21,6 @@ can stop half way. Migrations are ``init``'s and ``doctor --fix``'s.
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -90,12 +89,6 @@ def _reason(exc: Exception) -> str:
     if "no such table" in message and TABLE in message:
         return f"migration {MIGRATION} is not applied ({TABLE} is absent)"
     return f"{type(exc).__name__}: {message}"
-
-
-def table_is_present(conn: Any) -> bool:
-    return bool(conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-        (TABLE,)).fetchone())
 
 
 # ---------------------------------------------------------------------------
