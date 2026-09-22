@@ -519,6 +519,32 @@ def test_L10_last_pulse_comes_from_the_ledger_not_from_the_hubs_file(
         "mtime", entry)
 
 
+def test_L10_control_an_unreadable_ledger_is_not_a_firm_that_never_pulsed(
+        tmp_path, capsys, monkeypatch):
+    """Law 48 at this surface. A zero is the one result that cannot tell "the
+    thing is not there" from "I cannot see", so the two get different keys and
+    a reader is never handed the wrong one."""
+    import firm.cli.heartbeat as hb
+    import firm.sched.systemd as sysd
+
+    ws = _firm(tmp_path / "ws")
+    _drop_the_ledger_table(ws)
+
+    unit_dir = tmp_path / "units"
+    unit_dir.mkdir()
+    (unit_dir / f"cadre-heartbeat-{FIRM}.timer").write_text(
+        "[Timer]\nOnUnitActiveSec=15m\n", encoding="utf-8")
+    (unit_dir / f"cadre-heartbeat-{FIRM}.service").write_text(
+        f"[Service]\nWorkingDirectory={ws}\n", encoding="utf-8")
+    monkeypatch.setattr(sysd, "run_cmd", lambda argv, timeout=30: (0, "active"))
+
+    assert hb.run_status(unit_dir=unit_dir) == 0
+
+    entry = json.loads(capsys.readouterr().out)["heartbeats"][0]
+    assert "last_pulse" not in entry, entry
+    assert LEDGER_MIGRATION in entry["last_pulse_unavailable"], entry
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # L11 · doctor names a gap as a gap, and never as a drop
 # ═══════════════════════════════════════════════════════════════════════════
