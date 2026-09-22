@@ -60,11 +60,17 @@ TWO LIMITATIONS, BOTH STATED AT THE CODE RATHER THAN DISCOVERED LATER.
    causes: a backward wall-clock step between the two creations, and the
    kernel's own boot processes -- ``System``, pid 4, is recorded AFTER 104 and
    180, which it starts. Only the first can reach a pulse's tree, because a
-   holder is a user process started long after boot. That is the deliberate direction of the two:
-   on Windows the pulse contains itself (R2), so its Members end with the
-   holder and this walk VERIFIES that rather than being the thing that does
-   it. A dropped row costs a verification; a kept stranger costs an operator
-   killing something that was never his.
+   holder is a user process started long after boot.
+
+   BOTH MISTAKES COST SOMETHING REAL, which is why the rule is about evidence
+   and not about which error is cheaper. A kept stranger can send an operator
+   to end a process that was never the run's; a dropped descendant can let
+   ``ok`` read true over a live Member. So the guard drops an edge only on
+   EVIDENCE that it is false -- a child older than its parent -- and keeps it
+   wherever there is no evidence either way: a stamp that will not parse, a
+   parent missing from the table. On Windows the pulse contains itself (R2),
+   so its Members end with the holder and this walk verifies that rather than
+   doing it, which bounds what a rare dropped real child can cost.
 """
 from __future__ import annotations
 
@@ -245,11 +251,13 @@ def _edge_holds(table: dict[int, tuple[int, str, str]], parent: int,
     the only one available: A CHILD CANNOT HAVE STARTED BEFORE ITS PARENT, so
     an older "child" is naming a reused pid.
 
-    WHEN IN DOUBT, KEEP THE EDGE. A stamp that will not parse as an integer,
-    or a parent absent from the table, keeps it. The two mistakes are not
-    equal: a stranger in the list costs an operator a name to read, and a
-    dropped descendant is `ok: true` over a live Member, which is the whole of
-    #148.
+    DROP ON EVIDENCE, KEEP WITHOUT IT. Both mistakes cost something real: a
+    kept stranger can send an operator to end a process that was never the
+    run's, and a dropped descendant can let `ok` read true over a live Member.
+    So an edge is dropped only where there is EVIDENCE it is false -- the
+    child is older than the parent it names -- and kept wherever there is no
+    evidence either way: a stamp that will not parse as an integer, or a
+    parent absent from the table.
     """
     row = table.get(parent)
     if row is None:

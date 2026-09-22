@@ -69,7 +69,8 @@ FIRM = "containco"
 #: `TerminateProcess` ends the holder there and leaves its children, which is
 #: R1b's arm measured in this file rather than only on CI. This note used to
 #: claim the opposite, and the Windows job log disagrees with it: the only
-#: containment legs skipped there are the zombie leg and the `ps` control.
+#: containment legs skipped there are the one whose whole point is the
+#: non-Windows answer, the zombie leg, and the `ps` control -- three, not two.
 posix_only = pytest.mark.skipif(
     os.name != "posix",
     reason=("needs a POSIX-only shape: a zombie, or a `/proc` walk. The tree "
@@ -1199,7 +1200,8 @@ def test_the_descendant_read_never_asks_permission_to_signal(tmp_path, tree,
 
     IT RUNS ON WINDOWS TOO. This used to say its Windows arm belonged to the
     live leg because the tree here was built with `fork` -- both halves went
-    stale at once: the tree has been a plain `Popen` chain since the day after,
+    stale at once: the tree became a plain `Popen` chain in the very next
+    commit, six minutes later,
     and the `OpenProcess` fake below is this leg's own Windows arm.
     """
     ws = _firm(tmp_path / "ws")
@@ -1685,9 +1687,12 @@ def test_an_unparsable_stamp_keeps_its_edge(monkeypatch):
 
     The ordering check needs two numbers. When either stamp will not parse --
     a `ps` column that moved, a CIM field that came back empty -- the edge is
-    KEPT rather than dropped. The two mistakes are not equal: a stranger in the
-    list costs an operator a name to read, and a dropped descendant is the
-    false green this whole issue exists to close.
+    KEPT rather than dropped.
+
+    Not because a stranger is cheap: it is not. A kept stranger can send an
+    operator to end a process that was never the run's. But an edge is dropped
+    only on EVIDENCE that it is false, and a stamp nobody can read is not
+    evidence of anything.
     """
     monkeypatch.setattr(descendants, "_WINDOWS", True)
 
