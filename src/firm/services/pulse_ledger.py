@@ -82,7 +82,7 @@ def _reason(exc: sqlite3.OperationalError) -> str:
     """
     message = str(exc)
     if "no such table" in message and TABLE in message:
-        return f"{TABLE} is absent: migration {MIGRATION} is not applied"
+        return f"migration {MIGRATION} is not applied ({TABLE} is absent)"
     return f"{type(exc).__name__}: {message}"
 
 

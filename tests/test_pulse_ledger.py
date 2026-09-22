@@ -59,7 +59,7 @@ import pytest
 
 import firm.cli.pulse as pulse_cli
 from firm.core.db import connect
-from firm.services import pulse_queue
+from firm.services import pulse_ledger, pulse_queue
 from tests.platform_marks import spawn_layer_rejects_this_platforms_binaries
 from tests.test_pulse_exit_contract import (
     FIRM,
@@ -630,24 +630,48 @@ def test_L11_control_a_firm_with_no_ledger_table_reads_not_available(tmp_path):
 SRC = Path(pulse_cli.__file__).resolve().parents[1]
 
 
-def _labels_passed_in(tree: ast.AST) -> list[str]:
-    """Every ``--source`` label this module hands to a pulse it launches.
+def _resolve(node: ast.AST) -> str | None:
+    """The string *node* denotes, or None when this scanner cannot read it.
+
+    Two shapes reach a launch site in this codebase, and both are read here
+    rather than assumed: a literal (``"--source", "cli"``) and an attribute of
+    the ledger module (``"--source", pulse_ledger.BOARD``), which is the shape
+    the two real sites use so that the parser, the column and the callers hold
+    one list between them.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if (isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id.endswith("pulse_ledger")):
+        value = getattr(pulse_ledger, node.attr, None)
+        return value if isinstance(value, str) else None
+    return None
+
+
+def _labels_passed_in(tree: ast.AST) -> list[tuple[str | None, str]]:
+    """Every ``--source`` label handed to a pulse, as (label, how it was written).
 
     Read from the SOURCE (law 31): the guard's own list cannot supply the set
     of shapes it is meant to cover, because it would be written from the same
-    assumption the code was. Two shapes reach a launch site: a list literal
+    assumption the code was. It reaches a list literal
     ``[..., "--source", "board", ...]`` and an augmented one
-    ``argv += ["--source", label]``.
+    ``argv += ["--source", label]`` alike, since both are list nodes.
+
+    A label this scanner CANNOT read comes back as ``(None, <the source>)``
+    rather than being skipped. A skip would make a third shape invisible, and
+    an invisible shape is a guard that reports clean because it went blind --
+    the one failure direction a guard may not have (law 41).
     """
-    found: list[str] = []
+    found: list[tuple[str | None, str]] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.List, ast.Tuple)):
             continue
         items = node.elts
         for i, item in enumerate(items[:-1]):
-            if (isinstance(item, ast.Constant) and item.value == "--source"
-                    and isinstance(items[i + 1], ast.Constant)):
-                found.append(items[i + 1].value)
+            if isinstance(item, ast.Constant) and item.value == "--source":
+                nxt = items[i + 1]
+                found.append((_resolve(nxt), ast.unparse(nxt)))
     return found
 
 
@@ -660,39 +684,70 @@ def _choices() -> tuple[str, ...]:
     return tuple(action.choices or ())
 
 
+#: The launch sites this build put in the tree, and the label each passes.
+#: One row per site, which is the map row law 31 asks for -- and the guard
+#: below fails if the tree grows a site this table does not name.
+LAUNCH_SITES = {
+    "cli/heartbeat.py": ["heartbeat"],
+    "dashboard/server.py": ["board"],
+}
+
+
+def _sites() -> dict[str, list[tuple[str | None, str]]]:
+    found: dict[str, list[tuple[str | None, str]]] = {}
+    for path in sorted(SRC.rglob("*.py")):
+        labels = _labels_passed_in(ast.parse(path.read_text(encoding="utf-8")))
+        if labels:
+            found[path.relative_to(SRC).as_posix()] = labels
+    return found
+
+
 def test_L12_every_label_a_launch_site_passes_is_in_choices():
     """A site passing a label ``choices`` rejects is a usage error at run time,
     inside a timer, where nobody is reading stderr. The map rows in the build
     record are these sites, and this guard is what keeps the map honest."""
-    sites: dict[str, list[str]] = {}
-    for path in sorted(SRC.rglob("*.py")):
-        labels = _labels_passed_in(ast.parse(path.read_text(encoding="utf-8")))
-        if labels:
-            sites[str(path.relative_to(SRC))] = labels
+    sites = _sites()
 
     assert sites, ("scanned every file under src/firm and found no launch "
                    "site passing --source: this guard proved NOTHING (law 23)")
     choices = _choices()
     assert choices, "the pulse parser has no --source choices to check against"
-    bad = {where: [l for l in labels if l not in choices]
+
+    unreadable = {where: [src for label, src in labels if label is None]
+                  for where, labels in sites.items()}
+    assert not any(unreadable.values()), (
+        "a --source argument this scanner cannot read is a shape the guard "
+        "is blind to, and a blind guard reports clean", unreadable)
+
+    bad = {where: [label for label, _src in labels if label not in choices]
            for where, labels in sites.items()}
     assert not any(bad.values()), (bad, choices)
     assert "unset" not in choices, choices
 
+    measured = {where: [label for label, _src in labels]
+                for where, labels in sites.items()}
+    assert measured == LAUNCH_SITES, (
+        "the launch sites in the tree are not the ones this map names; add "
+        "the row and the map row in the build record together", measured)
 
-def test_L12_control_the_scanner_sees_a_site_and_fails_a_bad_one(tmp_path):
+
+def test_L12_control_the_scanner_reads_both_shapes_and_fails_a_bad_one():
     """The positive control and the must-fail canary, in one run (law 48). A
     scanner that finds nothing and a scanner that is blind print the same
-    zero, so the zero is never admissible on its own."""
-    good = ast.parse('argv = ["-m", "firm", "pulse", "--source", "heartbeat"]')
-    appended = ast.parse('argv += ["--source", "board"]')
+    zero, so the zero is never admissible on its own -- and the control covers
+    BOTH shapes the tree uses, because a control that covers one is the blind
+    spot this guard already had once."""
+    literal = ast.parse('argv = ["-m", "firm", "pulse", "--source", "cli"]')
+    attribute = ast.parse('argv += ["--source", pulse_ledger.BOARD]')
     canary = ast.parse('argv = ["--source", "not-a-real-label"]')
+    unreadable = ast.parse('argv = ["--source", pick(a, b)]')
 
-    assert _labels_passed_in(good) == ["heartbeat"]
-    assert _labels_passed_in(appended) == ["board"]
+    assert _labels_passed_in(literal) == [("cli", "'cli'")]
+    assert _labels_passed_in(attribute) == [("board", "pulse_ledger.BOARD")]
+    assert _labels_passed_in(unreadable) == [(None, "pick(a, b)")]
 
     found = _labels_passed_in(canary)
-    assert found == ["not-a-real-label"]
-    assert [l for l in found if l not in _choices()] == ["not-a-real-label"], (
+    assert found == [("not-a-real-label", "'not-a-real-label'")]
+    assert [l for l, _s in found if l not in _choices()] == ["not-a-real-label"], (
         "the guard must FAIL on a label the parser would reject; a guard "
         "never seen red is decoration that happens to print PASS")

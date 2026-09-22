@@ -2127,6 +2127,7 @@ def _fire_pulse(
     Board-targeted pulse activating a single Member."""
     from firm.pulse.environment import pulse_path
     from firm.sched import resolve_scheduler
+    from firm.services import pulse_ledger
 
     unit = f"pulse-{firm_id}-{int(time.time())}"
     env = {"FIRM_ID": firm_id}
@@ -2148,9 +2149,15 @@ def _fire_pulse(
     # applies the same PATH itself; this keeps the wrapper process whole too.
     env["PATH"] = pulse_path(workspace, firm_id)
 
+    # --source board, so the ledger can tell a Board pulse from a timer one
+    # (#128 D3). It goes in the argv and not in `env` above on purpose: this
+    # function hands the dispatched process a whole environment, and every
+    # Member run below it inherits a copy, so a label there would describe
+    # whoever set it rather than the pulse that reads it.
     pulse_argv = [
         _venv_python(workspace), "-m", "firm", "pulse",
         "--workspace", str(workspace), "--firm-id", firm_id,
+        "--source", pulse_ledger.BOARD,
     ]
     if only:
         pulse_argv += ["--only", only]

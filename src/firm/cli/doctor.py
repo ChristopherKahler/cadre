@@ -28,6 +28,7 @@ from typing import Any
 
 from firm.core import repo
 from firm.core.db import connect, get_db_path, resolve_firm_id
+from firm.services import pulse_ledger
 from firm.core.migrate import (
     _default_migrations_dir,
     applied_migration_names,
@@ -341,6 +342,54 @@ def diagnose(workspace: Path, firm_id: str, *,
             "hours belong, so the business-hours gate reads always open. Cadre has no "
             "command to set business hours yet; see issue #139" if lost_to is not None
             else "no pulse interval in firm.schedule"))
+
+        # 8c. pulse gaps — operator (#128 D3)
+        #
+        # A GAP, NEVER A DROP. Under Chris's rule a logged-out Windows box does
+        # not pulse, and that leaves precisely the evidence a dropped tick
+        # leaves: no row. This card reports the window it measured and says
+        # nothing about the cause, because it read none.
+        #
+        # Between recorded pulses only. The window from the newest row to now
+        # belongs to the schedule card above (firm.pulse_interval against the
+        # installed timer): a firm whose timer is off has no newest row moving,
+        # and this card would then fire forever about a finding that already
+        # has an owner.
+        #
+        # Three answers and three states, because an absent table, a firm with
+        # nothing to measure, and a firm with a real gap are three different
+        # findings and one of them is not the operator's to act on (law 48).
+        starts, ledger_note = pulse_ledger.best_effort(
+            lambda: pulse_ledger.starts(conn, firm_id))
+        if ledger_note is not None:
+            checks.append(_check(
+                "pulse-gap", "The pulse ledger shows no gaps", False, "mechanical",
+                f"pulse ledger not available: {ledger_note}",
+                fix="apply pending migrations", state="undeterminable"))
+        elif not pulse_interval:
+            checks.append(_check(
+                "pulse-gap", "The pulse ledger shows no gaps", True, "operator",
+                "no pulse_interval recorded, so there is no cadence to measure "
+                f"a window against ({len(starts)} pulse(s) in the ledger)",
+                state="undeterminable"))
+        elif len(starts) < 2:
+            checks.append(_check(
+                "pulse-gap", "The pulse ledger shows no gaps", True, "operator",
+                f"{len(starts)} pulse(s) recorded; a window needs two",
+                state="undeterminable"))
+        else:
+            windows = pulse_ledger.gaps(
+                starts, interval_to_seconds(pulse_interval))
+            named = "; ".join(f"no pulse started between {a} and {b}"
+                              for a, b in windows[:3])
+            if len(windows) > 3:
+                named += f"; and {len(windows) - 3} more"
+            checks.append(_check(
+                "pulse-gap", "The pulse ledger shows no gaps", not windows,
+                "operator",
+                named if windows else
+                f"{len(starts)} pulses recorded, none more than two intervals "
+                f"({pulse_interval}) apart"))
 
         # 9. credential liveness — board (a re-login is a human act)
         dead = preflight.dead_tools(conn, firm_id)
