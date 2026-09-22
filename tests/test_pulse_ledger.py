@@ -545,6 +545,39 @@ def test_L10_control_an_unreadable_ledger_is_not_a_firm_that_never_pulsed(
     assert LEDGER_MIGRATION in entry["last_pulse_unavailable"], entry
 
 
+def test_L10_control_status_prints_the_ledgers_own_spelling_of_the_time(
+        tmp_path, capsys, monkeypatch):
+    """One clock, one format.
+
+    ``last_pulse`` used to be an int -- the mtime of the hub's file -- and is
+    now the ledger's own ``started_at``. A second formatter here, or a second
+    clock, would give a reader two spellings of one moment and no way to tell
+    which surface produced which. So this asserts the string is BYTE-IDENTICAL
+    to the column, over a pulse that really ran rather than over a value this
+    test wrote (#131's PR C reads this surface next).
+    """
+    import firm.cli.heartbeat as hb
+    import firm.sched.systemd as sysd
+
+    ws = _firm(tmp_path / "ws")
+    run = _pulse(ws)                      # a real pulse, whatever its verdict
+    row = _one_row(ws)
+
+    unit_dir = tmp_path / "units"
+    unit_dir.mkdir()
+    (unit_dir / f"cadre-heartbeat-{FIRM}.timer").write_text(
+        "[Timer]\nOnUnitActiveSec=15m\n", encoding="utf-8")
+    (unit_dir / f"cadre-heartbeat-{FIRM}.service").write_text(
+        f"[Service]\nWorkingDirectory={ws}\n", encoding="utf-8")
+    monkeypatch.setattr(sysd, "run_cmd", lambda argv, timeout=30: (0, "active"))
+
+    assert hb.run_status(unit_dir=unit_dir) == 0
+
+    entry = json.loads(capsys.readouterr().out)["heartbeats"][0]
+    assert entry["last_pulse"] == row["started_at"], (entry, row, run.output)
+    assert isinstance(entry["last_pulse"], str), entry
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # L11 · doctor names a gap as a gap, and never as a drop
 # ═══════════════════════════════════════════════════════════════════════════
@@ -722,7 +755,9 @@ def test_L12_every_label_a_launch_site_passes_is_in_choices():
     bad = {where: [label for label, _src in labels if label not in choices]
            for where, labels in sites.items()}
     assert not any(bad.values()), (bad, choices)
-    assert "unset" not in choices, choices
+    # "unset is not a choice" belongs to L6 and is asserted there. It was
+    # asserted here as well until the mutation table measured it: P6 reddened
+    # L6 AND L12, which is one rule written twice wearing two names (law 39).
 
     measured = {where: [label for label, _src in labels]
                 for where, labels in sites.items()}
