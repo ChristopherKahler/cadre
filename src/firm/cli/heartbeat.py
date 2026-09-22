@@ -550,7 +550,13 @@ def run_status(*, unit_dir: Path | None = None,
         # Copied only when the scheduler answered. systemd and launchd have no
         # job objects and say nothing here; inventing `contained: null` for
         # them would be a claim about a mechanism those hosts never had.
-        for k in ("contained", "containment_reason", "containment_flags"):
+        # `source` belongs in this tuple for the reason the comment above
+        # gives (#158): it is None in exactly the case the card exists to
+        # report, and ABSENT in the case where the command could not be read at
+        # all. `st.get("source")` would collapse the two into one null and tell
+        # an operator that a timer nobody could read is a timer with no label.
+        for k in ("contained", "containment_reason", "containment_flags",
+                  "source"):
             if k in st:
                 entry[k] = st[k]
         entry["interpreter"] = _service_python(stem, unit_dir)

@@ -19,7 +19,12 @@ from pathlib import Path
 from typing import Any
 
 from firm.core.proc import popen_utf8
-from firm.sched.base import SchedulerError, interval_to_seconds, run_cmd
+from firm.sched.base import (
+    SchedulerError,
+    interval_to_seconds,
+    run_cmd,
+    source_label,
+)
 
 
 class LaunchdScheduler:
@@ -114,6 +119,13 @@ class LaunchdScheduler:
                 out["workdir"] = payload["WorkingDirectory"]
             if payload.get("StartInterval"):
                 out["interval"] = f"{int(payload['StartInterval'])}s"
+            if payload.get("ProgramArguments") is not None:
+                # A real list, so no join to undo (#158). Keyed on the KEY's
+                # presence: a plist that records no arguments is a command this
+                # cannot read, and `source` stays absent rather than becoming a
+                # None that would read as "installed without the flag".
+                out["source"] = source_label(
+                    [str(a) for a in payload["ProgramArguments"]])
         except Exception:
             pass
         rc, printed = run_cmd(["launchctl", "print", f"{self._domain()}/{stem}"])

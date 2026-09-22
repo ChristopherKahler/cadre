@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from firm.core.proc import popen_utf8
-from firm.sched.base import SchedulerError, run_cmd
+from firm.sched.base import SchedulerError, run_cmd, source_label
 
 
 class SystemdScheduler:
@@ -122,6 +122,16 @@ WantedBy=timers.target
             for line in service.read_text(encoding="utf-8").splitlines():
                 if line.startswith("WorkingDirectory="):
                     out["workdir"] = line.partition("=")[2]
+                if line.startswith("ExecStart="):
+                    # THE LABEL, NOT THE ARGV (#158). `_write_service` joined the
+                    # argv on a space, so splitting this line back gives a list
+                    # that is a GUESS whenever an element carried one. The label
+                    # is one token from a fixed set, so it survives that join
+                    # exactly -- which is why this reports the label and nothing
+                    # else. Absent stays absent: a service file with no ExecStart
+                    # is a command this cannot read, and `source` never appears.
+                    out["source"] = source_label(
+                        line.partition("=")[2].split())
         if timer.exists():
             for line in timer.read_text(encoding="utf-8").splitlines():
                 if line.startswith("OnUnitActiveSec="):

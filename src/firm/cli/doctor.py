@@ -93,6 +93,7 @@ def diagnose(workspace: Path, firm_id: str, *,
     from firm.cli.heartbeat import _UNIT_PREFIX, _sched
     from firm.cli.install_hooks import POLICY_HOOK_COMMAND, POLICY_HOOK_SCRIPT_NAME
     from firm.pulse import preflight
+    from firm.services import pulse_ledger
     from firm.services import policy as policy_svc
 
     sched = _sched(unit_dir)
@@ -324,6 +325,63 @@ def diagnose(workspace: Path, firm_id: str, *,
             "ghost-units", "No failed scheduler ghosts", not ghost, "mechanical",
             f"{stem} sits failed with its files gone" if ghost else "clean",
             fix="clear the scheduler's failure residue"))
+
+        # 8a. a timer whose stored command carries no --source — OPERATOR
+        #
+        # ROUTED TO THE OPERATOR, AND THAT IS A RULING RATHER THAN A DEFAULT.
+        # `fix()` selects on route == "mechanical" and dispatches per key, so
+        # "mechanical" is a promise that `--fix` performs the repair. The repair
+        # here is re-running `heartbeat enable`, which rewrites a LIVE timer
+        # (`systemctl enable --now`, `schtasks /Create`) -- something the doctor
+        # has never done -- and on Windows that is #147: enable over a running
+        # heartbeat re-creates the task and leaves the old pulse running. A
+        # `--fix` that can leave two pulses running is worse than a card that
+        # prints one command. The #28 rule is still satisfied: the command
+        # exists, and this card prints it with the firm's own values.
+        #
+        # THREE STATES, THREE ANSWERS (law 48). `source` absent means the stored
+        # command could not be read, which is not the same finding as a command
+        # read and carrying no flag -- so absent is "undeterminable" and says
+        # WHAT it could not read, rather than sending an operator to re-enable a
+        # timer on the strength of a reading that never happened.
+        if not st.get("installed"):
+            # The `schedule` card above owns "there is no timer". Two cards for
+            # one condition is two findings an operator has to reconcile.
+            checks.append(_check(
+                "timer-source", "The timer says which command installed it",
+                True, "operator", "no timer installed, nothing to label"))
+        elif "source" not in st:
+            checks.append(_check(
+                "timer-source", "The timer says which command installed it",
+                False, "operator",
+                f"could not read the stored command for {stem} from "
+                f"{sched.name}, so whether it carries --source is unknown",
+                state="undeterminable"))
+        elif st["source"] is None:
+            # ONE PRODUCER. The printed report shows `detail` and never `fix`
+            # (the loop below prints label, route and detail), so the command
+            # has to be in the detail to reach an operator at all -- and it has
+            # to be in `fix` for `--json` readers. Two spellings of one command
+            # are two commands, and only one of them gets tested.
+            relabel = ("cadre heartbeat enable --workspace "
+                       f"{workspace} --firm-id {firm_id}"
+                       + (f" --interval {pulse_interval}" if pulse_interval
+                          else ""))
+            checks.append(_check(
+                "timer-source", "The timer says which command installed it",
+                False, "operator",
+                # The fact AND the remedy, which is 8b's pattern. The #28 rule
+                # is satisfied twice over: the command exists, and now it is
+                # somewhere the operator running `cadre doctor` will read it.
+                f"{stem} was installed before --source existed, so its pulses "
+                f"record {pulse_ledger.UNSET!r} and nothing says why. "
+                f"Run: {relabel}",
+                fix=relabel))
+        else:
+            checks.append(_check(
+                "timer-source", "The timer says which command installed it",
+                True, "operator",
+                f"{stem} labels its pulses {st['source']!r}"))
 
         # 8b. business hours an interval overwrote — board (#134)
         #
@@ -701,8 +759,19 @@ def run_doctor(workspace: Path, *, firm_id: str | None = None,
             print("  → judgment findings: re-run Train from the dashboard")
         if any(not c["ok"] and c["route"] == "board" for c in checks):
             print("  → authority findings: the Board decides these")
-        if any(not c["ok"] and c["route"] == "operator" for c in checks):
+        # KEYED TO THE CARD IT BELONGS TO (#158). This sentence is
+        # base-domain's own advice, and it printed under EVERY failed operator
+        # card. It also called them all "undeterminable", which `operator` does
+        # not mean: a timer installed before `--source` existed was read
+        # perfectly well, and what it needs is one command, not a base install.
+        # Wrong advice under a real finding is worse than no footer, because it
+        # sends an operator after a failure that is not there.
+        operator_findings = [c for c in checks
+                             if not c["ok"] and c["route"] == "operator"]
+        if any(c["key"] == "base-domain" for c in operator_findings):
             print("  → undeterminable: this machine could not read the "
                   "answer, so the firm is not what needs repairing — "
                   "install base, or unset CADRE_NO_BASE, then re-run")
+        if any(c["key"] != "base-domain" for c in operator_findings):
+            print("  → operator findings: each card's detail says what to do")
     return 0

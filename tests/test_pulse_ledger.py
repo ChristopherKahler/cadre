@@ -958,6 +958,37 @@ def _resolve(node: ast.AST) -> str | None:
     return None
 
 
+#: String methods that take a PATTERN rather than a value. A constant handed
+#: to one of these is being MATCHED, not passed on to a pulse. `replace` and
+#: friends are deliberately absent: they take a value, and a site could plausibly
+#: build an argv element with one.
+_STR_MATCHERS = ("startswith", "endswith", "removeprefix", "removesuffix",
+                 "partition", "rpartition", "split", "rsplit")
+
+
+def _matcher_constants(tree: ast.AST) -> set[int]:
+    """The constants this file MATCHES on, which are never labels it PASSES.
+
+    #158 put the first reader of ``--source`` in the tree
+    (``sched/base.py::source_label``), and it holds ``"--source="`` as the prefix
+    it matches. Read as a launch site, that is a site passing an EMPTY label, and
+    the guard reddened on a file that passes no label at all.
+
+    The rule L12 enforces is untouched. Only its premise moves: a ``--source=``
+    constant is a site when something PASSES it, and a matcher when a string
+    method takes it as a pattern.
+    """
+    matchers: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Attribute) and node.func.attr in _STR_MATCHERS:
+            for arg in node.args:
+                if isinstance(arg, ast.Constant):
+                    matchers.add(id(arg))
+    return matchers
+
+
 def _labels_passed_in(tree: ast.AST) -> list[tuple[str | None, str]]:
     """Every ``--source`` label handed to a pulse, as (label, how it was written).
 
@@ -973,9 +1004,11 @@ def _labels_passed_in(tree: ast.AST) -> list[tuple[str | None, str]]:
     the one failure direction a guard may not have (law 41).
     """
     found: list[tuple[str | None, str]] = []
+    matchers = _matcher_constants(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str) \
-                and node.value.startswith("--source="):
+                and node.value.startswith("--source=") \
+                and id(node) not in matchers:
             label = node.value.split("=", 1)[1]
             found.append((label, node.value))
             continue
@@ -1072,3 +1105,42 @@ def test_L12_control_the_scanner_reads_both_shapes_and_fails_a_bad_one():
     assert [l for l, _s in found if l not in _choices()] == ["not-a-real-label"], (
         "the guard must FAIL on a label the parser would reject; a guard "
         "never seen red is decoration that happens to print PASS")
+
+
+def test_L12_control_a_reader_is_not_a_launch_site_and_the_teeth_remain():
+    """The premise #158 falsified, and proof that fixing it cost no teeth.
+
+    Every site in the tree PASSES a label. `sched/base.py::source_label` is the
+    first thing that READS one, and it holds `"--source="` as the prefix it
+    matches on -- which the scanner read as a site passing an empty label.
+
+    The rule is untouched; only the premise moved. So this asserts BOTH
+    directions in one run, because a narrowing that is only checked in the
+    direction that motivated it is a narrowing nobody measured:
+
+    * a matcher is not reported -- the false positive is gone;
+    * a site passing that SAME empty label still is -- the teeth are intact.
+
+    Respelling the reader to slip past the scanner would have passed the first
+    of these and left the guard blind to the next reader.
+    """
+    reader = ast.parse(
+        'for t in tokens:\n'
+        '    if t.startswith("--source="):\n'
+        '        return t.partition("=")[2]')
+    assert _labels_passed_in(reader) == [], (
+        "a constant a string method MATCHES on is not a label anyone passed",
+        _labels_passed_in(reader))
+
+    planted = ast.parse('argv = ["-m", "firm", "pulse", "--source="]')
+    assert _labels_passed_in(planted) == [("", "--source=")], (
+        "a site really passing an empty label must still be reported",
+        _labels_passed_in(planted))
+    assert "" not in _choices(), (
+        "and it must still be a finding: the empty label is not a choice")
+
+    # The narrowing must not reach a real site. Both of the tree's own sites
+    # use the list shape, so this is the shape that would break first.
+    real = ast.parse('argv = ["-m", "firm", "pulse", "--source", "heartbeat"]')
+    assert _labels_passed_in(real) == [("heartbeat", "'heartbeat'")], (
+        "the narrowing reached a real launch site", _labels_passed_in(real))

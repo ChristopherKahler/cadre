@@ -46,7 +46,12 @@ from typing import Any
 
 from firm.core.proc import popen_utf8, run_utf8
 from firm.sched import winlaunch
-from firm.sched.base import SchedulerError, interval_to_seconds, run_cmd
+from firm.sched.base import (
+    SchedulerError,
+    interval_to_seconds,
+    run_cmd,
+    source_label,
+)
 
 _TASK_FOLDER = "Cadre"
 # The folder as Task Scheduler names it. Its first character is the root.
@@ -386,6 +391,13 @@ class WindowsScheduler:
                 out["workdir"] = recorded["cwd"]
             if recorded.get("interval"):
                 out["interval"] = recorded["interval"]
+            if recorded.get("argv") is not None:
+                # ALREADY ON DISK (#158). `winlaunch.write_launcher` has always
+                # recorded `argv` in this same spec; `status()` read `cwd` and
+                # `interval` out of it and simply never read this. On this
+                # backend the change is a read, not a new field.
+                out["source"] = source_label(
+                    [str(a) for a in recorded["argv"]])
         # Is the pulse TREE contained (#141, condition C3)? `state` is task
         # liveness and says nothing about it: a task can be ready, fire
         # perfectly, and still leave its pulse running when it is ended.

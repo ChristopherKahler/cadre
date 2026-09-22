@@ -47,6 +47,43 @@ def run_cmd(argv: list[str], timeout: int = 30) -> tuple[int, str]:
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
 
+def source_label(tokens: list[str]) -> str | None:
+    """The ``--source`` label a stored command carries, or None if it carries none.
+
+    ONE PARSER FOR ALL THREE BACKENDS, because the question is the same question
+    and three copies of it would drift. Each backend hands over the tokens it
+    already holds: Windows the ``argv`` list its spec records, launchd the
+    ``ProgramArguments`` list in its plist, systemd the ``ExecStart=`` line split
+    on whitespace -- the same join it wrote.
+
+    BOTH SHAPES. ``--source X`` is what `heartbeat enable` installs today;
+    ``--source=X`` is what argparse equally accepts and nothing here writes yet.
+    A parser that read only the shape we currently write is a parser that breaks
+    silently the first time anything writes the other one.
+
+    THE LABEL IS RETURNED VERBATIM, NOT VALIDATED. ``cadre pulse --source`` has
+    its own ``choices`` and refuses a bad label at the moment it would act on it.
+    Validating here would return None for a timer that really does carry one, and
+    the doctor card would then tell an operator to re-enable a timer that is
+    already labelled -- a repair for a defect that is not there.
+
+    None, never ``""`` and never ``"unset"``: ``unset`` is the LEDGER's word for
+    a pulse that passed no flag, and borrowing it here would make the scheduler
+    answer a question about the ledger. The two would drift the moment either
+    changed its wording.
+    """
+    for i, token in enumerate(tokens):
+        if token.startswith("--source="):
+            return token.partition("=")[2] or None
+        if token == "--source":
+            # Law 49: the guard is only tested if something hands it a command
+            # that is malformed rather than merely unlabelled. `--source` as the
+            # last token is a real shape, and an IndexError here would crash
+            # every `status()` call, every doctor card and `heartbeat status`.
+            return tokens[i + 1] if i + 1 < len(tokens) else None
+    return None
+
+
 class SchedulerError(RuntimeError):
     """A scheduler operation failed — message carries the CLI's own words."""
 
