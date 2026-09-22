@@ -35,8 +35,9 @@ holder that has not reaped a child -- an abort that can never succeed on a
 perfectly healthy firm. Windows has no zombies, so presence in the table is the
 whole answer there.
 
-A STAMP COMPARES ONLY WITH ITSELF, ON THE SAME HOST. The POSIX string is a
-count of clock ticks since boot; the Windows string is .NET ticks since
+A STAMP COMPARES ONLY WITH ITSELF, ON THE SAME HOST. On Linux the POSIX string
+is a count of clock ticks since boot; on a POSIX host with no procfs -- macOS
+-- it is ``ps``'s ``lstart`` text; the Windows string is .NET ticks since
 0001-01-01 UTC. They are never comparable to each other, and neither is
 meaningful on another machine. The Windows one is taken through
 ``ToUniversalTime()`` rather than as local ticks (R5c): ``CreationDate``
@@ -75,7 +76,14 @@ Generation = tuple[int, str]
 _WINDOWS = sys.platform.startswith("win")
 
 
-def _posix_table() -> dict[int, tuple[int, str, str]]:
+#: Does this POSIX host have procfs? macOS does not, and POSIX IS NOT LINUX --
+#: measured the hard way on CI, where thirteen legs errored on macOS because a
+#: `/proc` read sat behind an `os.name == "posix"` guard. Read once at import:
+#: a host does not grow a procfs while a pulse runs.
+_HAS_PROCFS = Path("/proc/self/stat").exists()
+
+
+def _procfs_table() -> dict[int, tuple[int, str, str]]:
     """``{pid: (ppid, starttime, state)}`` from one pass over ``/proc``.
 
     ``starttime`` is field 22 and ``state`` is field 3, both counted from the
@@ -99,6 +107,39 @@ def _posix_table() -> dict[int, tuple[int, str, str]]:
         except (OSError, ValueError, IndexError):
             continue        # it exited while we walked; that is an answer too
     return table
+
+
+def _ps_table() -> dict[int, tuple[int, str, str]]:
+    """The same table on a POSIX host with no procfs, from one ``ps``.
+
+    ``lstart`` is asked for LAST because it is the only variable-width column
+    -- "Tue Sep 22 17:13:02 2026" contains spaces, and any field after it would
+    be swallowed by a naive split. `split(None, 3)` therefore takes the three
+    fixed columns and leaves the rest whole.
+
+    The stat column can carry flags (``S+``, ``Ss``, ``Z+``), so only its
+    first character is kept: that is the state, and the rest is decoration.
+    """
+    table: dict[int, tuple[int, str, str]] = {}
+    try:
+        out = run_utf8(["ps", "-eo", "pid=,ppid=,stat=,lstart="],
+                       capture_output=True, timeout=120).stdout
+    except (OSError, subprocess.SubprocessError):
+        return table
+    for line in out.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 4:
+            continue
+        try:
+            table[int(parts[0])] = (int(parts[1]), parts[3].strip(),
+                                    parts[2][:1])
+        except (TypeError, ValueError):
+            continue
+    return table
+
+
+def _posix_table() -> dict[int, tuple[int, str, str]]:
+    return _procfs_table() if _HAS_PROCFS else _ps_table()
 
 
 def _windows_table() -> dict[int, tuple[int, str, str]]:

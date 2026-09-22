@@ -199,7 +199,14 @@ _STAGE = textwrap.dedent("""\
         # name the same instant and they never compare equal, so every Windows
         # presence check would have read the process as gone -- and would have
         # read exactly like the product losing it.
-        if os.name == "posix":
+        # PROCFS, NOT POSIX. macOS is POSIX and has no /proc, and this line
+        # opening it unconditionally is what killed every tree leg on CI's
+        # macOS job: the stage raised before writing anything, and the leg
+        # reported "the tree never reached 3 generations" with an empty file.
+        # Where there is no procfs the stage reports its pid only and the TEST
+        # fills the stamp from one table read -- one representation per host,
+        # taken from the table rather than invented here.
+        if os.name == "posix" and os.path.exists("/proc/self/stat"):
             raw = open("/proc/%d/stat" % os.getpid()).read()
             return raw[raw.rindex(")") + 1:].split()[19]
         return "-"
@@ -216,6 +223,47 @@ _STAGE = textwrap.dedent("""\
 
     time.sleep(300)
     """)
+
+
+#: Procfs, not POSIX: macOS has neither `/proc` nor a reason to pretend.
+_HAS_PROCFS = Path("/proc/self/stat").exists()
+
+
+def _ps_table() -> dict[int, tuple[int, str]]:
+    """`{pid: (ppid, lstart)}` from one `ps`, for a POSIX host with no procfs.
+
+    `lstart` is asked for LAST because it is the only variable-width column, so
+    `split(None, 3)` takes the three fixed ones and leaves the rest whole. The
+    identity it gives is second-granular, which is enough to tell one use of a
+    pid from another on the same host.
+    """
+    out = subprocess.run(["ps", "-eo", "pid=,ppid=,stat=,lstart="],
+                         capture_output=True, text=True, timeout=120).stdout
+    table: dict[int, tuple[int, str]] = {}
+    for line in out.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 4:
+            continue
+        try:
+            table[int(parts[0])] = (int(parts[1]), parts[3].strip())
+        except (TypeError, ValueError):
+            continue
+    return table
+
+
+def _ps_state(pid: int) -> str | None:
+    """The first character of `ps`'s stat column, or None when it is gone."""
+    out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                         capture_output=True, text=True, timeout=120).stdout
+    said = out.strip()
+    return said[:1] if said else None
+
+
+def _host_table() -> dict[int, tuple[int, str]]:
+    """Whichever table this host actually has."""
+    if os.name != "posix":
+        return _win_table()
+    return _ps_table()
 
 
 def _win_table() -> dict[int, tuple[int, str]]:
@@ -267,6 +315,9 @@ def _generation(pid: int | None) -> tuple[int, str] | None:
     if os.name != "posix":
         row = _win_table().get(pid)
         return None if row is None else (pid, row[1])
+    if not _HAS_PROCFS:
+        row = _ps_table().get(pid)
+        return None if row is None else (pid, row[1])
     try:
         raw = Path(f"/proc/{pid}/stat").read_text()
     except (OSError, ValueError):
@@ -311,6 +362,9 @@ def _ppid(pid: int) -> int | None:
     if os.name != "posix":
         row = _win_table().get(pid)
         return None if row is None else row[0]
+    if not _HAS_PROCFS:
+        row = _ps_table().get(pid)
+        return None if row is None else row[0]
     try:
         raw = Path(f"/proc/{pid}/stat").read_text()
     except OSError:
@@ -326,6 +380,8 @@ def _proc_state(pid: int) -> str | None:
     """
     if os.name != "posix":
         return None
+    if not _HAS_PROCFS:
+        return _ps_state(pid)
     try:
         raw = Path(f"/proc/{pid}/stat").read_text()
     except OSError:
@@ -346,7 +402,7 @@ def _depth_below(ancestor: int, pid: int, limit: int = 12) -> int | None:
     twelve. One read also makes the walk self-consistent: every step reads the
     same instant rather than a table that moved under it.
     """
-    table = _win_table() if os.name != "posix" else None
+    table = None if _HAS_PROCFS and os.name == "posix" else _host_table()
     steps = 0
     cur = pid
     while steps < limit:
@@ -453,13 +509,14 @@ class _Tree:
             raise AssertionError(
                 f"the tree never reached {depth} generations; recorded: "
                 f"{self.record.read_text(encoding='utf-8')!r}")
-        if os.name == "posix":
+        if _HAS_PROCFS:
             return stages
-        # WINDOWS STAMPS COME FROM THE TABLE, not from the stage (F9). Every
-        # generation has reported and each is sleeping 300 s, so each one is
-        # certainly present; a missing row is a real failure and says so here
-        # rather than becoming a blank stamp that quietly matches nothing.
-        table = _win_table()
+        # STAMPS COME FROM THE TABLE WHEREVER THE STAGE COULD NOT TAKE ONE
+        # (F9, and again for macOS). Every generation has reported and each is
+        # sleeping 300 s, so each one is certainly present; a missing row is a
+        # real failure and says so here rather than becoming a blank stamp that
+        # quietly matches nothing.
+        table = _host_table()
         filled: dict[str, tuple[int, str]] = {}
         for label, (pid, _placeholder) in stages.items():
             row = table.get(pid)
@@ -556,6 +613,12 @@ def test_control_the_tree_is_three_generations_deep_and_all_are_alive(tree):
                       ("leaf", tree.leaf)):
         assert _alive(pid), f"the {name} died before the test began"
     assert _generation(tree.leaf) is not None
+    # WHICH READER PRODUCED THIS GREEN. On CI's macOS job there is no /proc and
+    # the ps reader is the only one there is, so a log that does not name the
+    # reader leaves it to be inferred from a passing test. Named here, the
+    # macOS log states it.
+    reader = "proc" if _HAS_PROCFS else "ps"
+    print(f"[148] posix reader: {reader}")
     print(f"[148] tree depth 3: holder={tree.holder} middle={tree.middle} "
           f"leaf={tree.leaf}")
 
@@ -1069,7 +1132,13 @@ def test_the_descendant_walker_names_no_permission_call_in_its_source():
     gone blind cannot report an absence it never measured.
     """
     source = Path(descendants.__file__).read_text(encoding="utf-8")
-    body = source[source.index("def _posix_table"):]
+    # FROM THE FIRST READER, not from the dispatcher. `_posix_table` became a
+    # two-line dispatcher when macOS forced a second POSIX reader, and a slice
+    # starting there no longer contained the word `/proc` at all -- so this
+    # leg's positive sibling vanished and it refused. That refusal was correct
+    # and it is why the sibling is there: an absence measured over a slice that
+    # holds neither branch proves nothing whatever.
+    body = source[source.index("def _procfs_table"):]
 
     # The positive siblings first: if these are not here, the absences below
     # are measuring an empty string.
@@ -1357,3 +1426,59 @@ def test_the_windows_created_stamp_is_a_utc_count(capsys):
         f"the walker's stamp is {difference} ticks from an independent UTC "
         f"reading of the same process. A local count differs by whole hours; "
         f"CIM's microsecond truncation differs by at most 9 ticks, downward.")
+
+
+@pytest.mark.skipif(os.name != "posix",
+                    reason="`ps` is the POSIX fallback reader; Windows reads "
+                           "the CIM table and has its own leg")
+def test_control_the_ps_reader_agrees_with_this_hosts_primary_reader():
+    """A SECOND READING OF THE ps READER, and NOT the macOS proof.
+
+    Say what this cannot do first, because the temptation is to read it as more
+    than it is: BSD `ps` and GNU `ps` differ in flags and in layout, so a green
+    leg HERE says the reader runs and its columns are in the order this file
+    expects ON THIS HOST. It does not say macOS parses. The macOS proof is the
+    tree legs themselves running unskipped on CI's macOS job through this
+    reader, and nothing short of that.
+
+    What it is worth: on Linux it compares two independent channels, `/proc`
+    and `ps`, about the same process — so a column read in the wrong order is
+    caught here rather than three thousand miles away.
+
+    It compares the parent and the state, not the timestamp: the two readers
+    express time differently by design (clock ticks since boot against
+    `lstart`'s seconds), and a leg demanding they agree on a stamp would be
+    asserting something neither promises.
+    """
+    me = os.getpid()
+    table = _ps_table()
+
+    assert me in table, (
+        f"the ps reader cannot see this very process ({me}); on a host with "
+        f"no /proc it is the only reader there is")
+    ppid_said, lstart_said = table[me]
+    assert ppid_said == os.getppid(), (
+        f"ps says this process's parent is {ppid_said}, the kernel says "
+        f"{os.getppid()}; the columns are being read in the wrong order")
+    assert lstart_said, "ps returned an empty start time, so identity is lost"
+
+    if _HAS_PROCFS:
+        assert _ppid(me) == ppid_said, (
+            f"the two readers disagree about the parent: /proc says "
+            f"{_ppid(me)}, ps says {ppid_said}")
+        # THE STATE CHARACTERS ARE NOT COMPARED, and that is deliberate after
+        # measuring it: this leg first asserted they were equal and read `R`
+        # from /proc against `S` from ps. Neither was wrong. The two reads are
+        # microseconds apart and a process really does move between running and
+        # sleeping in that window, so equality is something neither reader
+        # promises -- the same trap the timestamps carry, one field over.
+        #
+        # What both DO promise, and what the walker actually depends on: each
+        # can answer at all, and neither calls a live process a zombie.
+        proc_said, ps_said = _proc_state(me), _ps_state(me)
+        assert proc_said is not None and ps_said is not None, (
+            f"a reader could not answer for this live process: "
+            f"/proc {proc_said!r}, ps {ps_said!r}")
+        assert proc_said != "Z" and ps_said != "Z", (
+            f"a reader called this running process a zombie: "
+            f"/proc {proc_said!r}, ps {ps_said!r}")
