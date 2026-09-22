@@ -230,14 +230,17 @@ def _run_founding(job_id: str, brief: str) -> None:
     # Prompt rides argv as -p, the way every Member run passes it. An explicit
     # env, never ambient inheritance — a hub started from a shell that sourced a
     # firm's .env would otherwise point the founding run at that firm's database.
-    # House rules and the arsenal are token-swapped AFTER .format — the inlined
-    # docs contain literal braces that str.format would choke on.
+    #
+    # THE PROMPT IS COMPOSED IN ONE PLACE (#135). This used to do the three
+    # steps by hand — format, swap the house rules, swap the arsenal, append
+    # the narration contract — and Door B would have been a second copy of
+    # exactly that. Two copies of one composition is the defect R8 exists to
+    # stop, and the ordering it hides is real: the swaps come AFTER `.format`
+    # because the inlined documents carry literal braces that `str.format`
+    # would choke on. R19 pins that both doors send the same bytes.
     arsenal, inv = _inventory()
     argv = [claude_bin, *_FOUNDING_FLAGS, "-p",
-            _FOUNDING_PROMPT.format(brief=brief)
-                .replace("__HOUSE_RULES__", _house_rules())
-                .replace("__INVENTORY__", arsenal)
-            + NARRATION_CONTRACT]
+            founding_prompt(brief, arsenal)]
     env = dict(os.environ)
     env.pop("CADRE_DB_URL", None)   # a founding run has no firm yet
     env.pop("CADRE_DB_TOKEN", None)

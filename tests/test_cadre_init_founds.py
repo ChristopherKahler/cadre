@@ -790,3 +790,39 @@ def test_r18_the_cli_does_not_import_the_dashboard():
         "cli/init.py imports the dashboard. The founding path lives in "
         "services precisely so the CLI does not have to, and an import here "
         "puts the cycle back one call at a time")
+
+
+def test_r19_both_doors_send_the_agent_the_same_prompt(tmp_path, monkeypatch):
+    """One composer, proved on the bytes rather than on the call site.
+
+    `founding_prompt` exists because Door B needed the hub's prompt. If the
+    hub keeps composing its own — format, two token swaps, append the
+    narration contract — then there are two copies of one composition and
+    the doors drift apart the first time either is edited. That is the same
+    defect R8 pins for the tier rule.
+
+    Read through the fake runtime rather than off the source, because the
+    claim is about what the agent RECEIVES.
+    """
+    from firm.dashboard import founding as dash
+    from firm.services import founding as svc
+
+    agent = _FakeAgent(_chart_proposal())
+    monkeypatch.setattr(dash, "popen_utf8", agent, raising=True)
+    monkeypatch.setattr(dash, "resolve_claude_bin",
+                        lambda: ("/usr/bin/claude", "fake"))
+    monkeypatch.setattr(dash, "_inventory", lambda: ("(arsenal)", {}))
+    monkeypatch.setattr(svc, "_inventory", lambda: ("(arsenal)", {}))
+
+    brief = "a two-person writing firm"
+    dash._jobs["J19"] = {"status": "running", "proc": None, "narration": []}
+    try:
+        dash._run_founding("J19", brief)
+    finally:
+        dash._jobs.pop("J19", None)
+
+    sent = agent.one["argv"][-1]
+    assert sent == svc.founding_prompt(brief, "(arsenal)"), (
+        "the hub composes its own founding prompt instead of calling "
+        "`founding_prompt`, so the two doors can send the agent different "
+        "instructions from the same source tree")

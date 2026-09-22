@@ -3,8 +3,16 @@
 Moved here from `dashboard/founding.py` for #135, unchanged. It sat in the
 dashboard package because the hub was the only door; `cadre init --proposal`
 is a second door onto the same path, and a CLI importing from the dashboard
-is the wrong direction. Nothing under `services/` imports the dashboard, so
-this is the end of that dependency rather than another link in it.
+is the wrong direction, and this is the end of that dependency rather than
+another link in it.
+
+ONE EXCEPTION, and it is stated because a reader will otherwise trust the
+rule: `_inventory` reads the operator's Armory through
+`firm.dashboard.discovery`, `exclusions` and `inventory`, so it carries a
+function-local dashboard import with it. Leaving it behind would have meant
+`cli/init.py` importing the dashboard instead, which is worse and which R18
+forbids; moving those three modules is a larger change than #135. They are
+services wearing a dashboard package name, and that is an issue of its own.
 
 `dashboard/founding.py` keeps the hub's job machinery — the prompts, the
 narrator, the arsenal, the four job functions — and binds these names back
