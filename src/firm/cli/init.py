@@ -1,7 +1,15 @@
-"""`cadre init` / `firm init` — initialize a workspace with a .firm/ directory, DB, and optional demo seed + hooks."""
+"""`cadre init` / `firm init` — initialize a workspace, or found a whole firm.
+
+Two things live here now. `run_init` makes a workspace: the database, the
+migrations, the BASE tier and the discipline templates. `run_found` founds a
+FIRM from a proposal, through the same `services.founding.commit` the hub
+uses — one founding path, two doors, so a firm founded at a terminal is the
+firm the hub would have founded (#135).
+"""
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -53,6 +61,42 @@ def _wire_base(workspace: Path, conn) -> None:
               "drops it whole — run cadre doctor --fix")
     else:
         print(f"    domain {firm_id!r} wired and its first rule seeded")
+
+
+def run_found(root: Path, proposal: Path) -> int:
+    """Found a firm from a proposal file. `cadre init <root> --proposal <f>`.
+
+    The command owns the shape and the refusals; the session that read the
+    spec owns the content. It never parses the operator's markdown — a parser
+    here would be a second, weaker founding agent, and the first spec written
+    in a different shape would half-succeed.
+
+    THE OUTPUT CONTRACT IS `_exit_with`'s, not a second copy of it. `commit`
+    prints `run_init`'s prose on its way past, so the result object is the
+    LAST stdout line rather than the only one, and the exit code is 0 only
+    when `ok` is exactly True. A scheduler or a session reads those two and
+    nothing else; #128 is the issue where they disagreed and a failed pulse
+    was recorded as a clean run.
+    """
+    from firm.cli.pulse import _exit_with
+    from firm.services.founding import commit
+
+    try:
+        raw = proposal.expanduser().read_text(encoding="utf-8")
+    except OSError as exc:
+        return _exit_with({"ok": False,
+                           "error": f"could not read the proposal: {exc}"})
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return _exit_with({"ok": False,
+                           "error": f"the proposal is not valid JSON: {exc}"})
+    if not isinstance(data, dict):
+        return _exit_with({"ok": False,
+                           "error": "the proposal must be a JSON object; run "
+                                    "`cadre init --proposal-template` for the "
+                                    "shape"})
+    return _exit_with(commit(root.expanduser(), data))
 
 
 def run_init(

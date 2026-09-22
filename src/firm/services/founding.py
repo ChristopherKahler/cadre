@@ -15,6 +15,7 @@ module about entity references. This `_validate` is the proposal's shape.
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,180 @@ from firm.core.db import connect, get_db_path
 _FIRM_ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,31}$")
 _MODEL_TIERS = ("fable", "opus", "sonnet", "haiku")
 _DEFAULT_MODEL = "sonnet"
+
+
+# The shape, with placeholder values. Every key the command reads is here and
+# nothing else is: a key in this document that `_validate` discards would
+# teach a session to write something that vanishes.
+PROPOSAL_TEMPLATE: dict[str, Any] = {
+    "firm_id": "your-firm-id",
+    "name": "Your Firm",
+    "premise": "One sentence: what this firm turns input into, and for whom.",
+    "north_star": {
+        "target": "The one measurable outcome the whole firm is judged on",
+        "metric_value": 0,
+        "metric_unit": "units",
+        "why": "Why this number and not another",
+    },
+    "gates": [
+        "A move that needs the Board's approval before it happens",
+    ],
+    "operations": [
+        {
+            "name": "Operation One",
+            "purpose": "What this department is for",
+            "goal": {
+                "target": "This operation's own measurable outcome",
+                "metric_value": 0,
+                "metric_unit": "units",
+                "why": "Why this number",
+            },
+        },
+    ],
+    "members": [
+        {
+            "name": "Lead Name",
+            "role": "CEO / General Manager",
+            "owns": "Runs the firm; translates Board direction into Operations",
+            "operation": "Operation One",
+            "leads": True,
+            "reports_to": None,
+            "model": "sonnet",
+            "domains": ["firm-strategy"],
+            "skills": [],
+            "gates": [],
+        },
+        {
+            "name": "Manager Name",
+            "role": "Engineering Manager",
+            "owns": "Owns the build team and the technical standard",
+            "operation": "Operation One",
+            "leads": False,
+            "reports_to": "Lead Name",
+            "model": "sonnet",
+            "domains": ["engineering"],
+            "skills": [],
+            "gates": [],
+        },
+        {
+            "name": "Specialist Name",
+            "role": "Backend Engineer",
+            "owns": "Server code, data models, business logic",
+            "operation": "Operation One",
+            "leads": False,
+            "reports_to": "Manager Name",
+            "model": "sonnet",
+            "domains": ["backend"],
+            "skills": [],
+            "gates": [],
+        },
+    ],
+    "first_units": [
+        {
+            "name": "The first piece of work this firm was born holding",
+            "member": "Specialist Name",
+            "why": "Why it is first",
+        },
+    ],
+    "loadout": {
+        "mcp": [{"name": "an-mcp-server", "why": "what the firm needs it for"}],
+        "skills": [{"name": "a-skill", "why": "what the firm needs it for"}],
+        "commands": [{"name": "a-command", "why": "what the firm needs it for"}],
+    },
+}
+
+# One line per key, and the line says which of three fates the key has:
+# REFUSED (the command stops and writes nothing), COERCED (the command
+# substitutes the named default), DROPPED (a malformed entry disappears and
+# the rest is kept). Written from the code, not from memory: `_validate` at
+# `founding.py:256-365` and `commit` at `:1039-1249`, main 20bdc5a0.
+LEGEND: list[tuple[str, str]] = [
+    ("firm_id",
+     "REFUSED unless it matches ^[a-z][a-z0-9-]{1,31}$ (lowercased first)."),
+    ("name",
+     "COERCED to firm_id when empty."),
+    ("premise",
+     "COERCED to an empty string when absent."),
+    ("north_star.target",
+     "REFUSED when empty: a firm with no number cannot fail, only be busy."),
+    ("north_star.metric_value",
+     "COERCED to null unless it is a number."),
+    ("north_star.metric_unit / .why",
+     "COERCED: trimmed to 60 and 300 characters."),
+    ("gates[]",
+     "FIRM-LEVEL approvals. Added to every member's own gates on every "
+     "contract. COERCED to none when absent, which founds today's firm."),
+    ("operations[].name",
+     "REFUSED when the list is empty. An entry with no name is DROPPED."),
+    ("operations[].purpose",
+     "COERCED to an empty string."),
+    ("operations[].goal",
+     "A goal for this operation, in the north star's shape. COERCED to none "
+     "when absent, and then the operation simply has no goal of its own."),
+    ("members[]",
+     "REFUSED when the list is empty. A member with no name is DROPPED "
+     "before any other check, so a typo'd key loses the whole person."),
+    ("members[].operation",
+     "REFUSED unless it names an operation in this same proposal."),
+    ("members[].role / .owns",
+     "COERCED to empty strings. `owns` becomes the member's description."),
+    ("members[].leads",
+     "COERCED: if there is not exactly one lead, every flag is cleared and "
+     "the FIRST member in the list becomes the lead."),
+    ("members[].reports_to",
+     "A member NAME in this proposal. REFUSED when it names nobody here, "
+     "when it names the member itself, when it makes a cycle, or when the "
+     "lead names anyone (the lead reports to the Board). COERCED to the "
+     "lead when absent, which is what every firm founded before today has."),
+    ("members[].model",
+     "COERCED to sonnet unless it is one of fable, opus, sonnet, haiku."),
+    ("members[].domains",
+     "The base domains this role owns. COERCED to an empty list when absent. "
+     "The firm's own domain block is derived from the roster either way."),
+    ("members[].skills",
+     "COERCED to strings. Nothing is filtered on this path."),
+    ("members[].gates",
+     "This member's own approvals, unioned with the firm-level gates above."),
+    ("first_units[].name",
+     "DROPPED when absent. The whole list is optional."),
+    ("first_units[].member",
+     "COERCED: a name that is not on the roster falls to the lead rather "
+     "than out of the firm."),
+    ("first_units[].why",
+     "COERCED to an empty string; becomes the unit's description."),
+    ("loadout.mcp / .skills / .commands",
+     "Each item is {name, why}. Non-objects, missing names and duplicates "
+     "are DROPPED; `why` is trimmed to 200 characters."),
+]
+
+# Two sentences that stop a session writing something that has no destination.
+NOTES: list[str] = [
+    "CLI tools are not attached here. A member's CLI access is assigned at "
+    "wiring (the Train screen), not at founding, so this proposal has no "
+    "loadout.cli and a `cli` key would be discarded.",
+    "A NEVER is not a field. A NEVER is enforced by leaving the tool out of "
+    "the loadout and by the policy gate, never by prose in a description.",
+    "reports_to is the authority chart, not the collaboration chart. Work "
+    "passes sideways between peers through Unit dependencies; the chart only "
+    "says who sets direction and who escalates to whom.",
+]
+
+
+def proposal_template() -> tuple[str, str]:
+    """Return ``(json_for_stdout, legend_for_stderr)``.
+
+    Two values rather than one printed blob, so the caller decides the
+    streams and a test can assert on each half without parsing prose.
+    """
+    body = json.dumps(PROPOSAL_TEMPLATE, indent=2) + "\n"
+    width = max(len(key) for key, _ in LEGEND)
+    lines = ["The proposal schema. Fill the placeholders and pass the JSON "
+             "back with --proposal.", ""]
+    for key, meaning in LEGEND:
+        lines.append(f"  {key.ljust(width)}  {meaning}")
+    lines.append("")
+    lines.extend(f"  {note}" for note in NOTES)
+    return body, "\n".join(lines) + "\n"
 
 
 def _resolve_chart(members: list[dict[str, Any]],

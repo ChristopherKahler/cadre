@@ -397,22 +397,28 @@ def test_r8_the_bare_form_says_the_firm_is_not_founded(tmp_path, capsys):
         "the bare form wrote a firm row, so the sentence it prints is false")
 
 
-def test_r9_base_absent_is_degraded_not_broken(root, tmp_path, capsys,
-                                               monkeypatch):
-    """Driven through the product's own probe, not a new stub.
+def test_r9_base_absent_is_degraded_not_broken(root, tmp_path, capsys):
+    """base absent must not refuse, and the output must say what is missing.
 
-    `commit` reads `base_ready.check()` at `founding.py:1082` before any
-    state is written and reports it as `base_present`. This points that
-    probe at a host with no base and asserts the firm is still founded and
-    the output says what is missing. The control is the same founding with
-    base present, which every other leg here runs.
+    NOTHING IS PATCHED HERE, and that is the point. This suite already runs
+    with base absent for every test: conftest's autouse `_no_ambient_base`
+    replaces `firm.sysconfig.service.which_base` with one that answers None.
+    So the leg drives the product's own probe in the state the suite puts it
+    in. The first draft of this leg invented a return value for
+    `base_ready.check` instead and died inside `base_ready.ensure` on
+    `KeyError: 'base_runs'` — a key the real probe returns and the invented
+    one had not thought of. A stub of a thing you did not read is a second,
+    wrong copy of it.
+
+    The base-PRESENT control cannot live in this suite for the same reason,
+    and it is not missing: it is arm S1 at G2, against a real base.
     """
     from firm.services import base_ready
 
-    monkeypatch.setattr(base_ready, "check",
-                        lambda *a, **k: {"base_present": False, "ok": False,
-                                         "skipped": False,
-                                         "detail": "base not on PATH"})
+    assert base_ready.check().get("base_present") is not True, (
+        "base reads as present inside the suite, so this leg is measuring a "
+        "host it was not written for and its name is a lie")
+
     rc, result, out = _run(["init", str(root), "--proposal",
                             str(_write(tmp_path, _chart_proposal()))], capsys)
 
