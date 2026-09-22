@@ -230,33 +230,26 @@ _HAS_PROCFS = Path("/proc/self/stat").exists()
 
 
 def _ps_table() -> dict[int, tuple[int, str]]:
-    """`{pid: (ppid, lstart)}` from one `ps`, for a POSIX host with no procfs.
+    """`{pid: (ppid, lstart)}` — THE PRODUCT'S ps reader, not a copy of it.
 
-    `lstart` is asked for LAST because it is the only variable-width column, so
-    `split(None, 3)` takes the three fixed ones and leaves the rest whole. The
-    identity it gives is second-granular, which is enough to tell one use of a
-    pid from another on the same host.
+    This used to be a second implementation living here, and that made the
+    control below worthless in the quiet way: it proved the TEST's reader
+    parses, while the product's own shipped to macOS never having been run on
+    Linux at all. The mutation that breaks the product's parse did not redden
+    the control, which is how it was found.
+
+    Two copies of the rule that decides how a process table is read are two
+    rules. `cli/pulse.py`'s `_handle_abort` says the same thing about the lock,
+    one lane over, and it was right there to be read.
     """
-    out = subprocess.run(["ps", "-eo", "pid=,ppid=,stat=,lstart="],
-                         capture_output=True, text=True, timeout=120).stdout
-    table: dict[int, tuple[int, str]] = {}
-    for line in out.splitlines():
-        parts = line.split(None, 3)
-        if len(parts) < 4:
-            continue
-        try:
-            table[int(parts[0])] = (int(parts[1]), parts[3].strip())
-        except (TypeError, ValueError):
-            continue
-    return table
+    return {pid: (ppid, created)
+            for pid, (ppid, created, _state) in descendants._ps_table().items()}
 
 
 def _ps_state(pid: int) -> str | None:
-    """The first character of `ps`'s stat column, or None when it is gone."""
-    out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
-                         capture_output=True, text=True, timeout=120).stdout
-    said = out.strip()
-    return said[:1] if said else None
+    """The state character the PRODUCT's reader saw, or None when it is gone."""
+    row = descendants._ps_table().get(pid)
+    return None if row is None else (row[2] or None)
 
 
 def _host_table() -> dict[int, tuple[int, str]]:
