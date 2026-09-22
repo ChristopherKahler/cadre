@@ -26,7 +26,8 @@ from typing import Any
 
 from firm.core import repo
 from firm.core.db import connect, db_is_remote, get_db_path, resolve_firm_id
-from firm.pulse import dblock
+from firm.pulse import dblock, descendants
+from firm.sched import winjob
 from firm.pulse.environment import pulse_environment
 from firm.pulse.orchestrator import pulse
 from firm.pulse.runner import make_runner
@@ -41,6 +42,48 @@ from firm.services import pulse_ledger
 
 _QUEUE_LOCK_WAIT_SEC = 1800   # how long a claimer waits for the table to free up
 _QUEUE_RETRY_SEC = 10
+
+
+#: What containment answered for THIS pulse, or empty.
+#:
+#: It rides here rather than being threaded through every return because a
+#: pulse has eight ways out and the answer belongs on all of them. `run_pulse`
+#: clears it on entry and fills it once, AFTER the abort dispatch -- so an
+#: abort, which returns before that line, never carries containment keys it did
+#: not earn.
+_CONTAINMENT: dict[str, Any] = {}
+
+
+def _containment_record() -> dict[str, Any]:
+    """Put this pulse in a kill-on-close job and say what happened (#148 R2/R3).
+
+    CALLED THROUGH THE MODULE ATTRIBUTE, never a name bound at import: the
+    tier-A leg patches `winjob.contain_this_process`, and a name captured by
+    `from ... import` at module load would not see the patch -- the leg would
+    then measure the real primitive while believing it measured its own.
+
+    NEVER RAISES, and the pulse runs whatever this returns. A host that cannot
+    make a job still gets its heartbeat: refusing to run would turn a
+    locked-down machine into a firm with no pulse, which is worse than the leak
+    #148 closes. #146 FINDING 1 measured what one broken kernel call costs when
+    the caller does not guard it -- the launcher stub exited 3 with the command
+    never started and an empty log. What this must never do is run quietly, so
+    the answer goes on the pulse's own result line, presence-keyed:
+    `contained` and `containment_supported` always, `containment_reason` when
+    there is one, `containment_flags` when the job's flags could be read back.
+    """
+    try:
+        held = winjob.contain_this_process()
+    except Exception as exc:                        # noqa: BLE001
+        held = winjob.Containment(
+            False, f"containment raised instead of answering: {exc}")
+    record: dict[str, Any] = {"contained": held.contained,
+                              "containment_supported": held.supported}
+    if held.reason:
+        record["containment_reason"] = held.reason
+    if held.limit_flags is not None:
+        record["containment_flags"] = f"0x{held.limit_flags:08x}"
+    return record
 
 
 def _exit_with(result: dict[str, Any], ledger: "_Ledger | None" = None) -> int:
@@ -68,6 +111,13 @@ def _exit_with(result: dict[str, Any], ledger: "_Ledger | None" = None) -> int:
     ``unclosed``. See ``_Ledger``'s docstring for why that is registered
     rather than restructured.
     """
+    # The containment answer rides onto every way out of a pulse (#148 R3).
+    # `setdefault`, so a caller that has already said something about
+    # containment keeps its own word; empty for an abort, which returns before
+    # the record is taken. It is merged BEFORE the ledger closes, so the row
+    # and the printed line describe the same object.
+    for key, value in _CONTAINMENT.items():
+        result.setdefault(key, value)
     if ledger is not None:
         ledger.close(result)
     print(json.dumps(result, default=str))
@@ -190,11 +240,31 @@ def run_pulse(
         0 when the printed result says ``ok: true``, 1 otherwise.
     """
     try:
+        # INSIDE the try, with everything else. `run_pulse` is one try with one
+        # `except Exception`, and `test_every_way_out_of_the_pulse_goes_through
+        # _the_exit_function` pins that shape: a statement above the try can
+        # raise into nothing and leave a traceback with no result line, which
+        # is #128 U4. These two lines were outside it for one run and that
+        # guard caught them -- a guard catching a real defect in the change
+        # that introduced it.
+        global _CONTAINMENT
+        _CONTAINMENT = {}
         workspace = workspace.expanduser().resolve()
 
         # Abort mode: kill tracked processes + resolve the DB lock holder
         if abort:
             return _handle_abort(workspace, firm_id)
+
+        # CONTAINMENT HAPPENS HERE: after the abort dispatch, before anything
+        # is spawned (#148 R2). The order is the property, not the presence of
+        # a job -- a child started before the job is assigned is outside it
+        # forever, and closing the handle later never reaches it. `winlaunch`
+        # already works this way for the launcher; this is the same call for
+        # the pulse itself, so a pulse started by a scheduled task, by the
+        # hub's button or by a hand in a terminal is contained the same way.
+        # The dispatcher deliberately adds no second job: two jobs mean two
+        # handles, and the kill would wait for whichever closed last.
+        _CONTAINMENT = _containment_record()
 
         db_path = get_db_path(workspace)
         if not db_is_remote() and not db_path.exists():
@@ -591,6 +661,16 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
     already dead when abort looked. The cleanup never signals anything, so it
     cannot tell those two apart and correctly calls both ``cleared``.
     """
+    # WHAT THIS PROMISES NOW (#148). Abort writes down the holder's tree
+    # before it signals anything, looks again after the grace window, and
+    # reports `descendants_before` and `alive_after` as `[[pid, created], ...]`
+    # -- one shape for both. `ok: true` means no process belonging to that run
+    # is alive; if any is, `ok` is false and the exit code is 1, with the lock
+    # vocabulary and its message unchanged. Liveness there is presence in the
+    # process table with the same creation time, never permission to signal, so
+    # it has no EPERM branch and a zombie reads dead (`pulse/descendants.py`).
+    # The limitation, said here rather than found later: a process the holder
+    # starts after the snapshot is not in it.
     result: dict[str, Any] = {"ok": True, "aborted": 0}
 
     for _pid, proc in list(_active_pids.items()):
@@ -618,6 +698,8 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
     # the price of one rule about when a lock may be cleared, and it is worth
     # paying: the alternative is this function deciding that for itself again.
     was_alive = False
+    holder_pid: int | None = None
+    before: list[tuple[int, str]] = []
     conn = connect(db_path)
     try:
         try:
@@ -633,6 +715,15 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
             host, pid_str, _nonce = holder.split(":", 2)
             if host == socket.gethostname() and _pid_alive(int(pid_str)):
                 was_alive = True
+                holder_pid = int(pid_str)
+                # THE SNAPSHOT IS TAKEN BEFORE THE SIGNAL, and that ordering is
+                # the whole reading (#148 R5). Taken afterwards it walks a tree
+                # whose root has gone, finds nothing, and reports that nothing
+                # survived -- green for exactly the reason it should be red.
+                # The walk is transitive: a Member arrives under a launcher, so
+                # the holder's direct children are launchers and the process
+                # doing the work is a generation below them.
+                before = descendants.descendants_of(holder_pid)
                 os.kill(int(pid_str), signal.SIGTERM)
                 result["aborted"] += 1
                 for _ in range(10):  # grace: let it exit and release the lock
@@ -679,6 +770,31 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
         # result -- a number abort never had the standing to report. Absent and
         # empty are different claims (avocet, 18:51).
         result["runs_finalized"] = outcome["runs_finalized"]
+    if was_alive:
+        # WHAT WAS SEEN, AND WHAT IS LEFT. Both keys carry the same shape,
+        # `[[pid, created], ...]`, so a reader that can parse one can parse the
+        # other. They appear only when a holder was actually signalled: after
+        # `none`, `stale-cleared` or `remote-holder` nothing was signalled and
+        # abort has no standing to report a reading it never took. Absent and
+        # empty are different claims -- absent says abort did not look, empty
+        # says it looked and found nothing -- and only the second can carry the
+        # promise `ok` now makes.
+        result["descendants_before"] = descendants.as_result(before)
+        survivors = descendants.still_alive(before)
+        holder_gen = (descendants.generation_of(holder_pid)
+                      if holder_pid is not None else None)
+        alive = sorted(([holder_gen] if holder_gen else []) + survivors)
+        result["alive_after"] = descendants.as_result(alive)
+        if alive:
+            # THE ACCEPTANCE LINE, and the one behaviour this PR changes:
+            # after abort returns ok: true, no process belonging to that run is
+            # alive -- and if any is, abort does not report ok: true. Every
+            # reader of this command takes the last stdout line's `ok` as the
+            # answer (#128), so an ok: true beside a live Member is the report
+            # #148 was filed about, whatever the message next to it says. The
+            # words are unchanged; only the success bit moves.
+            result["ok"] = False
+
     if outcome.get("runs_not_finalized"):
         # One bad row never stops the rest, and never disappears either. This
         # used to be a `warn` line of its own on stdout, printed from the

@@ -57,7 +57,7 @@ import firm.cli.pulse as pulse_cli
 from firm.core.db import connect
 from firm.core.migrate import apply_migrations
 from firm.core.repo import create
-from firm.pulse import dblock
+from firm.pulse import dblock, descendants
 from firm.sched import winjob
 
 FIRM = "containco"
@@ -192,28 +192,17 @@ _STAGE = textwrap.dedent("""\
 
 
     def creation():
+        # POSIX self-reports its start time; Windows reports "" and the TEST
+        # fills the stamp from the one process table it already reads. ONE
+        # REPRESENTATION, and that is F9: this used to return a FILETIME pair
+        # from GetProcessTimes while the table stored CreationDate ticks. Both
+        # name the same instant and they never compare equal, so every Windows
+        # presence check would have read the process as gone -- and would have
+        # read exactly like the product losing it.
         if os.name == "posix":
             raw = open("/proc/%d/stat" % os.getpid()).read()
             return raw[raw.rindex(")") + 1:].split()[19]
-        import ctypes
-        from ctypes import wintypes
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        # EVERY PROTOTYPE DECLARED. GetCurrentProcess returns the pseudo-handle
-        # -1; without restype ctypes assumes c_int and a 64-bit HANDLE
-        # parameter receives 0x00000000FFFFFFFF instead. winjob.py documents
-        # this exact trap and it bites the same way here.
-        k32.GetCurrentProcess.restype = wintypes.HANDLE
-        k32.GetCurrentProcess.argtypes = []
-        k32.GetProcessTimes.restype = wintypes.BOOL
-        k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [
-            ctypes.POINTER(wintypes.FILETIME)] * 4
-        made, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
-        if not k32.GetProcessTimes(k32.GetCurrentProcess(),
-                                   ctypes.byref(made), ctypes.byref(exited),
-                                   ctypes.byref(kernel), ctypes.byref(user)):
-            raise OSError("GetProcessTimes failed: %d"
-                          % ctypes.get_last_error())
-        return "%d-%d" % (made.dwHighDateTime, made.dwLowDateTime)
+        return "-"
 
 
     if nxt != "none":
@@ -351,11 +340,18 @@ def _depth_below(ancestor: int, pid: int, limit: int = 12) -> int | None:
     three-deep tree: a venv launcher inserts a generation of its own, so the
     number this returns is the only thing that says the tree really is deeper
     than a one-level walk can reach.
+
+    THE TABLE IS READ ONCE FOR THE WHOLE WALK (F10). On Windows `_ppid` starts
+    a PowerShell, and a twelve-step walk that called it each time would start
+    twelve. One read also makes the walk self-consistent: every step reads the
+    same instant rather than a table that moved under it.
     """
+    table = _win_table() if os.name != "posix" else None
     steps = 0
     cur = pid
     while steps < limit:
-        parent = _ppid(cur)
+        parent = table.get(cur, (None, ""))[0] if table is not None \
+            else _ppid(cur)
         if parent is None or parent <= 1:
             return None
         steps += 1
@@ -445,15 +441,33 @@ class _Tree:
 
     def _await(self, depth: int) -> dict[str, tuple[int, str]]:
         deadline = time.time() + 30
+        stages: dict[str, tuple[int, str]] | None = None
         while time.time() < deadline:
             lines = [ln.split() for ln in
                      self.record.read_text(encoding="utf-8").splitlines() if ln]
             if len(lines) >= depth:
-                return {p[0]: (int(p[1]), p[2]) for p in lines}
+                stages = {p[0]: (int(p[1]), p[2]) for p in lines}
+                break
             time.sleep(0.05)
-        raise AssertionError(
-            f"the tree never reached {depth} generations; recorded: "
-            f"{self.record.read_text(encoding='utf-8')!r}")
+        if stages is None:
+            raise AssertionError(
+                f"the tree never reached {depth} generations; recorded: "
+                f"{self.record.read_text(encoding='utf-8')!r}")
+        if os.name == "posix":
+            return stages
+        # WINDOWS STAMPS COME FROM THE TABLE, not from the stage (F9). Every
+        # generation has reported and each is sleeping 300 s, so each one is
+        # certainly present; a missing row is a real failure and says so here
+        # rather than becoming a blank stamp that quietly matches nothing.
+        table = _win_table()
+        filled: dict[str, tuple[int, str]] = {}
+        for label, (pid, _placeholder) in stages.items():
+            row = table.get(pid)
+            assert row is not None, (
+                f"the {label} generation (pid {pid}) reported itself and is "
+                f"sleeping, but is not in the process table")
+            filled[label] = (pid, row[1])
+        return filled
 
     def close(self) -> None:
         for pid in (self.leaf, self.middle, self.holder):
@@ -546,7 +560,6 @@ def test_control_the_tree_is_three_generations_deep_and_all_are_alive(tree):
           f"leaf={tree.leaf}")
 
 
-@posix_only
 def test_control_the_leaf_sits_at_least_two_generations_below_the_holder(tree):
     """THE CONTROL ADDENDUM 2 ASKS FOR, stated as a property of the TREE rather
     than of the walk: if the leaf were a direct child, a one-level walk would
@@ -569,7 +582,6 @@ def test_control_the_leaf_sits_at_least_two_generations_below_the_holder(tree):
     assert _ppid(tree.leaf) != tree.holder
 
 
-@posix_only
 def test_control_the_generation_reader_returns_nothing_for_a_dead_pid(tree):
     """The must-fail half of the reader. A reader that answers for a process
     that does not exist would report every survivor as present and every
@@ -1043,6 +1055,36 @@ def test_a_zombie_child_is_not_a_survivor(tmp_path, monkeypatch, capsys):
                     pass
 
 
+
+
+def test_the_descendant_walker_names_no_permission_call_in_its_source():
+    """R5b's STATIC half, and it runs on every platform (F11).
+
+    The dynamic leg below fakes `os.kill` and `OpenProcess` and watches whether
+    the read touches them. A mutant that took a FRESH `ctypes.WinDLL` handle
+    would walk straight past both fakes and pass it -- the object it called
+    would not be the object under the fake. So this reads the walker's source
+    instead, law-12 shape: the forbidden names ABSENT, each paired with a
+    positive sibling that must be PRESENT in the same run, so a reader that has
+    gone blind cannot report an absence it never measured.
+    """
+    source = Path(descendants.__file__).read_text(encoding="utf-8")
+    body = source[source.index("def _posix_table"):]
+
+    # The positive siblings first: if these are not here, the absences below
+    # are measuring an empty string.
+    assert "/proc" in body, "the POSIX branch is gone; absence proves nothing"
+    assert "Win32_Process" in body, (
+        "the Windows branch is gone; absence proves nothing")
+
+    assert "OpenProcess" not in body, (
+        "the walker opens a handle to decide liveness; R5b forbids it, and it "
+        "would inherit the EPERM branch the two _pid_alive copies disagree on")
+    assert "os.kill" not in body, (
+        "the walker signals to decide liveness; on Windows os.kill is "
+        "TerminateProcess and the read would kill what it asked about")
+
+
 def test_the_descendant_read_never_asks_permission_to_signal(tmp_path, tree,
                                                              monkeypatch,
                                                              capsys):
@@ -1081,6 +1123,30 @@ def test_the_descendant_read_never_asks_permission_to_signal(tmp_path, tree,
             f"the descendant read called os.kill on {pid}; R5b forbids it")
 
     monkeypatch.setattr(os, "kill", fake_kill)
+    if os.name != "posix":
+        # ON WINDOWS `os.kill` IS NOT THE PROBE (F11). `_pid_alive` takes the
+        # `OpenProcess` branch there, off the CACHED `ctypes.windll.kernel32`
+        # object -- so that is the object the fake has to replace. It raises
+        # for any pid but the holder, exactly as the `os.kill` fake does.
+        #
+        # NOT COVERED, and said here rather than left to be found: the
+        # cleanup's copy builds a fresh `WinDLL`, which this fake cannot reach.
+        # It probes the holder only, so it cannot reach a descendant anyway;
+        # the static leg above is what covers a mutant that takes a fresh
+        # handle to walk the tree.
+        import ctypes
+
+        real_open = ctypes.windll.kernel32.OpenProcess
+
+        def fake_open(access, inherit, pid):
+            if pid == holder:
+                return real_open(access, inherit, pid)
+            trespass.append(pid)
+            raise AssertionError(
+                f"the descendant read called OpenProcess on {pid}; "
+                f"R5b forbids it")
+
+        monkeypatch.setattr(ctypes.windll.kernel32, "OpenProcess", fake_open)
     try:
         pulse_cli.run_pulse(ws, abort=True, firm_id=FIRM)
     finally:
