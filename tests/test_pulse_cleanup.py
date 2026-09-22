@@ -373,9 +373,17 @@ def test_l6_abort_reports_a_holder_it_could_not_kill_as_signalled(
     """The word `signalled` is abort's, and delegation must not lose it.
 
     `test_pulse_exit_contract.py` pins it: a holder that ignores SIGTERM reports
-    `lock: signalled`, `aborted: 1`, exit 0. The shared cleanup calls that same
-    state `held-by-a-live-pulse`, which is the right word for `heartbeat
-    disable` and the wrong one for a caller that has just signalled the holder.
+    `lock: signalled`, `aborted: 1`. The shared cleanup calls that same state
+    `held-by-a-live-pulse`, which is the right word for `heartbeat disable` and
+    the wrong one for a caller that has just signalled the holder.
+
+    THE EXIT CODE IS 1 SINCE #148, and this leg is a clean instance of why.
+    The holder here is faked alive at pid 424242, which no process table
+    contains, so abort's generation reading is honestly EMPTY -- and an `ok`
+    derived from that reading alone would print success beside "holder
+    signalled, still exiting; lock left for its own release". `lock:
+    signalled` means the lock was left held, so it is false on its own
+    whatever the reading says.
     """
     import socket
 
@@ -396,7 +404,9 @@ def test_l6_abort_reports_a_holder_it_could_not_kill_as_signalled(
 
     assert out["lock"] == "signalled", out
     assert out["aborted"] == 1, out
-    assert rc == 0
+    assert out["alive_after"] == [], out
+    assert out["ok"] is False, out
+    assert rc == 1
 
 
 def test_l6_a_caller_that_owns_a_live_holders_runs_can_close_them(

@@ -757,7 +757,12 @@ def test_abort_on_a_firm_with_no_pulse_running_exits_0(tmp_path):
 
     run = _pulse(ws, "--abort")
 
-    _assert_exit(run, rc=0, ok=True, lock="none", aborted=0)
+    result = _assert_exit(run, rc=0, ok=True, lock="none", aborted=0)
+    # #148 R5: `alive_after` is what abort saw AFTER signalling something.
+    # Nothing was signalled here, so the key is absent rather than empty --
+    # "abort did not look" and "abort looked and found nothing" are different
+    # claims and the contract pins which one each row makes.
+    assert "alive_after" not in result, run.output
 
 
 def test_abort_clears_a_lock_whose_local_holder_is_dead_and_exits_0(tmp_path):
@@ -769,8 +774,10 @@ def test_abort_clears_a_lock_whose_local_holder_is_dead_and_exits_0(tmp_path):
 
     run = _pulse(ws, "--abort")
 
-    _assert_exit(run, rc=0, ok=True, lock="stale-cleared")
+    result = _assert_exit(run, rc=0, ok=True, lock="stale-cleared")
     assert _rows(ws, "SELECT holder FROM pulse_lock") == [], run.output
+    # The holder was already dead, so abort signalled nothing (#148 R5).
+    assert "alive_after" not in result, run.output
 
 
 def test_abort_leaves_a_lock_held_from_another_machine_and_exits_0(tmp_path):
@@ -779,7 +786,10 @@ def test_abort_leaves_a_lock_held_from_another_machine_and_exits_0(tmp_path):
 
     run = _pulse(ws, "--abort")
 
-    _assert_exit(run, rc=0, ok=True, lock="remote-holder")
+    result = _assert_exit(run, rc=0, ok=True, lock="remote-holder")
+    # Those processes belong to the other machine and abort never looked at
+    # them, exactly as it never looks at their runs (#148 R5).
+    assert "alive_after" not in result, run.output
 
 
 def _live_holder(*code: str) -> subprocess.Popen:
@@ -805,13 +815,41 @@ def test_abort_stops_a_live_local_holder_and_exits_0(tmp_path):
 
         run = _pulse(ws, "--abort")
 
-        _assert_exit(run, rc=0, ok=True, lock="cleared", aborted=1)
+        result = _assert_exit(run, rc=0, ok=True, lock="cleared", aborted=1)
+        # #148 R5: a holder was signalled and it died, so abort looked and
+        # found nothing. PRESENT and empty -- asserting only emptiness would
+        # pass on the absent key this row had before the reading existed.
+        assert "alive_after" in result, run.output
+        assert result["alive_after"] == [], run.output
     finally:
         holder.kill()
 
 
 @host_cannot_survive_sigterm
-def test_abort_reports_a_holder_that_is_still_exiting_and_exits_0(tmp_path):
+def test_abort_reports_a_holder_that_is_still_exiting_and_exits_1(tmp_path):
+    """THE OK BIT MOVED HERE, and only the ok bit (#148 R1, ruling (a)).
+
+    This row used to assert `rc=0, ok=True`: a holder signalled, still alive
+    after the grace window, reported honestly as `signalled` and counted as a
+    success. The words were never the problem. The `ok` was: every reader of
+    this command -- the hub, the board, each CLI caller -- takes the last
+    stdout line's `ok` as the answer (#128), so `ok: true` beside a live holder
+    is the report #148 was filed about, whatever the message next to it says.
+
+    What it costs, named rather than hidden: a slow but correct shutdown now
+    reads `ok: false` once and the operator asks again. That is the price of
+    `ok: true` meaning "no process of that run is alive", which is the property
+    the whole issue turns on.
+
+    POSIX-ONLY, and that matters for what this leg can be said to cover: on
+    Windows `os.kill(pid, SIGTERM)` is `TerminateProcess`, which no process can
+    ignore, so this branch cannot be produced there with a real signal. The
+    every-host arm is `test_abort_refuses_to_say_ok_when_the_holder_is_still_alive`
+    in `test_pulse_containment.py` (R1a, the signal faked), and the real-process
+    arm is Condition 2's survivor leg -- the leaf leg -- on CI's Windows job
+    (R1b, addendum 1 at doc 6522-6525). It is NOT the live leg, which proves
+    containment rather than the `ok` flip.
+    """
     ws = _firm(tmp_path / "ws")
     holder = _live_holder("import signal, time",
                           "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
@@ -821,7 +859,13 @@ def test_abort_reports_a_holder_that_is_still_exiting_and_exits_0(tmp_path):
 
         run = _pulse(ws, "--abort")
 
-        _assert_exit(run, rc=0, ok=True, lock="signalled", aborted=1)
+        result = _assert_exit(run, rc=1, ok=False, lock="signalled", aborted=1)
+        assert result["message"] == ("holder signalled, still exiting; "
+                                     "lock left for its own release"), run.output
+        assert "alive_after" in result, run.output
+        assert holder.pid in [
+            entry[0] if isinstance(entry, list) else entry.get("pid")
+            for entry in result["alive_after"]], run.output
     finally:
         holder.send_signal(signal.SIGKILL)
 

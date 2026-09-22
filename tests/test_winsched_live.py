@@ -158,7 +158,18 @@ def _generations(marker: Path) -> set[tuple[int, str]]:
 
 
 def _alive(gens: set[tuple[int, str]]) -> set[tuple[int, str]]:
-    """Which generations are still running, by pid AND creation time."""
+    """Which generations are still running, by pid AND creation time.
+
+    THE WHOLE STAMP, NEVER A PREFIX OF IT. This used to test `created[:14]`, a
+    prefix that fits a DMTF stamp (`20260922191622`, to the second), but
+    `Get-CimInstance` returns `CreationDate` as a DateTime and it prints as
+    `Tuesday, September 22, 2026 7:16:22 PM` (CI job 106892632357). Its first
+    fourteen characters are the weekday and part of the month, so a stranger
+    handed the pid on the same day read as the same process -- and the
+    teardowns in this file end what this reads alive. A substring rather than
+    equality, because `run_cmd` returns stderr joined to stdout, and anything
+    written there would break an equality.
+    """
     from firm.sched.base import run_cmd
     live = set()
     for pid, created in gens:
@@ -166,9 +177,28 @@ def _alive(gens: set[tuple[int, str]]) -> set[tuple[int, str]]:
             ["powershell", "-NoProfile", "-Command",
              f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}')"
              ".CreationDate"], timeout=60)
-        if rc == 0 and created and created[:14] in said:
+        if rc == 0 and created and created in said:
             live.add((pid, created))
     return live
+
+
+def _creation_of(pid: int) -> str:
+    """This pid's `CreationDate`, printed exactly as the recorders print it.
+
+    Stdout alone: the value is stored and compared later, so nothing on stderr
+    may become part of it. Empty when the pid is gone or the read failed, and
+    an empty stamp identifies nothing, so nothing is ended on its strength.
+    """
+    from firm.core.proc import run_utf8
+    try:
+        out = run_utf8(
+            ["powershell", "-NoProfile", "-Command",
+             f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}')"
+             ".CreationDate"],
+            capture_output=True, timeout=60).stdout
+    except Exception:
+        return ""
+    return (out or "").strip()
 
 
 def test_enable_over_a_running_heartbeat_ends_its_tree(tmp_path, capsys):
@@ -305,3 +335,257 @@ def test_enable_over_a_running_heartbeat_ends_its_tree(tmp_path, capsys):
         for pid, _created in _alive(_generations(marker)):
             run_cmd(["taskkill", "/PID", str(pid), "/T", "/F"], timeout=60)
         sched.remove(stem)
+
+
+# ---------------------------------------------------------------------------
+# #148 -- the hub's dispatch seam, contained, and --abort proving it (tiers B and C)
+# ---------------------------------------------------------------------------
+
+#: The program the stub Member runs. A FILE compiled before anything starts,
+#: for the reason #147 paid for: a generated program that does not compile
+#: leaves exactly the same empty marker as a Member that never started, and the
+#: leg would then find nothing, print VOID, and be counted as PASSED.
+#:
+#: It records ITS OWN pid and creation time. Reading the tree with the module
+#: under test would make the leg agree with whatever that module does, which is
+#: the one thing it must not do.
+_MEMBER_RECORDER = '''\
+import os, subprocess, sys, time
+
+out = subprocess.run(
+    ["powershell", "-NoProfile", "-Command",
+     "(Get-CimInstance Win32_Process -Filter 'ProcessId=%d').CreationDate"
+     % os.getpid()],
+    capture_output=True, text=True).stdout.strip()
+
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    fh.write("%d,%s\\n" % (os.getpid(), out))
+    fh.flush()
+    os.fsync(fh.fileno())
+
+time.sleep(900)
+'''
+
+
+def _firm_148(ws: Path) -> None:
+    """A scratch firm with one active Member and one Unit for it to claim."""
+    from firm.core.db import connect
+    from firm.core.migrate import apply_migrations
+    from firm.core.repo import create
+
+    conn = connect(ws / ".firm" / "firm.db")
+    try:
+        apply_migrations(conn)
+        create(conn, "firm", {"id": "live148", "name": "Live 148"})
+        create(conn, "member", {"id": "MEM-001", "firm_id": "live148",
+                                "name": "Lead", "role": "worker",
+                                "status": "active"})
+        create(conn, "operation", {"id": "OPS-001", "firm_id": "live148",
+                                   "name": "Ops"})
+        create(conn, "project", {"id": "PROJ-001", "firm_id": "live148",
+                                 "operation_id": "OPS-001", "name": "Work",
+                                 "status": "in_progress",
+                                 "due_date": "2099-12-31"})
+        create(conn, "unit", {"id": "UNIT-001", "firm_id": "live148",
+                              "project_id": "PROJ-001", "name": "Unit 1",
+                              "assignee_member_id": "MEM-001"})
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _run_row_status(ws: Path) -> list[str]:
+    from firm.core.db import connect
+
+    conn = connect(ws / ".firm" / "firm.db")
+    try:
+        return [str(r[0]) for r in
+                conn.execute("SELECT status FROM member_run").fetchall()]
+    finally:
+        conn.close()
+
+
+def test_the_hub_seam_contains_its_pulse_and_abort_proves_the_tree_died(
+        tmp_path, capsys):
+    """TIERS B AND C for #148: Windows agreed, and the tree actually died.
+
+    PASS, FAIL, or VOID -- and VOID IS A SKIP, NEVER A PASS. A CI runner that
+    cannot produce a running Member leaves the same empty marker as a Member
+    that started and vanished, and a bare `return` there counts as PASSED under
+    `-ra` with its prints swallowed.
+
+    THE PULSE IS STARTED THROUGH THE HUB'S SEAM, NOT THE RUNNING HUB. The
+    operator's hub is never touched: this calls `resolve_scheduler()
+    .spawn_detached` with `_fire_pulse`'s own wrapper shape, which is the code
+    path the pulse button reaches and the one #148 flags as uncontained. That
+    is the whole point of the leg -- the scheduled-task path was already
+    contained by #141, and this is the path that was not.
+
+    THE SNAPSHOT ASSERTION IS NOT OPTIONAL. `alive_after == []` is also what an
+    empty walk returns, so a Windows walk that found nothing at all would pass
+    the headline assertion while proving the opposite. The leg therefore
+    asserts that `descendants_before` CONTAINED the Member's generation: the
+    walk saw it, and then it was gone.
+    """
+    from firm.core.db import get_db_path
+    from firm.pulse.environment import pulse_path
+    from firm.sched import resolve_scheduler
+
+    ws = tmp_path / "ws"
+    (ws / ".firm").mkdir(parents=True)
+    _firm_148(ws)
+
+    marker = tmp_path / "member.txt"
+    recorder = tmp_path / "member_recorder.py"
+    # CONTROL 0: the program compiles, before anything is installed or started.
+    compile(_MEMBER_RECORDER, str(recorder), "exec")
+    recorder.write_text(_MEMBER_RECORDER, encoding="utf-8")
+
+    stub = tmp_path / "stub-member.cmd"
+    stub.write_text(
+        "@echo off\r\n"
+        f'"{sys.executable}" "{recorder}" "{marker}"\r\n',
+        encoding="utf-8")
+
+    env = {"FIRM_ID": "live148", "CADRE_CLAUDE_BIN": str(stub),
+           "PATH": pulse_path(ws, "live148")}
+
+    # --- TIER B GATE: can this host contain a pulse at all? -----------------
+    # Read from a pulse that RUNS TO COMPLETION, because the pulse this leg
+    # aborts never prints a result -- it is killed mid-run, which is the point.
+    # A host that cannot make a job is not a failure of this change (R3), so it
+    # is a VOID with its reading, never a FAIL.
+    import subprocess as _sp
+
+    probe_ws = tmp_path / "probe"
+    (probe_ws / ".firm").mkdir(parents=True)
+    _firm_148(probe_ws)
+    probe_env = dict(os.environ)
+    probe_env.update({"CADRE_CLAUDE_BIN": str(stub)})
+    probe_env["PYTHONPATH"] = str(
+        Path(__file__).resolve().parents[1] / "src")
+    probe = _sp.run(
+        [sys.executable, "-m", "firm", "pulse", "--workspace", str(probe_ws),
+         "--firm-id", "live148", "--dry-run"],
+        capture_output=True, text=True, env=probe_env, timeout=300)
+    probe_lines = probe.stdout.strip().splitlines()
+    probe_result = json.loads(probe_lines[-1]) if probe_lines else {}
+
+    with capsys.disabled():
+        # THE WHOLE LINE, not the containment fields alone: a VOID below has to
+        # be diagnosable from the CI log by someone who cannot re-run it, and
+        # `ok` and `reason` are what say whether the probe pulse failed for a
+        # reason that has nothing to do with containment.
+        print(f"[148] probe pulse rc={probe.returncode} result={probe_result!r}")
+
+    if probe_result.get("contained") is not True:
+        pytest.skip(
+            f"[148] VOID: this host did not contain its pulse, so nothing "
+            f"below can prove a tree died. reading={probe_result!r}")
+
+    # --- TIER C: the hub's seam, a real Member, and the abort ---------------
+    unit = f"pulse-live148-{int(time.time())}"
+    log = ws / ".firm" / "pulse-logs" / f"{unit}.json"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    argv = [sys.executable, "-m", "firm", "pulse", "--workspace", str(ws),
+            "--firm-id", "live148", "--source", "board"]
+    wrapper = (
+        "import subprocess, sys; "
+        "from firm.core.proc import run_utf8; "
+        f"rc = run_utf8({argv!r}, stdout=open({str(log)!r}, 'w'), "
+        "stderr=subprocess.STDOUT).returncode; "
+        "sys.exit(rc)")
+    compile(wrapper, "<wrapper>", "exec")     # the same control, same reason
+
+    dispatched = None
+    wrapper_gen: tuple[int, str] | None = None
+    try:
+        dispatched = resolve_scheduler().spawn_detached(
+            [sys.executable, "-c", wrapper], workdir=ws, env=env, unit=unit)
+        # THE WRAPPER'S GENERATION, read the moment it exists, so the teardown
+        # can end IT and never whoever holds its pid by then.
+        if dispatched and dispatched.get("pid"):
+            stamp = _creation_of(int(dispatched["pid"]))
+            if stamp:
+                wrapper_gen = (int(dispatched["pid"]), stamp)
+
+        # CONTROL 1: the Member actually started, and is alive, BEFORE the act.
+        deadline = time.time() + 180
+        gens: set[tuple[int, str]] = set()
+        while time.time() < deadline:
+            gens = _generations(marker)
+            if gens and _alive(gens):
+                break
+            time.sleep(1.0)
+        live_before = _alive(gens)
+        with capsys.disabled():
+            print(f"[148] dispatched via={dispatched.get('via')!r} "
+                  f"pid={dispatched.get('pid')!r} generation={wrapper_gen!r}")
+            print(f"[148] member generations recorded: {sorted(gens)}")
+            print(f"[148] alive before the act: {sorted(live_before)}")
+        if not live_before:
+            pytest.skip(
+                f"[148] VOID: no Member was running before the act, so the "
+                f"abort had nothing to prove. recorded={sorted(gens)} "
+                f"log={log.read_text(encoding='utf-8')[-2000:]!r}")
+
+        # --- THE ACT --------------------------------------------------------
+        abort_env = dict(os.environ)
+        abort_env["PYTHONPATH"] = str(
+            Path(__file__).resolve().parents[1] / "src")
+        abort = _sp.run(
+            [sys.executable, "-m", "firm", "pulse", "--workspace", str(ws),
+             "--firm-id", "live148", "--abort"],
+            capture_output=True, text=True, env=abort_env, timeout=300)
+        lines = abort.stdout.strip().splitlines()
+        result = json.loads(lines[-1]) if lines else {}
+
+        time.sleep(2.0)                       # let the job close its tree
+        live_after = _alive(gens)
+        rows = _run_row_status(ws)
+
+        before_pids = {int(e[0]) for e in result.get("descendants_before", [])}
+        member_pids = {pid for pid, _created in gens}
+
+        with capsys.disabled():
+            print(f"[148] abort rc={abort.returncode} result={result!r}")
+            print(f"[148] descendants_before pids: {sorted(before_pids)}")
+            print(f"[148] member pids: {sorted(member_pids)}")
+            print(f"[148] alive after the act: {sorted(live_after)}")
+            print(f"[148] member_run rows: {rows}")
+            verdict = ("PASS" if (result.get("ok") is True
+                                  and result.get("alive_after") == []
+                                  and not live_after
+                                  and member_pids & before_pids)
+                       else "FAIL")
+            print(f"[148] {verdict}")
+
+        # THE SNAPSHOT SAW THE MEMBER. Asserted first, because `alive_after ==
+        # []` is also what a walk that found nothing returns, and that walk
+        # would pass every other assertion here while proving the reverse.
+        assert member_pids & before_pids, (
+            f"the pre-act snapshot did not contain the Member's generation: "
+            f"snapshot={sorted(before_pids)} member={sorted(member_pids)}. "
+            f"An empty walk passes `alive_after == []` for the wrong reason.")
+        assert result.get("ok") is True, result
+        assert abort.returncode == 0, abort.stdout + abort.stderr
+        assert result.get("alive_after") == [], result
+        assert not live_after, (
+            f"the Member outlived the abort: {sorted(live_after)}")
+        assert rows and all(r != "running" for r in rows), rows
+    finally:
+        # Survivors ended BY GENERATION, never by pid or by pattern: a pid that
+        # has gone may already belong to someone else. And WITHOUT `/T`: the
+        # tree flag ends every process that names the target's pid as its
+        # parent, and on Windows that includes strangers whose real parent held
+        # the pid before and died (R5e). Measured on the operator's machine on
+        # 2026-09-22, the hub's root names such a dead parent, so a target
+        # handed that pid would take the hub with it. Every process this leg
+        # identified is ended by its own generation instead.
+        from firm.sched.base import run_cmd
+
+        for pid, _created in _alive(_generations(marker)):
+            run_cmd(["taskkill", "/F", "/PID", str(pid)], timeout=60)
+        if wrapper_gen and _alive({wrapper_gen}):
+            run_cmd(["taskkill", "/F", "/PID", str(wrapper_gen[0])],
+                    timeout=60)
