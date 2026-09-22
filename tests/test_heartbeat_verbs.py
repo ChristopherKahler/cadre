@@ -29,11 +29,23 @@ skips all three. The two legs that need a scheduler to REFUSE a removal are
 in-process with a stand-in scheduler, and say so at the leg -- no real backend can
 be made to fail on demand without touching the host's own timers.
 
-WHAT THE CHILD IS FENCED WITH, and which tier each fence isolates (law 21). ``HOME``
-points at the test's own temp directory, because ``default_unit_dir()`` is
-``Path.home() / ".config/systemd/user"`` -- without it these legs would install
-units into the operator's real systemd. ``CADRE_SCHEDULER=systemd`` pins the
-backend, so the same legs measure the same thing on every host.
+WHAT THE CHILD IS FENCED WITH, and which tier each fence isolates (law 21). THE
+HOME FENCE IS TWO VARIABLES, NOT ONE, because the two platforms read different
+ones -- measured with ``ntpath.expanduser`` and ``posixpath.expanduser`` rather
+than assumed. POSIX reads ``HOME``; Windows reads ``USERPROFILE``, then
+``HOMEDRIVE``+``HOMEPATH``, and IGNORES ``HOME`` entirely. ``default_unit_dir()``
+is ``Path.home() / ".config/systemd/user"``, so the fence must move
+``Path.home()`` itself: it sets BOTH ``HOME`` and ``USERPROFILE`` at the test's
+own temp directory and drops ``HOMEDRIVE``/``HOMEPATH`` so the fallback cannot
+fire. Without it these legs would install units into the operator's real
+systemd -- and on Windows, before this, ``disable`` was running ``remove()``
+against the operator's real unit directory. CI measured that at ``b4a0628d``:
+the four legs needing an installed timer failed on windows-latest and nowhere
+else. ``test_the_child_really_lives_in_the_temp_home`` now ASKS the child what
+``Path.home()`` is instead of trusting that the fence took, because a fence that
+is merely SET is not a fence that WORKS and only the child can answer that.
+``CADRE_SCHEDULER=systemd`` pins the backend, so the same legs measure the same
+thing on every host.
 ``CADRE_DB_URL`` is dropped so each leg uses its own file. Every other fence is
 conftest's and travels in the parent's environment.
 """
@@ -137,10 +149,27 @@ class _Run:
         return value
 
 
-def _cadre(home: Path, *args: str, cwd: Path | None = None) -> _Run:
+def _child_env_for(home: Path) -> dict[str, str]:
+    """The environment every child in this file runs with.
+
+    One producer, so the fence the control below proves is the same fence the
+    legs use. Two copies of a fence are two fences, and only one of them gets
+    tested.
+    """
     env = dict(os.environ)
     env["PYTHONPATH"] = str(Path(hb.__file__).resolve().parents[2])
-    env["HOME"] = str(home)               # the systemd unit dir lives under it
+    # BOTH, because the two platforms read different variables -- measured with
+    # `ntpath.expanduser` and `posixpath.expanduser` rather than assumed:
+    # Windows reads USERPROFILE (then HOMEDRIVE+HOMEPATH) and IGNORES HOME;
+    # POSIX reads HOME. `default_unit_dir()` is `Path.home()/.config/systemd/
+    # user`, so a fence that sets only HOME leaves the child resolving the
+    # operator's real profile on Windows. CI found that the hard way at
+    # b4a0628d: the four legs needing an installed timer failed there and
+    # nowhere else.
+    env["HOME"] = str(home)
+    env["USERPROFILE"] = str(home)
+    env.pop("HOMEDRIVE", None)            # so the fallback cannot fire either
+    env.pop("HOMEPATH", None)
     env["CADRE_SCHEDULER"] = "systemd"
     # `enable` refuses to install a timer whose pulse has no Member runtime to
     # spawn, and conftest points CADRE_CLAUDE_BIN at a path that does not
@@ -150,9 +179,14 @@ def _cadre(home: Path, *args: str, cwd: Path | None = None) -> _Run:
     env["CADRE_CLAUDE_BIN"] = sys.executable
     env.pop("CADRE_DB_URL", None)
     env.pop("FIRM_ID", None)
+    return env
+
+
+def _cadre(home: Path, *args: str, cwd: Path | None = None) -> _Run:
     return _Run(subprocess.run(
-        [sys.executable, "-m", "firm", *args], capture_output=True, env=env,
-        cwd=str(cwd) if cwd else None, timeout=180, stdin=subprocess.DEVNULL))
+        [sys.executable, "-m", "firm", *args], capture_output=True,
+        env=_child_env_for(home), cwd=str(cwd) if cwd else None, timeout=180,
+        stdin=subprocess.DEVNULL))
 
 
 def _home(tmp_path: Path) -> Path:
@@ -193,6 +227,34 @@ def _install(home: Path, ws: Path, firm_id: str = FIRM,
         hb.render_service(ws, firm_id, sys.executable, {}), encoding="utf-8")
     (unit_dir / f"{stem}.timer").write_text(
         hb.render_timer(firm_id, interval), encoding="utf-8")
+
+
+def test_the_child_really_lives_in_the_temp_home(tmp_path):
+    """The fence, proved rather than trusted.
+
+    Every leg that needs an installed timer depends on the child resolving
+    `Path.home()` to the test's own directory, because that is where
+    `default_unit_dir()` looks and where the fixture writes. A fence that is
+    merely SET is not a fence that WORKS: setting HOME alone did nothing on
+    Windows, and four legs failed in CI for a reason no Linux run could show.
+
+    This asks the child what it thinks its home is, which is the one question
+    that would have caught that here instead of twenty minutes into a Windows
+    suite.
+    """
+    home = _home(tmp_path)
+    env = _child_env_for(home)
+
+    proc = subprocess.run(
+        [sys.executable, "-c",
+         "from pathlib import Path; print(Path.home())"],
+        capture_output=True, env=env, timeout=120, stdin=subprocess.DEVNULL)
+
+    answered = proc.stdout.decode("utf-8", "replace").strip()
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
+    assert Path(answered) == home, (
+        "the child resolved a different home, so every timer leg would look "
+        "somewhere the fixture never wrote", answered, str(home))
 
 
 def _firm_at(root: Path, firm_id: str = FIRM) -> Path:
