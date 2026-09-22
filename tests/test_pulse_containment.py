@@ -21,15 +21,20 @@ WHAT EACH TIER PROVES, so no leg claims a rank above the one it runs in:
 * **Tier A'** (here, every platform): THE REPORT FOLLOWS THE READING, including
   when the reading is "no", when it is a raise, and when the holder is still
   alive (R1a).
-* **Tier B/C** (NOT here -- `tests/test_winsched_live.py`, CI's Windows job
-  only): WINDOWS AGREES and THE TREE ACTUALLY DIES. Nothing in this file can
-  prove containment: the suite runs on Linux, and `winjob` is Windows-only by
-  `sys.platform`. Every containment assertion here is about the CALL.
+* **Tier B** (here AND in `tests/test_winsched_live.py`, Windows only):
+  WINDOWS AGREES. Here that is the R5c stamp leg, which checks the walker's
+  creation stamp against `GetProcessTimes`; in the live leg it is the probe
+  pulse reporting that it was contained.
+* **Tier C** (NOT here -- `tests/test_winsched_live.py`, CI's Windows job
+  only): THE TREE ACTUALLY DIES. Nothing in this file can prove containment:
+  no leg here makes a job, and `winjob` is Windows-only by `sys.platform`.
+  Every containment assertion here is about the CALL.
 
 THE ABORT LEGS ARE DIFFERENT, AND THIS IS THE POINT. Abort's snapshot and
-re-read need no job at all -- they are a READING. So on this Linux host a
-holder that exits and leaves work running is exactly the state #148 was filed
-about, and it can be produced and asserted here for real.
+re-read need no job at all -- they are a READING. So on every host these legs
+run on, Linux, macOS and Windows, a holder that exits and leaves work running
+is exactly the state #148 was filed about, and it can be produced and asserted
+here for real.
 
 THE TREE IS THREE DEEP BY CONSTRUCTION, AND THAT IS ADDENDUM 2's POINT. A real
 Member arrives under a venv launcher, which inserts a generation: holder ->
@@ -62,20 +67,20 @@ from firm.sched import winjob
 
 FIRM = "containco"
 
-#: The real-signal arms need a holder that exits on SIGTERM leaving children,
-#: The legs that carry it need a POSIX-only SHAPE -- a zombie, or a `/proc`
-#: walk -- and nothing more than that. The real-signal legs in this file do NOT
-#: carry it and DO run on Windows: the tree is a `Popen` chain, and
-#: `TerminateProcess` ends the holder there and leaves its children, which is
-#: R1b's arm measured in this file rather than only on CI. This note used to
+#: ONE LEG CARRIES THIS MARK: the zombie leg, because a zombie is a POSIX-only
+#: shape and nothing more than that is needed to skip. The real-signal legs in
+#: this file do NOT carry it and DO run on Windows: the tree is a `Popen` chain,
+#: and `TerminateProcess` ends the holder there and leaves its children, which
+#: is R1b's arm measured in this file rather than only on CI. This note used to
 #: claim the opposite, and the Windows job log disagrees with it: the only
 #: containment legs skipped there are the one whose whole point is the
 #: non-Windows answer, the zombie leg, and the `ps` control -- three, not two.
+#: The `ps` control carries its own mark.
 posix_only = pytest.mark.skipif(
     os.name != "posix",
-    reason=("needs a POSIX-only shape: a zombie, or a `/proc` walk. The tree "
-            "itself is a plain Popen chain and runs everywhere, so only the "
-            "legs that genuinely need POSIX carry this mark"))
+    reason=("needs a POSIX-only shape: a zombie. The tree itself is a plain "
+            "Popen chain and runs everywhere, so only the leg that genuinely "
+            "needs POSIX carries this mark"))
 
 
 # ---------------------------------------------------------------------------
@@ -524,14 +529,37 @@ class _Tree:
         return filled
 
     def close(self) -> None:
-        for pid in (self.leaf, self.middle, self.holder):
+        """End each stage BY GENERATION, never by number.
+
+        A stage that has already exited may have handed its pid to a stranger,
+        and on Windows the stranger can be anything on the box. Measured on the
+        operator's machine on 2026-09-22: the hub's root process names a parent
+        pid that no live process holds, so a stage handed that pid and ended
+        with the tree flag could take the hub down with it. So a stage is ended
+        only while the table still holds its recorded pid AND creation stamp,
+        and on Windows without `/T`: every stage is ended by its own generation
+        already, so the tree flag could only reach processes this harness did
+        not start.
+
+        A stage whose identity cannot be read is left alone. It sleeps 300 s
+        and exits by itself, and ending a process we cannot identify is the one
+        mistake this teardown exists never to make.
+        """
+        for label in ("leaf", "middle", "holder"):
+            pid, started = self.stages.get(label, (None, None))
             if not pid:                 # 0/None would mean the process GROUP
+                continue
+            try:
+                still_ours = _present(pid, started)
+            except Exception:           # a reader that failed identifies nothing
+                still_ours = False
+            if not still_ours:
                 continue
             if os.name != "posix":
                 # `signal.SIGKILL` DOES NOT EXIST ON WINDOWS. Referencing it is
                 # an AttributeError, so a teardown written with it takes the
                 # whole run down on the platform the product ships to.
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)],
                                capture_output=True, timeout=60)
                 continue
             try:
@@ -998,11 +1026,17 @@ def test_abort_takes_its_snapshot_while_the_holder_is_still_alive(tmp_path,
                                                                  tree):
     """R5's order property: the snapshot is taken BEFORE the signal.
 
-    Taken afterwards it reads an empty tree, reports nothing survived, and is
-    green for the reason it should be red -- the same shape as a verdict
-    written before the thing it describes. The leaf is only reachable by
-    walking from a live holder, so a snapshot naming it cannot have been taken
-    after the holder exited."""
+    On POSIX, taken afterwards it reads an empty tree: the kernel reparents the
+    orphans, so a walk from the dead holder finds nothing, reports nothing
+    survived, and is green for the reason it should be red -- the same shape
+    as a verdict written before the thing it describes. There the leaf is only
+    reachable by walking from a live holder, so a snapshot naming it cannot
+    have been taken after the holder exited.
+
+    ON WINDOWS THIS LEG CANNOT SEE THE ORDER. The children keep naming the dead
+    holder's pid and a missing parent keeps its edge, so a snapshot taken after
+    the signal still finds the whole tree. The call-order leg below proves the
+    order there, and on every other host too."""
     ws = _firm(tmp_path / "ws")
     _hold_lock(ws, f"{socket.gethostname()}:{tree.holder}:t148order")
 
@@ -1017,6 +1051,64 @@ def test_abort_takes_its_snapshot_while_the_holder_is_still_alive(tmp_path,
         f"the holder died or walked only one level (saw {seen})\n{output}")
     assert tree.middle in seen, (
         f"the snapshot missed the middle generation {tree.middle}\n{output}")
+
+
+def test_abort_reads_the_table_before_it_signals_and_again_after(
+        tmp_path, monkeypatch):
+    """R5's order property as an ORDER, measured on every host.
+
+    The leg above proves the order by what the snapshot finds, which works
+    only where a late snapshot would find nothing: POSIX. On Windows a late
+    snapshot still finds the whole tree, so that leg and the survivor leg stay
+    green with the snapshot on either side of the signal. This leg records the
+    calls themselves: a process-table read must come BEFORE the signal, and
+    another after it.
+
+    A REAL HOLDER, so abort takes the branch that snapshots at all. The signal
+    is recorded and then sent for real, so the holder dies and the leg stays
+    fast. Signal 0 passes straight through unrecorded: it is POSIX's liveness
+    probe, not an act.
+    """
+    ws = _firm(tmp_path / "ws")
+    base = tmp_path / "holder"
+    base.mkdir(parents=True, exist_ok=True)
+    holder = _Tree(base, depth=1)
+    real_kill = os.kill
+    real_table = descendants.process_table
+    calls: list[str] = []
+
+    def recording_kill(pid, sig, *rest):
+        if sig != 0:
+            calls.append(f"signal {int(sig)} to {pid}")
+        return real_kill(pid, sig, *rest)
+
+    def recording_table():
+        calls.append("table")
+        return real_table()
+
+    try:
+        _hold_lock(ws, f"{socket.gethostname()}:{holder.holder}:t148calls")
+        monkeypatch.setattr(os, "kill", recording_kill)
+        monkeypatch.setattr(descendants, "process_table", recording_table)
+
+        pulse_cli.run_pulse(ws, abort=True, firm_id=FIRM)
+        monkeypatch.undo()
+
+        # THE POSITIVE SIBLING FIRST: exactly one signal, to this holder. An
+        # abort that never signalled would leave the order below measuring
+        # nothing at all.
+        signals = [i for i, c in enumerate(calls) if c.startswith("signal ")]
+        assert [calls[i] for i in signals] == [
+            f"signal {int(signal.SIGTERM)} to {holder.holder}"], calls
+        tables = [i for i, c in enumerate(calls) if c == "table"]
+        assert tables and tables[0] < signals[0], (
+            f"abort signalled the holder before it read the process table, so "
+            f"its snapshot describes a tree already told to die: {calls}")
+        assert any(i > signals[0] for i in tables), (
+            f"abort never read the table again after the signal: {calls}")
+    finally:
+        monkeypatch.undo()
+        holder.close()
 
 
 def test_abort_says_ok_only_when_the_holder_is_dead_and_nothing_survived(
@@ -1733,3 +1825,76 @@ def test_a_posix_table_is_walked_unchanged(monkeypatch):
 
     assert found == {1001, 2001, 2002}, (
         f"POSIX must keep every edge; got {sorted(found)}")
+
+
+def test_a_parent_missing_from_the_table_keeps_its_children(monkeypatch):
+    """No row for the parent is no evidence against the edge, so it is kept.
+
+    R5e drops an edge only on EVIDENCE that it is false: a child older than
+    the parent it names. A parent with no row in the table offers no stamp to
+    compare, so there is nothing to weigh and the edge stays. Every other R5e
+    leg's table contains the holder, so a guard that dropped such an edge
+    would have passed all of them.
+
+    Reachable only at the root: every node the walk reaches is a key of the
+    table, so it has a row by construction. The rule is pinned anyway, because
+    it is the rule the unparsable-stamp leg pins, reached by a different door.
+    """
+    monkeypatch.setattr(descendants, "_WINDOWS", True)
+
+    holder = 1000
+    table = {
+        # NO ROW FOR THE HOLDER. Its child and grandchild still name it.
+        1001: (holder, "600", "R"),
+        1002: (1001, "700", "R"),
+    }
+
+    found = {pid for pid, _created in descendants.descendants_of(holder, table)}
+
+    assert found == {1001, 1002}, (
+        f"a parent with no row is no evidence against its children, so they "
+        f"must be kept; got {sorted(found)}")
+
+
+def test_the_walk_refuses_a_stranger_below_the_holders_child(monkeypatch):
+    """The guard checks EVERY edge, not only the holder's own.
+
+    A stale `ParentProcessId` can name any pid in the tree. A process OLDER
+    than the holder's child, naming that child's pid because it was reused, is
+    the same stranger one generation down. Every other R5e leg put the
+    stranger directly under the holder, so a guard applied only to the
+    holder's direct children would have passed all three while adopting this
+    one.
+
+    The stranger here is YOUNGER than the holder and older only than the child
+    it names, so no check against the holder's own stamp could catch it: only
+    the edge it actually claims is evidence that it is false.
+    """
+    monkeypatch.setattr(descendants, "_WINDOWS", True)
+
+    holder = 1000
+    table = {
+        # The stale-parent leg's table, unchanged.
+        holder: (1, "500", "R"),
+        1001: (holder, "600", "R"),        # its child, started after it
+        1002: (1001, "700", "R"),          # and its grandchild
+        2001: (holder, "100", "R"),        # the stranger under the holder
+        2002: (2001, "150", "R"),
+        # A STRANGER ONE GENERATION DOWN: older than 1001, naming 1001's pid.
+        3001: (1001, "550", "R"),
+        3002: (3001, "560", "R"),          # and the stranger's own child
+    }
+
+    found = {pid for pid, _created in descendants.descendants_of(holder, table)}
+
+    # The positive sibling first: if the real tree is not found, the absences
+    # below are measuring a walk that returned nothing at all.
+    assert found >= {1001, 1002}, (
+        f"the holder's own child and grandchild must be reported; got {found}")
+    assert 3001 not in found, (
+        f"the walk adopted a process that started BEFORE the child it names "
+        f"as its parent: {sorted(found)}")
+    assert 3002 not in found, (
+        f"the stranger's own subtree came with it: {sorted(found)}")
+    assert found == {1001, 1002}, (
+        f"only the holder's own tree may be reported; got {sorted(found)}")

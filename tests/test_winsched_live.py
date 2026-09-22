@@ -158,7 +158,18 @@ def _generations(marker: Path) -> set[tuple[int, str]]:
 
 
 def _alive(gens: set[tuple[int, str]]) -> set[tuple[int, str]]:
-    """Which generations are still running, by pid AND creation time."""
+    """Which generations are still running, by pid AND creation time.
+
+    THE WHOLE STAMP, NEVER A PREFIX OF IT. This used to test `created[:14]`, a
+    prefix that fits a DMTF stamp (`20260922191622`, to the second), but
+    `Get-CimInstance` returns `CreationDate` as a DateTime and it prints as
+    `Tuesday, September 22, 2026 7:16:22 PM` (CI job 106892632357). Its first
+    fourteen characters are the weekday and part of the month, so a stranger
+    handed the pid on the same day read as the same process -- and the
+    teardowns in this file end what this reads alive. A substring rather than
+    equality, because `run_cmd` returns stderr joined to stdout, and anything
+    written there would break an equality.
+    """
     from firm.sched.base import run_cmd
     live = set()
     for pid, created in gens:
@@ -166,9 +177,28 @@ def _alive(gens: set[tuple[int, str]]) -> set[tuple[int, str]]:
             ["powershell", "-NoProfile", "-Command",
              f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}')"
              ".CreationDate"], timeout=60)
-        if rc == 0 and created and created[:14] in said:
+        if rc == 0 and created and created in said:
             live.add((pid, created))
     return live
+
+
+def _creation_of(pid: int) -> str:
+    """This pid's `CreationDate`, printed exactly as the recorders print it.
+
+    Stdout alone: the value is stored and compared later, so nothing on stderr
+    may become part of it. Empty when the pid is gone or the read failed, and
+    an empty stamp identifies nothing, so nothing is ended on its strength.
+    """
+    from firm.core.proc import run_utf8
+    try:
+        out = run_utf8(
+            ["powershell", "-NoProfile", "-Command",
+             f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}')"
+             ".CreationDate"],
+            capture_output=True, timeout=60).stdout
+    except Exception:
+        return ""
+    return (out or "").strip()
 
 
 def test_enable_over_a_running_heartbeat_ends_its_tree(tmp_path, capsys):
@@ -468,9 +498,16 @@ def test_the_hub_seam_contains_its_pulse_and_abort_proves_the_tree_died(
     compile(wrapper, "<wrapper>", "exec")     # the same control, same reason
 
     dispatched = None
+    wrapper_gen: tuple[int, str] | None = None
     try:
         dispatched = resolve_scheduler().spawn_detached(
             [sys.executable, "-c", wrapper], workdir=ws, env=env, unit=unit)
+        # THE WRAPPER'S GENERATION, read the moment it exists, so the teardown
+        # can end IT and never whoever holds its pid by then.
+        if dispatched and dispatched.get("pid"):
+            stamp = _creation_of(int(dispatched["pid"]))
+            if stamp:
+                wrapper_gen = (int(dispatched["pid"]), stamp)
 
         # CONTROL 1: the Member actually started, and is alive, BEFORE the act.
         deadline = time.time() + 180
@@ -483,7 +520,7 @@ def test_the_hub_seam_contains_its_pulse_and_abort_proves_the_tree_died(
         live_before = _alive(gens)
         with capsys.disabled():
             print(f"[148] dispatched via={dispatched.get('via')!r} "
-                  f"pid={dispatched.get('pid')!r}")
+                  f"pid={dispatched.get('pid')!r} generation={wrapper_gen!r}")
             print(f"[148] member generations recorded: {sorted(gens)}")
             print(f"[148] alive before the act: {sorted(live_before)}")
         if not live_before:
@@ -537,11 +574,18 @@ def test_the_hub_seam_contains_its_pulse_and_abort_proves_the_tree_died(
             f"the Member outlived the abort: {sorted(live_after)}")
         assert rows and all(r != "running" for r in rows), rows
     finally:
-        # Survivors ended BY GENERATION, never by pattern.
+        # Survivors ended BY GENERATION, never by pid or by pattern: a pid that
+        # has gone may already belong to someone else. And WITHOUT `/T`: the
+        # tree flag ends every process that names the target's pid as its
+        # parent, and on Windows that includes strangers whose real parent held
+        # the pid before and died (R5e). Measured on the operator's machine on
+        # 2026-09-22, the hub's root names such a dead parent, so a target
+        # handed that pid would take the hub with it. Every process this leg
+        # identified is ended by its own generation instead.
         from firm.sched.base import run_cmd
 
-        for pid, _created in _generations(marker):
-            run_cmd(["taskkill", "/F", "/T", "/PID", str(pid)], timeout=60)
-        if dispatched and dispatched.get("pid"):
-            run_cmd(["taskkill", "/F", "/T", "/PID",
-                     str(dispatched["pid"])], timeout=60)
+        for pid, _created in _alive(_generations(marker)):
+            run_cmd(["taskkill", "/F", "/PID", str(pid)], timeout=60)
+        if wrapper_gen and _alive({wrapper_gen}):
+            run_cmd(["taskkill", "/F", "/PID", str(wrapper_gen[0])],
+                    timeout=60)

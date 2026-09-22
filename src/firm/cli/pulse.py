@@ -760,9 +760,14 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
                 was_alive = True
                 holder_pid = int(pid_str)
                 # THE SNAPSHOT IS TAKEN BEFORE THE SIGNAL, and that ordering is
-                # the whole reading (#148 R5). Taken afterwards it walks a tree
-                # whose root has gone, finds nothing, and reports that nothing
-                # survived -- green for exactly the reason it should be red.
+                # the whole reading (#148 R5). On POSIX, taken afterwards it
+                # walks a tree whose root has gone -- the kernel reparents the
+                # orphans -- finds nothing, and reports that nothing survived:
+                # green for exactly the reason it should be red. On Windows a
+                # late snapshot still finds the tree, because the children keep
+                # naming the dead holder's pid and a missing parent keeps its
+                # edge, so there the order is proven by the call-order leg in
+                # `tests/test_pulse_containment.py`, not by what the walk finds.
                 # The walk is transitive: a Member arrives under a launcher, so
                 # the holder's direct children are launchers and the process
                 # doing the work is a generation below them.

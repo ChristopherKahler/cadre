@@ -46,7 +46,7 @@ saving change -- two reads either side of one give different strings for the
 same process, which reads as that process being GONE. Empty over a live
 survivor is the dangerous direction.
 
-TWO LIMITATIONS, BOTH STATED AT THE CODE RATHER THAN DISCOVERED LATER.
+THREE LIMITATIONS, ALL STATED AT THE CODE RATHER THAN DISCOVERED LATER.
 
 1. A process the holder starts AFTER the snapshot is not in it, and will not be
    reported. The snapshot is taken while the holder is alive and about to be
