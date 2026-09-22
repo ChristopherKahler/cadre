@@ -240,17 +240,18 @@ def run_enable(
     return 0
 
 
-def run_disable(firm_id: str | None = None, *, unit_dir: Path | None = None) -> int:
-    if not firm_id:
-        db = get_db_path(Path.cwd())
-        if db.exists():
-            conn = connect(db)
-            try:
-                firm_id = resolve_firm_id(conn)
-            except ValueError:
-                firm_id = None
-            finally:
-                conn.close()
+def run_disable(firm_id: str | None = None, *,
+                workspace: Path | None = None,
+                unit_dir: Path | None = None) -> int:
+    """Stop and remove a firm's heartbeat timer.
+
+    *workspace* names the firm the way ``enable`` does (#131): the three verbs
+    manage one timer and disagreed about how you say which one.
+    """
+    named = _firm_from(workspace, firm_id)
+    if isinstance(named, int):
+        return named
+    firm_id = named
     if not firm_id:
         _emit({"ok": False, "reason": "no firm id — pass --firm-id or run "
                                       "from a firm workspace"})
@@ -376,11 +377,61 @@ def _last_pulse(workspace: Path, firm_id: str) -> tuple[str | None, str | None]:
     return started, reason
 
 
-def run_status(*, unit_dir: Path | None = None) -> int:
+def _firm_from(workspace: Path | None, firm_id: str | None):
+    """The firm these verbs are being pointed at, or an exit code with its
+    JSON already printed.
+
+    A NAMED workspace with no database is a failure, not a quiet fall-through
+    to the current directory (#131, osprey's condition 3): an operator who
+    typed a path meant that path, and a verb that silently acted on a
+    different firm is the defect this whole issue is about. The words are
+    ``run_pulse``'s for the same missing database, so the verbs and the pulse
+    say one thing.
+    """
+    if workspace is not None:
+        db = get_db_path(workspace)
+        if not db_is_remote() and not db.exists():
+            _emit({"ok": False, "reason": "db-not-found",
+                   "workspace": str(workspace)})
+            return 1
+    if firm_id:
+        return firm_id
+    db = get_db_path(workspace if workspace is not None else Path.cwd())
+    if db_is_remote() or db.exists():
+        conn = connect(db)
+        try:
+            return resolve_firm_id(conn)
+        except ValueError:
+            return None
+        finally:
+            conn.close()
+    return None
+
+
+def run_status(*, unit_dir: Path | None = None,
+               workspace: Path | None = None,
+               firm_id: str | None = None) -> int:
+    """List installed heartbeat timers.
+
+    With NEITHER *workspace* nor *firm_id*, every installed heartbeat is
+    listed -- that is what this verb is for. With either, the answer is about
+    one firm, and a firm with no timer installed is ``ok: true`` with an empty
+    list beside its id: the query ran and found none, which is an answer and
+    not a failure (law 7).
+    """
+    wanted: str | None = None
+    if workspace is not None or firm_id is not None:
+        named = _firm_from(workspace, firm_id)
+        if isinstance(named, int):
+            return named
+        wanted = named
+
     sched = _sched(unit_dir)
     entries = []
     for stem in sched.list_installed(_UNIT_PREFIX):
         firm_id = stem[len(_UNIT_PREFIX):]
+        if wanted is not None and firm_id != wanted:
+            continue
         st = sched.status(stem)
         entry: dict = {"firm_id": firm_id, "timer": stem,
                        "state": st.get("state", "unknown"),
@@ -427,5 +478,12 @@ def run_status(*, unit_dir: Path | None = None) -> int:
     # them is edited, and then nobody notices.
     from firm.identity import installed_identity
 
-    _emit({"ok": True, "cadre": installed_identity(), "heartbeats": entries})
+    payload: dict = {"ok": True, "cadre": installed_identity(),
+                     "heartbeats": entries}
+    if wanted is not None:
+        # Named beside the list, so an empty answer says WHAT it is empty
+        # about. Without it, "no timers" and "no timers for this firm" print
+        # the same thing.
+        payload["firm_id"] = wanted
+    _emit(payload)
     return 0

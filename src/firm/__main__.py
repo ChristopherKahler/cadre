@@ -810,13 +810,33 @@ def _build_parser() -> argparse.ArgumentParser:
     hb_disable = heartbeat_sub.add_parser(
         "disable", help="Stop and remove the heartbeat timer for a firm.",
     )
+    # --workspace with enable's meaning (#131). The three verbs manage one
+    # timer and disagreed about how you name the firm it belongs to, and the
+    # failure was silent: `disable --workspace /some/firm` was an
+    # `unrecognized arguments` error from the TOP-LEVEL parser, exit 2,
+    # nothing on stdout, and the timer kept firing.
+    hb_disable.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
     hb_disable.add_argument(
         "--firm-id", dest="firm_id", default=None,
         help="Firm scope. Defaults to the firm this workspace's db holds.",
     )
 
-    heartbeat_sub.add_parser(
+    hb_status = heartbeat_sub.add_parser(
         "status", help="List installed heartbeat timers with liveness and last pulse.",
+    )
+    # With NEITHER flag `status` keeps listing every installed heartbeat --
+    # that is what the verb is for. Either one narrows it to a single firm.
+    hb_status.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db. With no flags, every "
+             "installed heartbeat is listed.",
+    )
+    hb_status.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. With no flags, every installed heartbeat is listed.",
     )
 
     # ---- rail subparsers (Cadre OS addons — lazy delegates) ----
@@ -1463,11 +1483,12 @@ def main(argv: list[str] | None = None) -> int:
             from firm.cli.heartbeat import run_disable
 
             firm_id = args.firm_id or None
-            return run_disable(firm_id)
+            return run_disable(firm_id, workspace=args.workspace)
         if args.heartbeat_command == "status":
             from firm.cli.heartbeat import run_status
 
-            return run_status()
+            return run_status(workspace=args.workspace,
+                              firm_id=args.firm_id or None)
         parser.parse_args(["heartbeat", "--help"])
         return 0
 
