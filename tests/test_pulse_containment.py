@@ -134,12 +134,24 @@ def _stand_in(tmp_path: Path) -> str:
     else. A leg that asserted containment on THAT result would be asserting it
     on an error path and would say nothing about a normal pulse.
     """
+    line = ('{"type":"result","subtype":"success","is_error":false,'
+            '"usage":{"input_tokens":1,"output_tokens":1}}')
+    if os.name != "posix":
+        # WINDOWS DOES NOT EXECUTE `#!` SCRIPTS (WinError 193;
+        # `platform_marks.py:146-154` carries the same fact for the other
+        # suites). A shebang stand-in fails the three real-spawn legs for a
+        # harness reason, and stops the order leg at `runtime-not-wired` before
+        # it ever reaches a spawn. A `.cmd` runs, and the spawn layer accepts
+        # it: `_is_execable` is True for any file on win32
+        # (`spawn.py:211-212`), and `resolve_claude_bin` needs only isfile plus
+        # X_OK (`:256`). It ignores its arguments, as a stand-in should.
+        path = tmp_path / "stand-in-member.cmd"
+        path.write_text("@echo off\r\necho " + line + "\r\n",
+                        encoding="utf-8")
+        return str(path)
     path = tmp_path / "stand-in-member"
-    path.write_text(
-        '#!/bin/sh\n'
-        'printf \'%s\\n\' \'{"type":"result","subtype":"success",'
-        '"is_error":false,"usage":{"input_tokens":1,"output_tokens":1}}\'\n',
-        encoding="utf-8")
+    path.write_text("#!/bin/sh\nprintf '%s\\n' '" + line + "'\n",
+                    encoding="utf-8")
     path.chmod(0o755)
     return str(path)
 
@@ -217,6 +229,40 @@ _STAGE = textwrap.dedent("""\
     """)
 
 
+def _win_table() -> dict[int, tuple[int, str]]:
+    """The Windows process table: {pid: (ppid, CreationDate ticks)}. (F3)
+
+    ONE `Get-CimInstance` call, not one per pid. Windows has no `/proc`, so
+    every Windows branch below needs this table, and a per-pid query would turn
+    a handful of assertions into a handful of PowerShell starts. `CreationDate`
+    is the field `test_winsched_live.py` already reads at :121 and :167, so the
+    generation identity here is the one the rest of this lane uses.
+
+    NO `OpenProcess` ANYWHERE IN HERE. That is R5b's rule for the product's
+    read, and a harness that took a handle to answer the same question would be
+    demonstrating the opposite of what these legs assert.
+    """
+    out = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+         "Get-CimInstance Win32_Process | "
+         "Select-Object ProcessId,ParentProcessId,"
+         "@{n='Created';e={$_.CreationDate.Ticks}} | ConvertTo-Json -Compress"],
+        capture_output=True, text=True, timeout=120).stdout.strip()
+    if not out:
+        return {}
+    rows = json.loads(out)
+    if isinstance(rows, dict):
+        rows = [rows]
+    table: dict[int, tuple[int, str]] = {}
+    for row in rows:
+        try:
+            table[int(row["ProcessId"])] = (int(row["ParentProcessId"]),
+                                            str(row["Created"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return table
+
+
 def _generation(pid: int | None) -> tuple[int, str] | None:
     """A process identity a recycled pid cannot forge: the pid AND when it
     started. None when the process is gone.
@@ -229,6 +275,9 @@ def _generation(pid: int | None) -> tuple[int, str] | None:
     """
     if not pid:
         return None
+    if os.name != "posix":
+        row = _win_table().get(pid)
+        return None if row is None else (pid, row[1])
     try:
         raw = Path(f"/proc/{pid}/stat").read_text()
     except (OSError, ValueError):
@@ -270,6 +319,9 @@ def _alive(pid: int | None) -> bool:
 
 
 def _ppid(pid: int) -> int | None:
+    if os.name != "posix":
+        row = _win_table().get(pid)
+        return None if row is None else row[0]
     try:
         raw = Path(f"/proc/{pid}/stat").read_text()
     except OSError:
@@ -278,7 +330,13 @@ def _ppid(pid: int) -> int | None:
 
 
 def _proc_state(pid: int) -> str | None:
-    """The third field of `/proc/<pid>/stat`: `Z` for a zombie, `S` sleeping."""
+    """The third field of `/proc/<pid>/stat`: `Z` for a zombie, `S` sleeping.
+
+    POSIX only, and not a gap: Windows has no zombies, so presence in the table
+    IS the answer there and `_present` never consults this.
+    """
+    if os.name != "posix":
+        return None
     try:
         raw = Path(f"/proc/{pid}/stat").read_text()
     except OSError:
@@ -324,14 +382,13 @@ def _present(pid: int | None, started: str | None = None) -> bool:
     if not pid:
         return False
     if os.name != "posix":
-        # The process table, read without opening the process: `tasklist` is
-        # the cheapest reader that needs no handle and therefore no permission,
-        # which is R5b's whole point. Windows has no zombies, so presence is
-        # the answer.
-        out = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-            capture_output=True, text=True, timeout=60).stdout
-        return str(pid) in out
+        # The same table every other Windows branch reads, so presence and
+        # identity cannot disagree with each other. Windows has no zombies, so
+        # presence with a matching creation time IS the answer.
+        row = _win_table().get(pid)
+        if row is None:
+            return False
+        return started is None or row[1] == started
     gen = _generation(pid)
     if gen is None:
         return False
@@ -401,6 +458,13 @@ class _Tree:
     def close(self) -> None:
         for pid in (self.leaf, self.middle, self.holder):
             if not pid:                 # 0/None would mean the process GROUP
+                continue
+            if os.name != "posix":
+                # `signal.SIGKILL` DOES NOT EXIST ON WINDOWS. Referencing it is
+                # an AttributeError, so a teardown written with it takes the
+                # whole run down on the platform the product ships to.
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                               capture_output=True, timeout=60)
                 continue
             try:
                 os.kill(pid, signal.SIGKILL)
@@ -512,11 +576,16 @@ def test_control_the_generation_reader_returns_nothing_for_a_dead_pid(tree):
     absence as proven."""
     leaf = tree.leaf
     tree.close()
-    for _ in range(60):
-        if not _alive(leaf):
+    # WAIT ON `_present`, NOT `_alive`. A killed leaf sits in state Z until
+    # something reaps it, and `_alive` and `_generation` both still answer for
+    # a zombie -- so a wait on `_alive` can time out and the assertion below
+    # can fail on a slow reap rather than on a defect. `_present` reads Z as
+    # dead (R5a), which is the question this control is actually asking.
+    for _ in range(100):
+        if not _present(leaf):
             break
         time.sleep(0.05)
-    assert _generation(leaf) is None, "the reader answered for a dead pid"
+    assert not _present(leaf), "the reader answered for a dead pid"
 
 
 def test_control_the_containment_primitive_answers_on_this_host_without_raising():
