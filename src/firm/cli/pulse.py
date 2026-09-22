@@ -31,6 +31,12 @@ from firm.pulse.environment import pulse_environment
 from firm.pulse.orchestrator import pulse
 from firm.pulse.runner import make_runner
 from firm.pulse.spawn import _active_pids
+# Bound as a module name so `_pulse_once` reads it through this
+# module's globals, which is what `test_pulse_exit_contract.py`'s
+# unreadable-query leg patches. The definition moved to
+# `firm/pulse/stranded.py` when `cli/doctor.py` became its second
+# caller (#128 C2); the behaviour did not.
+from firm.pulse.stranded import stranded_units as _stranded_units
 from firm.services import pulse_ledger
 
 _QUEUE_LOCK_WAIT_SEC = 1800   # how long a claimer waits for the table to free up
@@ -55,7 +61,12 @@ def _exit_with(result: dict[str, Any], ledger: "_Ledger | None" = None) -> int:
     how the pulse ended. A close-out beside the pulse's own return would have
     covered only the path that runs a cycle, and the pulse has four other ways
     out. *ledger* is None for every exit before the firm is known, and those
-    have no row to close.
+    have no row to close -- and for one path where the firm IS known: an
+    exception raised between the row opening and the pulse's try reaches
+    ``run_pulse``'s catch-all, which has no ledger to hand over. That row is
+    left open on purpose and the next pulse on this host closes it
+    ``unclosed``. See ``_Ledger``'s docstring for why that is registered
+    rather than restructured.
     """
     if ledger is not None:
         ledger.close(result)
@@ -76,6 +87,18 @@ class _Ledger:
     a side record that fails must not turn a pulse that ran into a pulse that
     errored. THE LEDGER NEVER MIGRATES -- see pulse_ledger's own docstring for
     why a timer tick must not change the schema under other machines.
+
+    A FOURTH STATE EXISTS AND IS NOT FIXED HERE, registered rather than hidden
+    (osprey, pre-G2 item 4; law 37). Between ``open()`` and the try in
+    ``_run_resolved`` -- the lock connection, ``dblock.acquire``,
+    ``_start_heartbeat`` -- an exception propagates to ``run_pulse``'s
+    catch-all, which calls ``_exit_with`` with NO ledger. The row then stays
+    open, the next pulse on this host closes it ``unclosed``, and the JSON
+    carries no ``pulse_run`` field at all although the firm was known. Fixing
+    it means moving this object's lifetime into ``run_pulse`` or adding a
+    second try around the lock block, inside a function whose return count
+    ``tests/test_pulse_exit_contract.py`` pins -- not worth the head moves for
+    a path nobody has measured in the field.
     """
 
     def __init__(self, db_path: Path, firm_id: str, *, source: str,
@@ -397,55 +420,6 @@ def _pulse_once(
         ]
 
     return output
-
-
-def _stranded_units(conn: Any, firm_id: str) -> list[dict[str, Any]]:
-    """Open Units no active Member's queue counts, so no pulse will ever run them.
-
-    The definition is ``compute_load``'s (``pulse/orchestrator.py``), read from
-    the other side: a pending or in-progress Unit is workable only when an
-    active Member of the firm has claimed it, or has it assigned, unclaimed and
-    pending. A firm whose every Member skips at ``load=0`` while Units like
-    these sit on its board prints the same ``ok: true, ran: 0`` as a firm with
-    nothing to do, and those need opposite responses (#128 C2). Read-only, so a
-    dry run reports them too.
-    """
-    statuses = {m["id"]: m.get("status")
-                for m in repo.find(conn, "member", firm_id=firm_id)}
-    active = {member_id for member_id, s in statuses.items() if s == "active"}
-
-    def who(member_id: str) -> str:
-        name = member_id if member_id else repr(member_id)
-        status = statuses.get(member_id)
-        if status is None:
-            return f"{name}, who is not a Member of this firm"
-        return f"{name}, who is {status}"
-
-    stranded: list[dict[str, Any]] = []
-    for unit in repo.find(conn, "unit", firm_id=firm_id):
-        status = unit.get("status")
-        if status not in ("pending", "in_progress"):
-            continue
-        assignee, claimed = unit.get("assignee_member_id"), unit.get("claimed_by")
-        # compute_load's two clauses exactly, never by truthiness: claimed_by
-        # EQUALS an active Member's id, or claimed_by IS NULL while the Unit is
-        # pending and assigned to one. An empty id is neither (osprey's G1).
-        if claimed in active:
-            continue
-        if claimed is None and status == "pending" and assignee in active:
-            continue
-        if claimed is not None:
-            reason = f"claimed by {who(claimed)}"
-        elif status == "in_progress":
-            reason = "in progress with no claim"
-        elif assignee is not None:
-            reason = f"assigned to {who(assignee)}"
-        else:
-            reason = "no assignee and no claim"
-        stranded.append({"id": unit["id"], "status": status,
-                         "assignee_member_id": assignee, "claimed_by": claimed,
-                         "reason": reason})
-    return sorted(stranded, key=lambda u: str(u["id"]))
 
 
 def _start_heartbeat(

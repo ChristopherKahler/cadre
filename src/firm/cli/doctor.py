@@ -28,6 +28,7 @@ from typing import Any
 
 from firm.core import repo
 from firm.core.db import connect, get_db_path, resolve_firm_id
+from firm.pulse.stranded import stranded_units
 from firm.services import pulse_ledger
 from firm.core.migrate import (
     _default_migrations_dir,
@@ -390,6 +391,38 @@ def diagnose(workspace: Path, firm_id: str, *,
                 named if windows else
                 f"{len(starts)} pulses recorded, none more than two intervals "
                 f"({pulse_interval}) apart"))
+
+        # 8d. stranded units — board (#128 C2)
+        #
+        # A firm whose every Member skips at load=0 while Units like these sit
+        # on its board prints the same "ok: true, ran: 0" as a firm with
+        # nothing to do, and those need opposite responses. The pulse says so
+        # in its JSON; this is where an operator reads it without running one.
+        #
+        # Board, not mechanical: assigning a Unit or making a Member active is
+        # a judgment act, and there is no command the doctor could run.
+        #
+        # The query is `pulse/stranded.py`'s, which the pulse calls too. Two
+        # surfaces computing "unreachable" for themselves agree until the day
+        # one of them is edited.
+        try:
+            stranded = stranded_units(conn, firm_id)
+        except Exception as exc:
+            # Undeterminable, never "clean": a query that raised has not
+            # established that there are none (law 48).
+            checks.append(_check(
+                "stranded-units", "Every open Unit is reachable", False,
+                "board",
+                f"the Unit board could not be read: {type(exc).__name__}: {exc}",
+                state="undeterminable"))
+        else:
+            checks.append(_check(
+                "stranded-units", "Every open Unit is reachable", not stranded,
+                "board",
+                "; ".join(f"{u['id']} ({u['status']}) {u['reason']}"
+                          for u in stranded) if stranded
+                else "every pending or in-progress Unit is claimed by or "
+                     "assigned to an active Member"))
 
         # 9. credential liveness — board (a re-login is a human act)
         dead = preflight.dead_tools(conn, firm_id)

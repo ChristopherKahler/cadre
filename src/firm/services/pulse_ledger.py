@@ -63,18 +63,28 @@ def best_effort(work: Callable[[], Any]) -> tuple[Any, str | None]:
     """
     try:
         return work(), None
-    except sqlite3.OperationalError as exc:
+    except Exception as exc:
+        # EXCEPTION, not the sqlite3 types. With CADRE_DB_URL set,
+        # `core/db.py::connect` hands back `libsql_compat.Connection`, whose
+        # execute re-raises whatever the libsql client raised -- and those are
+        # not sqlite3 types. Caught narrowly, a shared remote database without
+        # migration 016 made the ledger's own write propagate out of
+        # `_run_resolved` into `run_pulse`'s catch-all: the pulse printed
+        # `reason: "error"` and exited 1, which is the ledger failing the
+        # pulse. No honest sentence covers "best effort on sqlite, fatal on
+        # the shared database the holder column exists for" (osprey, pre-G2
+        # item 3; law 37).
         return None, _reason(exc)
-    except sqlite3.DatabaseError as exc:
-        return None, f"{type(exc).__name__}: {exc}"
 
 
-def _reason(exc: sqlite3.OperationalError) -> str:
+def _reason(exc: Exception) -> str:
     """The reason in the words a reader can act on.
 
     ``no such table: pulse_run`` is the one a firm actually meets, and the
     action it implies is a migration, so the sentence names the migration
-    rather than leaving the reader to map the table to it.
+    rather than leaving the reader to map the table to it. Matched on the
+    MESSAGE rather than on the exception type, so the sentence is the same
+    whether the database is local sqlite or the libsql shim.
     """
     message = str(exc)
     if "no such table" in message and TABLE in message:
@@ -108,9 +118,17 @@ def close_run(conn: Any, run_id: int, result: dict[str, Any]) -> None:
     ``outcome`` is ``ok`` when the result says so, and otherwise the result's
     own ``reason``, so the row and the exit code cannot disagree: both are read
     off the same object, in the same function (``cli/pulse.py::_exit_with``).
-    A result with neither is an exit shape nobody has named yet, and it is
-    recorded as ``error`` rather than left NULL, which would make it look like
-    a row nobody closed.
+    A result with neither is recorded as ``error`` rather than left NULL,
+    which would make it look like a row nobody closed.
+
+    ONE OF THOSE IS A NAMED SHAPE, AND THE COLUMN THAT SEPARATES THEM IS
+    ``errors`` (osprey, pre-G2 item 5). A pulse whose Member run failed has
+    ``ok: False`` and ``errors >= 1`` and no ``reason`` -- verdict item 2's
+    partial failure -- so it lands on ``outcome = "error"``, the same word
+    ``run_pulse``'s catch-all prints. They are told apart by ``errors``: an
+    integer for the failed run, NULL for the exception, because ``_count``
+    returns None for a key the result does not carry. The row does not lie;
+    the outcome word alone is simply not enough to read it by.
     """
     ok = result.get("ok") is True
     outcome = "ok" if ok else str(result.get("reason") or "error")

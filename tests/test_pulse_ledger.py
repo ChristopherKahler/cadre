@@ -69,6 +69,7 @@ from tests.test_pulse_exit_contract import (
     _firm,
     _hold_lock,
     _pulse,
+    _units,
 )
 
 #: The migration that carries the table. 015 is ``015_pulse_interval.sql``
@@ -654,6 +655,112 @@ def test_L11_control_a_firm_with_no_ledger_table_reads_not_available(tmp_path):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# L13 · doctor names the open Units no active Member can reach (#128 C2)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_L13_the_doctor_names_a_unit_no_active_member_can_reach(tmp_path):
+    """A firm whose every Member skips at ``load=0`` while Units sit on its
+    board prints the same ``ok: true, ran: 0`` as a firm with nothing to do,
+    and those need opposite responses. The pulse has said so in its JSON since
+    PR A; this is where an operator reads it without running one."""
+    from firm.cli import doctor
+
+    # `paused`, because the member table CHECKs status IN (active, paused,
+    # retired): the state the card is about is a Member the pulse will not
+    # dispatch, whatever that state is spelled.
+    ws = _firm(tmp_path / "ws", members=(("MEM-001", "Lead", "paused"),))
+    _units(ws, {"id": "UNIT-001", "status": "pending",
+                "assignee_member_id": "MEM-001"})
+
+    checks = doctor.diagnose(ws, FIRM, unit_dir=tmp_path / "units")
+
+    card = next((c for c in checks if c["key"] == "stranded-units"), None)
+    assert card is not None, [c["key"] for c in checks]
+    assert card["ok"] is False, card
+    assert "UNIT-001" in card["detail"], card
+    assert "MEM-001" in card["detail"], (
+        "the card names who it is waiting on, not only that it is stuck", card)
+    assert card["route"] == "board", (
+        "assigning a Unit or activating a Member is a judgment act, and there "
+        "is no command the doctor could run", card)
+
+
+def test_L13_control_a_reachable_unit_is_not_named(tmp_path):
+    """The control that proves the card discriminates rather than always
+    firing (law 24): the same Unit, assigned to an ACTIVE Member."""
+    from firm.cli import doctor
+
+    ws = _firm(tmp_path / "ws")          # MEM-001 is active
+    _units(ws, {"id": "UNIT-001", "status": "pending",
+                "assignee_member_id": "MEM-001"})
+
+    checks = doctor.diagnose(ws, FIRM, unit_dir=tmp_path / "units")
+
+    card = next((c for c in checks if c["key"] == "stranded-units"), None)
+    assert card is not None, [c["key"] for c in checks]
+    assert card["ok"] is True, card
+    assert "UNIT-001" not in card["detail"], card
+
+
+def test_L13_control_the_pulse_and_the_doctor_ask_the_same_question(tmp_path):
+    """Two surfaces computing "unreachable" for themselves agree until the day
+    one of them is edited. They call one function, and this is what says so."""
+    from firm.cli import doctor
+    from firm.pulse import stranded
+
+    assert pulse_cli._stranded_units is stranded.stranded_units
+    assert doctor.stranded_units is stranded.stranded_units
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# L14 · best effort means best effort, not best effort on sqlite
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_L14_a_ledger_error_that_is_not_a_sqlite_error_still_only_notes(
+        tmp_path, capsys, monkeypatch):
+    """IN-PROCESS, and here is why.
+
+    With ``CADRE_DB_URL`` set, ``core/db.py::connect`` hands back
+    ``libsql_compat.Connection``, whose execute re-raises whatever the libsql
+    client raised -- and those are not ``sqlite3`` types. The suite's child
+    channel cannot reach a remote database, so the error is raised at the seam
+    instead, in this process. What is asserted is the thing that matters: the
+    pulse exits on ITS OWN outcome and says in its JSON that nothing was
+    recorded. Before this, a shared database without migration 016 made the
+    pulse print ``reason: "error"`` and exit 1 -- the ledger failing the pulse,
+    which verdict item 5 forbids (osprey, pre-G2 item 3).
+    """
+    from firm.services import pulse_ledger
+
+    # The seam, on its own: a non-sqlite3 error is reported, never raised.
+    def boom():
+        raise RuntimeError("libsql: no such table pulse_run")
+
+    value, note = pulse_ledger.best_effort(boom)
+    assert value is None
+    assert note == "migration 016_pulse_run is not applied (pulse_run is absent)", note
+
+    def other_boom():
+        raise RuntimeError("the remote database refused the connection")
+
+    assert pulse_ledger.best_effort(other_boom)[1] == (
+        "RuntimeError: the remote database refused the connection")
+
+    # And end to end: the pulse's own verdict reaches its own exit code.
+    ws = _firm(tmp_path / "ws")
+    monkeypatch.setattr(pulse_ledger, "open_run", lambda *a, **k: boom())
+
+    rc = pulse_cli.run_pulse(ws)
+
+    result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert result["reason"] == "runtime-not-wired", (
+        "the pulse's OWN outcome, not the word run_pulse's catch-all prints "
+        "when the ledger's error escaped", result)
+    assert rc == 1, result
+    assert str(result["pulse_run"]).startswith("not recorded: "), result
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # L12 · every label the code can pass is a label the parser accepts
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -667,7 +774,10 @@ def _resolve(node: ast.AST) -> str | None:
     rather than assumed: a literal (``"--source", "cli"``) and an attribute of
     the ledger module (``"--source", pulse_ledger.BOARD``), which is the shape
     the two real sites use so that the parser, the column and the callers hold
-    one list between them.
+    one list between them. The JOINED shape, ``"--source=board"`` as a single
+    token, is read by the caller below; argparse accepts it and nothing in the
+    tree writes it yet, which is exactly why the scanner learns it before a
+    site does (law 31's third spelling; osprey, pre-G2 item 6).
     """
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
@@ -695,6 +805,11 @@ def _labels_passed_in(tree: ast.AST) -> list[tuple[str | None, str]]:
     """
     found: list[tuple[str | None, str]] = []
     for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) \
+                and node.value.startswith("--source="):
+            label = node.value.split("=", 1)[1]
+            found.append((label, node.value))
+            continue
         if not isinstance(node, (ast.List, ast.Tuple)):
             continue
         items = node.elts
@@ -771,12 +886,17 @@ def test_L12_control_the_scanner_reads_both_shapes_and_fails_a_bad_one():
     spot this guard already had once."""
     literal = ast.parse('argv = ["-m", "firm", "pulse", "--source", "cli"]')
     attribute = ast.parse('argv += ["--source", pulse_ledger.BOARD]')
+    joined = ast.parse('argv = ["-m", "firm", "pulse", "--source=board"]')
     canary = ast.parse('argv = ["--source", "not-a-real-label"]')
+    joined_canary = ast.parse('argv = ["--source=not-a-real-label"]')
     unreadable = ast.parse('argv = ["--source", pick(a, b)]')
 
     assert _labels_passed_in(literal) == [("cli", "'cli'")]
     assert _labels_passed_in(attribute) == [("board", "pulse_ledger.BOARD")]
+    assert _labels_passed_in(joined) == [("board", "--source=board")]
     assert _labels_passed_in(unreadable) == [(None, "pick(a, b)")]
+    assert [l for l, _s in _labels_passed_in(joined_canary)
+            if l not in _choices()] == ["not-a-real-label"]
 
     found = _labels_passed_in(canary)
     assert found == [("not-a-real-label", "'not-a-real-label'")]
