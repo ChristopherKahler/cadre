@@ -473,8 +473,10 @@ def test_R10_the_payload_carries_the_schedulers_own_answer(tmp_path, capsys,
     hb.run_disable(FIRM, workspace=ws)
 
     result = json.loads(capsys.readouterr().out)
-    assert result.get("removed") == [], (
-        "what the scheduler said it removed, reported rather than trusted",
+    assert result["scheduler_removed"] == {"removed": []}, (
+        "what the scheduler ITSELF said it removed, reported rather than "
+        "trusted. A separate key from `removed`, which is the unit this verb "
+        "set out to remove: two different claims do not share one name",
         result)
 
 

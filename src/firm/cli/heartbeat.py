@@ -268,7 +268,38 @@ def run_disable(firm_id: str | None = None, *,
     # Never firm.schedule, which holds the firm's business hours (#134).
     ws_str = st.get("workdir")
 
-    sched.remove(stem)
+    answer = sched.remove(stem)
+
+    # PROVED, NOT TRUSTED (#131). This used to be `sched.remove(stem)` with the
+    # answer discarded and `ok: true` printed regardless, so a removal that
+    # failed reported success and the timer kept firing.
+    #
+    # The proof is the scheduler's own query, not `remove()`'s list. On Windows
+    # that list collects leftover files -- the stub, the spec, the log, a
+    # pre-#119 .cmd, the containment file -- beside the task name, so a
+    # non-empty list can mean "I deleted a stale log and nothing else". On
+    # systemd and launchd it names unit FILES that existed, which is a
+    # filesystem fact rather than a scheduler one.
+    #
+    # WHAT `installed` MEANS DIFFERS BY BACKEND, and this is the honest
+    # sentence for it (osprey's Q5): on Windows it is `schtasks /Query`, a real
+    # question put to the scheduler; on systemd and launchd it is whether the
+    # unit definition still exists after reload, which is the strongest
+    # question those platforms answer. Teaching them a real query is not this
+    # change.
+    if sched.status(stem).get("installed"):
+        # NOTHING ELSE CHANGES (osprey's condition 2). The timer still fires,
+        # so `firm.pulse_interval` is still true and the lock is still that
+        # pulse's: clearing the interval would leave the row lying about a
+        # cadence that is still running, and finalizing the runs would close
+        # rows belonging to a pulse nobody stopped.
+        _emit({"ok": False, "reason": "not-removed", "firm_id": firm_id,
+               "scheduler_removed": answer,
+               "schedule_recorded": False,
+               "cleanup": {"lock": "not-attempted",
+                           "reason": "the timer is still installed, so the "
+                                     "lock is still its pulse's"}})
+        return 1
 
     schedule_recorded = False
     if ws_str:
@@ -310,7 +341,12 @@ def run_disable(firm_id: str | None = None, *,
                                        by="heartbeat disable",
                                        wait_seconds=5.0)
 
+    # `removed` is the unit this verb set out to remove and keeps its meaning
+    # for existing readers. `scheduler_removed` is what the backend itself said
+    # it removed -- reported for the record, never what the exit code rests on.
+    # Two different claims, so two keys.
     _emit({"ok": True, "firm_id": firm_id, "removed": f"{stem}.timer",
+           "scheduler_removed": answer,
            "schedule_recorded": schedule_recorded,
            "cleanup": cleanup})
     return 0
