@@ -233,7 +233,10 @@ _STAGE = textwrap.dedent("""\
     if release != "none":
         time.sleep(max(0.0, float(release) - time.time()))
 
-    with open(out, "a") as fh:
+    # A RECORD OF ITS OWN (#165). Three stages appending to one file is not
+    # atomic on Windows: two of them can find the same end of file, and one
+    # line then covers the other. "w" on a file no other stage opens cannot.
+    with open("%s.%s.txt" % (out, label), "w") as fh:
         fh.write("%s %d %s\\n" % (label, os.getpid(), creation()))
         fh.flush()
         os.fsync(fh.fileno())
@@ -486,8 +489,11 @@ class _Tree:
 
     def __init__(self, tmp_path: Path, *, depth: int = 3,
                  release: float | None = None) -> None:
-        self.record = tmp_path / "tree.txt"
-        self.record.write_text("", encoding="utf-8")
+        # Each stage writes `<prefix>.<label>.txt` and no other stage opens it
+        # (#165). One shared file lost a generation on Windows twice at
+        # 3acf695e: two appends found the same end of file.
+        self.prefix = tmp_path / "tree"
+        self.labels = ("holder", "middle", "leaf") if depth >= 3 else ("holder",)
         script = tmp_path / "stage.py"
         script.write_text(_STAGE, encoding="utf-8")
         nxt = "middle" if depth >= 3 else "none"
@@ -495,7 +501,7 @@ class _Tree:
         # wait is counted from it rather than from now (#165 T2).
         self._deadline = None if release is None else release + 15
         self.proc = subprocess.Popen(
-            [sys.executable, str(script), "holder", str(self.record), nxt,
+            [sys.executable, str(script), "holder", str(self.prefix), nxt,
              str(script), "none" if release is None else repr(release)])
         # THE HOLDER IS REAPED THE MOMENT IT DIES. It is this pytest process's
         # own child now that nothing forks, so an exited holder would sit as a
@@ -504,25 +510,70 @@ class _Tree:
         # `signalled` branch instead of `cleared`. The exit contract's
         # `_live_holder` reaps on a thread for exactly this reason.
         threading.Thread(target=self.proc.wait, daemon=True).start()
-        self.stages = self._await(depth)
+        try:
+            self.stages = self._await(depth)
+        except BaseException:
+            # A CONSTRUCTION THAT FAILS ENDS WHAT IT STARTED (#165). The raise
+            # leaves before the `tree` fixture holds this object, so its
+            # `finally` cannot run `close()`, and every stage would sleep out
+            # its 300 s. What recorded itself is ended by generation, here.
+            self._end_what_recorded()
+            raise
         self.holder = self.stages["holder"][0]
         self.middle = self.stages.get("middle", (None, None))[0]
         self.leaf = self.stages.get("leaf", (None, None))[0]
 
+    def _records(self) -> dict[str, tuple[int, str]]:
+        """Every stage whose record is WHOLE: a line that ends in a newline.
+
+        A stage that has opened its file and not yet written the newline is
+        not a record yet, so a half-written line is never read as a pid.
+        """
+        found: dict[str, tuple[int, str]] = {}
+        for label in self.labels:
+            try:
+                text = Path(f"{self.prefix}.{label}.txt").read_text(
+                    encoding="utf-8")
+            except OSError:
+                continue
+            parts = text.split()
+            if text.endswith("\n") and len(parts) == 3 and parts[0] == label:
+                found[label] = (int(parts[1]), parts[2])
+        return found
+
+    def _describe(self) -> str:
+        """Each stage's file as it stands, for a failure message."""
+        shown = {}
+        for label in self.labels:
+            path = Path(f"{self.prefix}.{label}.txt")
+            try:
+                shown[label] = path.read_text(encoding="utf-8")
+            except OSError:
+                shown[label] = "ABSENT"
+        return repr(shown)
+
+    def _end_what_recorded(self) -> None:
+        try:
+            recorded = self._records()
+            if not _HAS_PROCFS:
+                table = _host_table()
+                recorded = {label: (pid, table[pid][1])
+                            for label, (pid, _placeholder) in recorded.items()
+                            if pid in table}
+            _end_by_generation(recorded)
+        except Exception:               # noqa: BLE001
+            pass    # the raise that brought us here is the one worth seeing
+
     def _await(self, depth: int) -> dict[str, tuple[int, str]]:
         deadline = self._deadline or time.time() + 30
-        stages: dict[str, tuple[int, str]] | None = None
-        while time.time() < deadline:
-            lines = [ln.split() for ln in
-                     self.record.read_text(encoding="utf-8").splitlines() if ln]
-            if len(lines) >= depth:
-                stages = {p[0]: (int(p[1]), p[2]) for p in lines}
-                break
+        stages = self._records()
+        while len(stages) < len(self.labels) and time.time() < deadline:
             time.sleep(0.05)
-        if stages is None:
+            stages = self._records()
+        if len(stages) < len(self.labels):
             raise AssertionError(
                 f"the tree never reached {depth} generations; recorded: "
-                f"{self.record.read_text(encoding='utf-8')!r}")
+                f"{self._describe()}")
         if _HAS_PROCFS:
             return stages
         # STAMPS COME FROM THE TABLE WHEREVER THE STAGE COULD NOT TAKE ONE
