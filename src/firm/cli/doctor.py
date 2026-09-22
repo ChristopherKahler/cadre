@@ -358,15 +358,25 @@ def diagnose(workspace: Path, firm_id: str, *,
                 f"{sched.name}, so whether it carries --source is unknown",
                 state="undeterminable"))
         elif st["source"] is None:
+            # ONE PRODUCER. The printed report shows `detail` and never `fix`
+            # (the loop below prints label, route and detail), so the command
+            # has to be in the detail to reach an operator at all -- and it has
+            # to be in `fix` for `--json` readers. Two spellings of one command
+            # are two commands, and only one of them gets tested.
+            relabel = ("cadre heartbeat enable --workspace "
+                       f"{workspace} --firm-id {firm_id}"
+                       + (f" --interval {pulse_interval}" if pulse_interval
+                          else ""))
             checks.append(_check(
                 "timer-source", "The timer says which command installed it",
                 False, "operator",
+                # The fact AND the remedy, which is 8b's pattern. The #28 rule
+                # is satisfied twice over: the command exists, and now it is
+                # somewhere the operator running `cadre doctor` will read it.
                 f"{stem} was installed before --source existed, so its pulses "
-                f"record {pulse_ledger.UNSET!r} and nothing says why",
-                fix=("cadre heartbeat enable --workspace "
-                     f"{workspace} --firm-id {firm_id}"
-                     + (f" --interval {pulse_interval}" if pulse_interval
-                        else ""))))
+                f"record {pulse_ledger.UNSET!r} and nothing says why. "
+                f"Run: {relabel}",
+                fix=relabel))
         else:
             checks.append(_check(
                 "timer-source", "The timer says which command installed it",
@@ -749,8 +759,19 @@ def run_doctor(workspace: Path, *, firm_id: str | None = None,
             print("  → judgment findings: re-run Train from the dashboard")
         if any(not c["ok"] and c["route"] == "board" for c in checks):
             print("  → authority findings: the Board decides these")
-        if any(not c["ok"] and c["route"] == "operator" for c in checks):
+        # KEYED TO THE CARD IT BELONGS TO (#158). This sentence is
+        # base-domain's own advice, and it printed under EVERY failed operator
+        # card. It also called them all "undeterminable", which `operator` does
+        # not mean: a timer installed before `--source` existed was read
+        # perfectly well, and what it needs is one command, not a base install.
+        # Wrong advice under a real finding is worse than no footer, because it
+        # sends an operator after a failure that is not there.
+        operator_findings = [c for c in checks
+                             if not c["ok"] and c["route"] == "operator"]
+        if any(c["key"] == "base-domain" for c in operator_findings):
             print("  → undeterminable: this machine could not read the "
                   "answer, so the firm is not what needs repairing — "
                   "install base, or unset CADRE_NO_BASE, then re-run")
+        if any(c["key"] != "base-domain" for c in operator_findings):
+            print("  → operator findings: each card's detail says what to do")
     return 0

@@ -568,3 +568,96 @@ def test_R7_a_status_entry_gains_no_EMPTY_source_when_there_was_none(tmp_path):
         "an entry the scheduler could not answer must carry no key, never an "
         "empty one -- st.get(k) here would invent a null, which is exactly "
         "what the `contained` tuple beside it already refuses to do", payload)
+
+
+def _doctor_report(home: Path, ws: Path) -> str:
+    """`cadre doctor`'s PRINTED report, from a child, fenced.
+
+    The printed report and `--json` are two surfaces, and osprey's finding was
+    about the printed one: the card loop shows label, route and detail and never
+    a card's `fix`. A leg that read `--json` here would pass while the operator
+    running `cadre doctor` saw nothing.
+    """
+    proc = subprocess.run(
+        [sys.executable, "-m", "firm", "doctor",
+         "--workspace", str(ws), "--firm-id", FIRM],
+        capture_output=True, env=_child_env_for(home), timeout=180,
+        stdin=subprocess.DEVNULL)
+    return proc.stdout.decode("utf-8", "replace")
+
+
+def test_R8_the_printed_report_carries_the_command_not_only_the_json(tmp_path):
+    """The card's whole point is handing over one command, so it has to PRINT.
+
+    `doctor.py`'s card loop prints `label`, `route` and `detail`. It has never
+    printed `fix`, so a command that lives only there reaches `--json` readers
+    and nobody else. 8b already had the answer: the detail carries the fact and
+    the remedy together.
+
+    The command must also carry THIS firm's values -- a generic
+    `cadre heartbeat enable` would install the default cadence over the one the
+    Board chose.
+    """
+    home = _home(tmp_path)
+    ws = _firm_at(tmp_path / "ws", interval="45m")
+    _systemd_units(home / ".config" / "systemd" / "user", ws, UNLABELLED,
+                   interval="45m")
+
+    report = _doctor_report(home, ws)
+
+    assert "The timer says which command installed it" in report, report
+    assert "cadre heartbeat enable" in report, (
+        "the command reached --json and not the operator", report)
+    assert str(ws) in report and FIRM in report and "45m" in report, (
+        "the printed command must carry this firm's own values", report)
+
+
+def test_R9_a_pre_flag_timer_is_not_told_to_install_base(tmp_path):
+    """The footer printed base-domain's advice under EVERY operator finding.
+
+    A timer installed before `--source` existed was read perfectly well. It is
+    not undeterminable and it is not a missing base install, and sending that
+    operator to install base points them at a failure that is not there. Wrong
+    advice under a real finding is worse than no footer at all.
+    """
+    home = _home(tmp_path)
+    ws = _firm_at(tmp_path / "ws")
+    _systemd_units(home / ".config" / "systemd" / "user", ws, UNLABELLED)
+
+    report = _doctor_report(home, ws)
+
+    assert "install base" not in report, (
+        "base-domain's advice printed under a timer finding", report)
+    assert "operator findings: each card's detail says what to do" in report, (
+        "and the operator still needs pointing at where the answer is", report)
+
+
+def test_R10_control_a_base_domain_finding_still_gets_its_own_advice(
+        tmp_path, capsys, monkeypatch):
+    """Keying the sentence away is only HALF the change.
+
+    A leg that checked only "the timer finding no longer says install base"
+    would pass a footer that was deleted outright, and base-domain's operator
+    would lose the one line that tells them what to do. So this drives the
+    printer with the two cards side by side and asserts BOTH lines: the keyed
+    one for base-domain, the generic one for the other.
+    """
+    ws = _firm_at(tmp_path / "ws")
+    cards = [
+        {"key": "base-domain", "label": "The firm's graph reaches its Members",
+         "ok": False, "route": "operator", "detail": "could not read the tier",
+         "state": "undeterminable", "fix": None},
+        {"key": "timer-source",
+         "label": "The timer says which command installed it",
+         "ok": False, "route": "operator", "detail": "Run: cadre heartbeat enable",
+         "state": "finding", "fix": "cadre heartbeat enable"},
+    ]
+    monkeypatch.setattr(doctor_mod, "diagnose", lambda *a, **k: cards)
+
+    doctor_mod.run_doctor(ws, firm_id=FIRM)
+    report = capsys.readouterr().out
+
+    assert "install base" in report, (
+        "base-domain's own advice must survive the keying", report)
+    assert "operator findings: each card's detail says what to do" in report, (
+        "and the other operator finding still needs its line", report)
