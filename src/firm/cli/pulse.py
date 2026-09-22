@@ -229,12 +229,6 @@ def run_pulse(
             what is still alive; ``ok`` is true only when nothing of that
             run is — and exit.
 
-    Before it spawns its first Member this pulse puts ITSELF in a
-    kill-on-close job, so ending the pulse ends its Members whoever started it
-    — a scheduled task, the hub's button, or a hand in a terminal (#148 R2).
-    A host where that job cannot be made still gets its pulse: containment
-    never raises into this function, and what it answered is reported on the
-    result line under ``contained`` (R3).
         firm_id: Firm scope; None resolves to the firm this workspace's
             db holds (see resolve_firm_id).
         only: Member id — Board-targeted pulse activating only this Member
@@ -247,6 +241,13 @@ def run_pulse(
 
     Returns:
         0 when the printed result says ``ok: true``, 1 otherwise.
+
+    Before it spawns its first Member this pulse puts ITSELF in a
+    kill-on-close job, so ending the pulse ends its Members whoever started it
+    — a scheduled task, the hub's button, or a hand in a terminal (#148 R2).
+    A host where that job cannot be made still gets its pulse: containment
+    never raises into this function, and what it answered is reported on the
+    result line under ``contained`` (R3).
     """
     try:
         # INSIDE the try, with everything else. `run_pulse` is one try with one
@@ -675,7 +676,14 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
     them after the grace window, and reports ``descendants_before`` and
     ``alive_after``; ``ok`` is true only when no process of that run is still
     alive, and when one is, ``ok`` is false with exit 1 and the lock's own
-    words unchanged. Liveness there is presence in the process table, never
+    words unchanged. ``lock: signalled`` is false on its own, whatever the
+    reading says: it means the holder was signalled and the lock was LEFT
+    HELD, and abort never reports success over a lock it could not release.
+    The reading can be honestly empty there -- the lock's own liveness is the
+    cleanup's pid-only probe, so a reused pid can hold the branch open while
+    no process of that run is alive -- and naming a stranger in
+    ``alive_after`` would be worse than saying nothing, so it says nothing and
+    the ``ok`` carries the fact. Liveness there is presence in the process table, never
     permission to signal, so a zombie reads dead and another user's descendant
     still reads alive (:mod:`firm.pulse.descendants`).
     """
@@ -824,7 +832,7 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
         # reads as gone, which it is.
         alive = sorted(descendants.still_alive(holder_before) + survivors)
         result["alive_after"] = descendants.as_result(alive)
-        if alive:
+        if alive or result.get("lock") == "signalled":
             # THE ACCEPTANCE LINE, and the one behaviour this PR changes:
             # after abort returns ok: true, no process belonging to that run is
             # alive -- and if any is, abort does not report ok: true. Every

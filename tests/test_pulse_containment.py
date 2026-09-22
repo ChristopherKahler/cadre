@@ -1283,7 +1283,15 @@ def test_the_holder_is_re_read_as_a_generation_not_as_a_pid(tmp_path,
         assert _pids_in(result.get("alive_after")) == [], (
             f"the holder was re-read by pid alone: its creation time changed, "
             f"so it is a different process and must read as gone\n{result}")
-        assert result["ok"] is True, result
+        # AND THE LOCK WAS LEFT HELD, SO THIS IS NOT A SUCCESS (G2-1). The
+        # reading is honestly empty -- the stranger holding that pid is not
+        # this run's process and naming it would be worse than saying nothing
+        # -- but `lock: signalled` means abort could not release the lock, and
+        # an earlier draft of this leg asserted `ok True` here, which pinned
+        # exactly the contradiction #148 was filed about: a success printed
+        # beside "still exiting", with the lock wedged behind it.
+        assert result["lock"] == "signalled", result
+        assert result["ok"] is False, result
     finally:
         monkeypatch.undo()
         alive.close()

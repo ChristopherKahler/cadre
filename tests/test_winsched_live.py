@@ -442,11 +442,11 @@ def test_the_hub_seam_contains_its_pulse_and_abort_proves_the_tree_died(
     probe_result = json.loads(probe_lines[-1]) if probe_lines else {}
 
     with capsys.disabled():
-        print(f"[148] containment reading: "
-              f"contained={probe_result.get('contained')!r} "
-              f"supported={probe_result.get('containment_supported')!r} "
-              f"flags={probe_result.get('containment_flags')!r} "
-              f"reason={probe_result.get('containment_reason')!r}")
+        # THE WHOLE LINE, not the containment fields alone: a VOID below has to
+        # be diagnosable from the CI log by someone who cannot re-run it, and
+        # `ok` and `reason` are what say whether the probe pulse failed for a
+        # reason that has nothing to do with containment.
+        print(f"[148] probe pulse rc={probe.returncode} result={probe_result!r}")
 
     if probe_result.get("contained") is not True:
         pytest.skip(
