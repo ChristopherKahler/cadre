@@ -198,6 +198,10 @@ _STAGE = textwrap.dedent("""\
     import os, subprocess, sys, time
 
     label, out, nxt, script = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+    # #165 T2's instrument: an instant (seconds since the epoch) every stage
+    # waits for before it writes, so the three writes land together. "none",
+    # or no argument at all, writes at once, as the fixture always has.
+    release = sys.argv[5] if len(sys.argv) > 5 else "none"
 
 
     def creation():
@@ -223,7 +227,11 @@ _STAGE = textwrap.dedent("""\
 
     if nxt != "none":
         subprocess.Popen([sys.executable, script, nxt, out,
-                          "leaf" if nxt == "middle" else "none", script])
+                          "leaf" if nxt == "middle" else "none", script,
+                          release])
+
+    if release != "none":
+        time.sleep(max(0.0, float(release) - time.time()))
 
     with open(out, "a") as fh:
         fh.write("%s %d %s\\n" % (label, os.getpid(), creation()))
@@ -476,15 +484,19 @@ class _Tree:
     launcher and misses the work.
     """
 
-    def __init__(self, tmp_path: Path, *, depth: int = 3) -> None:
+    def __init__(self, tmp_path: Path, *, depth: int = 3,
+                 release: float | None = None) -> None:
         self.record = tmp_path / "tree.txt"
         self.record.write_text("", encoding="utf-8")
         script = tmp_path / "stage.py"
         script.write_text(_STAGE, encoding="utf-8")
         nxt = "middle" if depth >= 3 else "none"
+        # With a release instant every stage writes at that instant, so the
+        # wait is counted from it rather than from now (#165 T2).
+        self._deadline = None if release is None else release + 15
         self.proc = subprocess.Popen(
             [sys.executable, str(script), "holder", str(self.record), nxt,
-             str(script)])
+             str(script), "none" if release is None else repr(release)])
         # THE HOLDER IS REAPED THE MOMENT IT DIES. It is this pytest process's
         # own child now that nothing forks, so an exited holder would sit as a
         # zombie until someone waited on it -- and abort's `_pid_alive` reads a
@@ -498,7 +510,7 @@ class _Tree:
         self.leaf = self.stages.get("leaf", (None, None))[0]
 
     def _await(self, depth: int) -> dict[str, tuple[int, str]]:
-        deadline = time.time() + 30
+        deadline = self._deadline or time.time() + 30
         stages: dict[str, tuple[int, str]] | None = None
         while time.time() < deadline:
             lines = [ln.split() for ln in
@@ -545,27 +557,36 @@ class _Tree:
         and exits by itself, and ending a process we cannot identify is the one
         mistake this teardown exists never to make.
         """
-        for label in ("leaf", "middle", "holder"):
-            pid, started = self.stages.get(label, (None, None))
-            if not pid:                 # 0/None would mean the process GROUP
-                continue
-            try:
-                still_ours = _present(pid, started)
-            except Exception:           # a reader that failed identifies nothing
-                still_ours = False
-            if not still_ours:
-                continue
-            if os.name != "posix":
-                # `signal.SIGKILL` DOES NOT EXIST ON WINDOWS. Referencing it is
-                # an AttributeError, so a teardown written with it takes the
-                # whole run down on the platform the product ships to.
-                subprocess.run(["taskkill", "/F", "/PID", str(pid)],
-                               capture_output=True, timeout=60)
-                continue
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError, OSError):
-                pass
+        _end_by_generation(self.stages)
+
+
+def _end_by_generation(stages: dict[str, tuple[int, str]]) -> None:
+    """End each recorded stage while the table still holds its pid AND stamp.
+
+    `_Tree.close`'s rule, as a function so a leg holding stages but no `_Tree`
+    (#165 T3) ends them the same way and never by number.
+    """
+    for label in ("leaf", "middle", "holder"):
+        pid, started = stages.get(label, (None, None))
+        if not pid:                     # 0/None would mean the process GROUP
+            continue
+        try:
+            still_ours = _present(pid, started)
+        except Exception:               # a reader that failed identifies nothing
+            still_ours = False
+        if not still_ours:
+            continue
+        if os.name != "posix":
+            # `signal.SIGKILL` DOES NOT EXIST ON WINDOWS. Referencing it is
+            # an AttributeError, so a teardown written with it takes the
+            # whole run down on the platform the product ships to.
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                           capture_output=True, timeout=60)
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
 
 
 @pytest.fixture
@@ -596,6 +617,109 @@ def lonely_tree(tmp_path):
         yield made
     finally:
         made.close()
+
+
+# ---------------------------------------------------------------------------
+# #165 -- the tree fixture must not lose a generation's record
+# ---------------------------------------------------------------------------
+#
+# Main's Windows suite went red twice at 3acf695e on `tree`'s setup, and both
+# records fit one mechanism by byte count: two stages appended to ONE file at
+# the same offset (`open(out, "a")` is not an atomic append across processes on
+# Windows), so the longer line covered the shorter one, or the shorter left the
+# longer's `\r\n` behind as a blank line. The legs below pin the repair: each
+# stage writes a record of its own, and a construction that fails leaves no
+# stage running.
+
+
+def test_each_stage_of_the_tree_writes_a_record_of_its_own(tmp_path):
+    """T1, every host: no two stages ever write the same file.
+
+    Deterministic, which is why this is the leg that gates the shared file
+    coming back (MF1): the race itself shows only on Windows, and only when the
+    writes meet, but a shared file is visible on every host every time.
+    """
+    base = tmp_path / "t1"
+    base.mkdir()
+    made = _Tree(base, depth=3)
+    try:
+        records = sorted(p.name for p in base.iterdir() if p.suffix == ".txt")
+        assert records == ["tree.holder.txt", "tree.leaf.txt",
+                           "tree.middle.txt"], (
+            f"the stages must write one record each; found {records}")
+        for label in ("holder", "middle", "leaf"):
+            text = (base / f"tree.{label}.txt").read_text(encoding="utf-8")
+            lines = text.splitlines()
+            assert len(lines) == 1 and lines[0].split()[0] == label, (
+                f"tree.{label}.txt must hold exactly its own line: {text!r}")
+    finally:
+        made.close()
+
+
+@pytest.mark.skipif(
+    os.name == "posix",
+    reason="POSIX appends a line this size atomically (O_APPEND), so the "
+           "shared-file race cannot happen here and this leg could not tell "
+           "the repair from the defect; T1 guards the repair on every host")
+def test_released_together_the_tree_never_loses_a_generation(tmp_path):
+    """T2, Windows: the lost line, shown before the repair and absent after.
+
+    Every stage waits for the same instant before it writes, so the writes
+    meet. Against one shared file that is the race main lost twice on CI; each
+    failed construction's message carries the record, lost line and all. Five
+    constructions, each bounded at its release instant plus 15 s.
+    """
+    lost: list[str] = []
+    for trial in range(5):
+        base = tmp_path / f"t2-{trial}"
+        base.mkdir()
+        release = time.time() + 2.0
+        try:
+            made = _Tree(base, depth=3, release=release)
+        except AssertionError as exc:
+            lost.append(f"construction {trial}: {exc}")
+            continue
+        made.close()
+    assert lost == [], "a generation's record was lost:\n" + "\n".join(lost)
+
+
+def test_a_tree_that_fails_to_come_up_leaves_no_stage_running(
+        tmp_path, monkeypatch):
+    """T3, every host: a failed construction ends what it started.
+
+    `_await` raising inside `_Tree.__init__` used to escape before the `tree`
+    fixture held the object, so its `finally` never ran and every stage slept
+    out its 300 s. Here `_await` reads the real records and then fails, so the
+    stages are known, running, and the construction still raises.
+    """
+    real = _Tree._await
+    seen: dict[str, tuple[int, str]] = {}
+
+    def recorded_then_failed(self, depth):
+        seen.update(real(self, depth))
+        raise AssertionError("forced: the construction fails after every "
+                             "stage recorded itself")
+
+    monkeypatch.setattr(_Tree, "_await", recorded_then_failed)
+    base = tmp_path / "t3"
+    base.mkdir()
+    try:
+        with pytest.raises(AssertionError, match="forced"):
+            _Tree(base, depth=3)
+        # CONTROL: three real stages started and recorded, or this leg would
+        # pass by having nothing to end (law 48).
+        assert sorted(seen) == ["holder", "leaf", "middle"], seen
+        deadline = time.time() + 10
+        running = [label for label, (pid, started) in seen.items()
+                   if _present(pid, started)]
+        while running and time.time() < deadline:
+            time.sleep(0.2)
+            running = [label for label, (pid, started) in seen.items()
+                       if _present(pid, started)]
+        assert running == [], (
+            f"a failed construction left these stages running: {running}")
+    finally:
+        _end_by_generation(seen)
 
 
 def _child_env() -> dict[str, str]:
