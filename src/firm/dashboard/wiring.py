@@ -39,11 +39,11 @@ from firm.core.proc import popen_utf8
 from firm.dashboard import discovery
 from firm.dashboard.founding import (
     _FOUNDING_FLAGS,
-    _framework_root,
     NARRATION_CONTRACT,
     Narrator,
 )
 from firm.pulse.spawn import resolve_claude_bin
+from firm.services.base_domain import session_spawn
 
 _TIMEOUT_SEC = 420
 
@@ -514,10 +514,14 @@ def _run_wiring(job_id: str, workspace: Path, firm_id: str,
     env = dict(os.environ)
     env.pop("CADRE_DB_URL", None)
     env.pop("CADRE_DB_TOKEN", None)
+    # #143, the same seam the Board brief uses: this session writes the
+    # charter and the loadouts, so a tier that is not the firm's writes the
+    # firm's law into someone else's graph.
+    cwd, env["BASE_HOME"] = session_spawn(workspace)
 
     try:
         proc = popen_utf8(
-            argv, cwd=str(_framework_root()),
+            argv, cwd=cwd,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=env,
         )

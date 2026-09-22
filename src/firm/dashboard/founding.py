@@ -20,7 +20,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -31,6 +33,7 @@ from firm.core import repo
 from firm.core.db import connect, get_db_path
 from firm.core.proc import popen_utf8
 from firm.pulse.spawn import resolve_claude_bin
+from firm.services.base_domain import session_spawn
 
 # Mirrors the hardened Member spawn flags (firm/pulse/spawn.py). --strict-mcp-config
 # with NO --mcp-config is load-bearing and deliberate: strict means the run gets
@@ -236,8 +239,59 @@ Write them as instructions to the Board, not observations about yourself.
 # ---------------------------------------------------------------------------
 
 def _framework_root() -> Path:
-    """Repo root — the founding agent runs here so its doc paths resolve."""
+    """Repo root — where the house docs and the framework tree are READ from.
+
+    It is not where the founding agent runs, and the sentence that said so was
+    wrong even before #143 moved that working directory: `_house_rules()` reads
+    both documents through `root / rel`, an absolute path, and inlines their
+    TEXT into the prompt, so the agent is never handed a path to open. The old
+    sentence is what made the tier fix look as though it would break doc
+    resolution, and it put a wrong fact into a design document before anyone
+    read the code it described.
+    """
     return Path(__file__).resolve().parents[3]
+
+
+def _scratch_session(job_id: str) -> tuple[str, str]:
+    """A tier of founding's own, recorded on the job so `_finish` removes it.
+
+    Founding and reshuffle run BEFORE there is a firm, so there is no firm
+    workspace to isolate them into and the shape the other two spawn sites use
+    does not apply (#143, G0 ruling R-2). They get a scratch home under TEMP
+    instead: base's global tier is that directory and the working directory is
+    the one path base returns without walking, so nothing in the session climbs
+    out into the operator's own workspace.
+
+    THE `cadre-founding-` PREFIX IS LOAD-BEARING, not decoration. The leg that
+    proves this (R11) passed twice before it was keyed on this string — once
+    off an ambient `BASE_HOME`, once off the suite's own TEMP fence — because
+    both of those are also "a BASE_HOME under TEMP". A name only this function
+    can produce is what makes the assertion be about the fix.
+    """
+    scratch = tempfile.mkdtemp(prefix="cadre-founding-")
+    cwd, base_home = session_spawn(home=scratch)
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is not None:
+            job["scratch_tier"] = scratch
+    return cwd, base_home
+
+
+def _remove_scratch_tier(scratch: Path) -> tuple[bool, str]:
+    """Best effort, and it SAYS which it was. #143, leg R11.
+
+    A scratch tier left behind is a directory of graph data in TEMP after every
+    founding run. Removing it can genuinely fail — on Windows base's own hook
+    can still hold a file open for a moment after the session ends — so the
+    outcome is recorded rather than assumed. `tier_removed: false` with the
+    reason is a true job record; a silent failure is a directory nobody knows
+    about.
+    """
+    try:
+        shutil.rmtree(scratch)
+    except OSError as exc:
+        return (not scratch.exists()), str(exc)
+    return True, ""
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -536,11 +590,12 @@ def _run_founding(job_id: str, brief: str) -> None:
     env = dict(os.environ)
     env.pop("CADRE_DB_URL", None)   # a founding run has no firm yet
     env.pop("CADRE_DB_TOKEN", None)
+    cwd, env["BASE_HOME"] = _scratch_session(job_id)
 
     try:
         proc = popen_utf8(
             argv,
-            cwd=str(_framework_root()),
+            cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
@@ -602,6 +657,19 @@ def _finish(job_id: str, *, proposal: dict | None = None, error: str | None = No
         job["proposal"] = proposal
         job["error"] = error
         job["ended_at"] = datetime.now(tz=timezone.utc).isoformat()
+        scratch = job.get("scratch_tier")
+    if not scratch:
+        return
+    # OUTSIDE THE LOCK, deliberately. Removing a directory tree is filesystem
+    # work and the hub answers `status` from this same lock on another thread.
+    removed, why = _remove_scratch_tier(Path(scratch))
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return
+        job["tier_removed"] = removed
+        if not removed:
+            job["tier_removed_error"] = why
 
 
 _RESHUFFLE_PROMPT = """\
@@ -649,9 +717,12 @@ def _run_reshuffle(job_id: str, proposal: dict[str, Any], note: str) -> None:
     env = dict(os.environ)
     env.pop("CADRE_DB_URL", None)
     env.pop("CADRE_DB_TOKEN", None)
+    # #143: a proposal is not a firm either, so reshuffle gets a scratch tier
+    # of its own rather than borrowing one.
+    cwd, env["BASE_HOME"] = _scratch_session(job_id)
 
     try:
-        proc = popen_utf8(argv, cwd=str(_framework_root()),
+        proc = popen_utf8(argv, cwd=cwd,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           env=env)
     except OSError as exc:
@@ -763,6 +834,11 @@ def cancel(job_id: str) -> dict[str, Any]:
         job = _jobs.pop(job_id, None)
     if job and job.get("proc"):
         job["proc"].kill()
+    # CANCEL REMOVES THE SCRATCH TIER TOO (#143). This pops the job record, so
+    # `_finish` finds nothing and its cleanup never runs — a cancelled founding
+    # run is the one path on which the tier would stay in TEMP for good.
+    if job and job.get("scratch_tier"):
+        _remove_scratch_tier(Path(job["scratch_tier"]))
     return {"ok": True}
 
 

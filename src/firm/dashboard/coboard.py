@@ -35,11 +35,11 @@ from firm.core.db import connect, get_db_path
 from firm.core.proc import popen_utf8
 from firm.dashboard.founding import (
     _FOUNDING_FLAGS,
-    _framework_root,
     NARRATION_CONTRACT,
     Narrator,
 )
 from firm.pulse.spawn import resolve_claude_bin
+from firm.services.base_domain import session_spawn
 
 _TIMEOUT_SEC = 420
 
@@ -234,9 +234,16 @@ def _run_brief(job_id: str, workspace: Path, firm_id: str,
     env = dict(os.environ)
     env.pop("CADRE_DB_URL", None)
     env.pop("CADRE_DB_TOKEN", None)
+    # #143: THE SESSION RUNS IN THE FIRM'S TIER. base inside it finds its
+    # workspace tier by walking up from the directory it was started in, so
+    # starting it in the framework root made every Board brief read and write
+    # whichever `.base` sits above the install -- on the operator's machine,
+    # his own. Only the tier moves; the session keeps the rest of his
+    # environment.
+    cwd, env["BASE_HOME"] = session_spawn(workspace)
 
     try:
-        proc = popen_utf8(argv, cwd=str(_framework_root()),
+        proc = popen_utf8(argv, cwd=cwd,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           env=env)
     except OSError as exc:

@@ -368,7 +368,8 @@ def _existing(tier: Path, create: bool, fallback: Path) -> str:
 
 
 def base_cwd(workspace: Path | str | None = None, *,
-             create: bool = True) -> str:
+             create: bool = True,
+             home: Path | str | None = None) -> str:
     """The directory every `base` call Cadre makes for a firm runs in.
 
     base takes its GLOBAL tier from `BASE_HOME` and finds a WORKSPACE tier by
@@ -415,6 +416,16 @@ def base_cwd(workspace: Path | str | None = None, *,
     comes back: a reader that climbed out to find something that does exist
     would be reading a tier nobody asked about.
 
+    `home` NAMES RULE 3's ROOT EXPLICITLY and overrides nothing else. It is
+    here for the hub's founding and reshuffle runs (#143), which need a tier
+    that is not the operator's before any firm exists: the caller makes a
+    scratch home and passes it, rather than setting `BASE_HOME` in
+    `os.environ`. That alternative is not a style preference -- the hub serves
+    every job from ONE process with a thread per job, so a process-wide
+    variable set for one founding run is read by every other job in flight.
+    Default `None` keeps the environment read, so every existing caller is
+    untouched.
+
     THE PROPERTY THIS RESTS ON IS BYTE-IDENTITY, NOT INTENT. Rules 2 and 3 only
     work because the string returned here and the `BASE_HOME` string in
     `_base_env` both come from `_one_spelling`. Read that function before
@@ -430,8 +441,8 @@ def base_cwd(workspace: Path | str | None = None, *,
 
         return _existing(firm_base_home(candidate) / ".base-gbl", create,
                          fallback=candidate)
-    home = os.environ.get("BASE_HOME")
-    root = Path(home) if home else Path.home()
+    named = home if home is not None else os.environ.get("BASE_HOME")
+    root = Path(named) if named else Path.home()
     return _existing(root / ".base-gbl", create, fallback=root)
 
 
@@ -526,6 +537,50 @@ def _base_env(workspace: Path | str | None = None) -> dict[str, str]:
             if value:
                 env[win_var] = value
     return env
+
+
+def session_spawn(workspace: Path | str | None = None, *,
+                  home: Path | str | None = None) -> tuple[str, str]:
+    """What a Claude SESSION spawned for a firm needs, so that base INSIDE it
+    resolves the firm's tier and not the operator's. Issue #143.
+
+    Returns `(cwd, base_home)`: the directory to start the session in, and the
+    value its `BASE_HOME` must carry. The caller puts that value into the
+    environment it was going to pass anyway -- a spawned Claude session keeps
+    the operator's full environment (PATH, APPDATA, the claude login), so this
+    hands over the two values that move and nothing else.
+
+    IT COMPOSES; IT COMPUTES NOTHING. The working directory is `base_cwd`'s
+    answer and the global tier is `_base_env`'s, unchanged, so the tier rule
+    keeps exactly one producer and this is not a second copy of it. That is
+    not tidiness: `cli/pulse.py`'s second copy of the pulse cleanup and
+    #141's `_handle_abort` both passed every behavioural leg on the day they
+    were written, and drifted afterwards.
+
+    WHY A SESSION NEEDS ITS OWN SEAM when `base_cwd` already exists. `base_cwd`
+    answers for a `base` subprocess Cadre runs itself, and Cadre can name that
+    process's directory outright. Here the subprocess is a Claude session that
+    calls `base` LATER, through its hooks, and base takes the directory from
+    the hook payload, which the HOST fills in from the session's own working
+    directory (`hook/mod.rs:115-120` and `:32-34` at base 0.15.2, read at
+    tag v0.15.2). Cadre never writes that payload, so the only lever it has on
+    the walk is the directory it spawns the session in -- and the directory and
+    the global tier have to be handed over together or they drift apart.
+
+    `home` is the shape founding and reshuffle need: they run before a firm
+    exists, so there is no firm tier to point at and the caller passes a
+    scratch one. It goes through `_one_spelling` for the reason that function
+    documents -- base compares `BASE_HOME` against the working directory as
+    strings, and this is where that pair is made.
+    """
+    if home is not None:
+        return base_cwd(home=home), _one_spelling(home)
+    if workspace is None:
+        raise ValueError(
+            "session_spawn needs a firm workspace or a scratch home: a session "
+            "spawned with neither reads whichever `.base` sits above the "
+            "directory it happens to start in, which is issue #143 itself")
+    return base_cwd(workspace), _base_env(workspace)["BASE_HOME"]
 
 
 # `base rule list` exits 0 for a populated domain, an empty one, AND a domain
