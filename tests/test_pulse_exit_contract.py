@@ -84,7 +84,14 @@ EXIT_FUNCTION = "_exit_with"
 
 #: How many ``return`` statements each ending has. A new way out of the pulse
 #: changes one of these numbers: add a leg below that drives it, then the count.
-RETURNS = {"run_pulse": 5, "_run_resolved": 5, "_drain_queue": 1, "_handle_abort": 3}
+#: ``_run_resolved`` lost one on the #128 D3 branch and gained no way out: its
+#: success and error endings were two returns inside the try and are now one
+#: return after it, so the pulse's connection and its lock are released before
+#: the result line is printed. Both endings already have legs below
+#: (``test_every_member_run_completed_exits_0`` and
+#: ``test_an_error_inside_the_pulse_exits_1``), which is why this number could
+#: move without a new one being written.
+RETURNS = {"run_pulse": 5, "_run_resolved": 4, "_drain_queue": 1, "_handle_abort": 3}
 
 #: This interpreter, standing in for claude. It rejects ``--print`` and exits
 #: non-zero, so a pulse that dispatches a Member onto it records a real failed

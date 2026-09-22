@@ -31,12 +31,13 @@ from firm.pulse.environment import pulse_environment
 from firm.pulse.orchestrator import pulse
 from firm.pulse.runner import make_runner
 from firm.pulse.spawn import _active_pids
+from firm.services import pulse_ledger
 
 _QUEUE_LOCK_WAIT_SEC = 1800   # how long a claimer waits for the table to free up
 _QUEUE_RETRY_SEC = 10
 
 
-def _exit_with(result: dict[str, Any]) -> int:
+def _exit_with(result: dict[str, Any], ledger: "_Ledger | None" = None) -> int:
     """Print the pulse's result line and return the exit code that goes with it.
 
     A scheduler that starts a pulse sees only the exit code, and every reader of
@@ -47,9 +48,92 @@ def _exit_with(result: dict[str, Any]) -> int:
     those pulses as clean runs (#128). Every return that ends ``firm pulse``
     comes through here; ``tests/test_pulse_exit_contract.py`` fails when one
     does not.
+
+    THE LEDGER ROW CLOSES HERE FOR THE SAME REASON (#128 D3). ``outcome`` is
+    read off this same object, in this same function, one statement before the
+    exit code is read off it -- so the row and the code cannot disagree about
+    how the pulse ended. A close-out beside the pulse's own return would have
+    covered only the path that runs a cycle, and the pulse has four other ways
+    out. *ledger* is None for every exit before the firm is known, and those
+    have no row to close.
     """
+    if ledger is not None:
+        ledger.close(result)
     print(json.dumps(result, default=str))
     return 0 if result.get("ok") is True else 1
+
+
+class _Ledger:
+    """This pulse's row in the ledger, and the note that stands in for it.
+
+    Three states, three shapes, because absent, empty and failed are three
+    different claims (law 7): a dry run sets no ``pulse_run`` field at all, a
+    recorded pulse sets the row id, and a pulse whose write could not land
+    sets ``not recorded: <reason>``. A firm upgraded without ``init`` or
+    ``doctor --fix`` has no table, and that is the case this shape exists for.
+
+    Every write is best effort and the pulse's exit code never depends on one:
+    a side record that fails must not turn a pulse that ran into a pulse that
+    errored. THE LEDGER NEVER MIGRATES -- see pulse_ledger's own docstring for
+    why a timer tick must not change the schema under other machines.
+    """
+
+    def __init__(self, db_path: Path, firm_id: str, *, source: str,
+                 dry_run: bool) -> None:
+        self.db_path = db_path
+        self.firm_id = firm_id
+        self.source = source
+        self.dry_run = dry_run
+        self.run_id: int | None = None
+        self.note: str | None = None
+
+    def open(self) -> None:
+        """Close out what this host left open, then start this pulse's row.
+
+        The close-out runs here rather than on a timer or at exit because the
+        next pulse is the only process that is certainly looking: a pulse that
+        was killed cannot tidy up after itself, which is the whole reason its
+        row is open.
+        """
+        if self.dry_run:
+            return
+        holder = dblock.make_holder_id()
+        host = socket.gethostname()
+
+        def work() -> int:
+            conn = connect(self.db_path)
+            try:
+                pulse_ledger.close_out_dead_local_runs(
+                    conn, host=host, is_alive=_pid_alive)
+                return pulse_ledger.open_run(
+                    conn, self.firm_id, source=self.source, holder=holder)
+            finally:
+                conn.close()
+
+        self.run_id, self.note = pulse_ledger.best_effort(work)
+
+    def close(self, result: dict[str, Any]) -> None:
+        """Close the row from the pulse's own printed result, and say so in it."""
+        if self.dry_run:
+            return
+        if self.run_id is None:
+            result["pulse_run"] = f"not recorded: {self.note or 'no row opened'}"
+            return
+
+        def work() -> None:
+            conn = connect(self.db_path)
+            try:
+                pulse_ledger.close_run(conn, self.run_id, result)
+            finally:
+                conn.close()
+
+        _value, note = pulse_ledger.best_effort(work)
+        # A row that opened and could not close is NOT "not recorded": it is on
+        # disk, open, and the next pulse on this host will close it as
+        # `unclosed`. Saying "not recorded" would send a reader looking for a
+        # missing table that is right there.
+        result["pulse_run"] = (self.run_id if note is None
+                               else f"{self.run_id}, not closed: {note}")
 
 
 def run_pulse(
@@ -60,6 +144,7 @@ def run_pulse(
     firm_id: str | None = None,
     only: str | None = None,
     drain_queue: bool = False,
+    source: str | None = None,
 ) -> int:
     """Run a single PULSE cycle for the workspace.
 
@@ -74,6 +159,9 @@ def run_pulse(
             (frequency throttle waived for the target).
         drain_queue: Claim pending pulse_request rows and pulse once per
             request, waiting for the lock instead of failing on it.
+        source: Where this pulse came from, for the ledger -- one of
+            ``pulse_ledger.SOURCES``. None records ``unset``, which is what
+            every timer installed before the flag existed passes.
 
     Returns:
         0 when the printed result says ``ok: true``, 1 otherwise.
@@ -111,7 +199,8 @@ def run_pulse(
                        else pulse_environment(workspace, db_path, firm_id))
         with environment:
             return _run_resolved(workspace, db_path, firm_id, dry_run=dry_run,
-                                 only=only, drain_queue=drain_queue)
+                                 only=only, drain_queue=drain_queue,
+                                 source=source)
     except Exception as exc:
         # Anything no branch caught -- a database file that will not open, a
         # lock query that fails -- used to leave a traceback and no result line,
@@ -122,8 +211,22 @@ def run_pulse(
 def _run_resolved(
     workspace: Path, db_path: Path, firm_id: str, *,
     dry_run: bool, only: str | None, drain_queue: bool,
+    source: str | None = None,
 ) -> int:
     """The rest of ``run_pulse``, once the firm is known."""
+    # The ledger row opens HERE, at the top, because this is the first point
+    # at which the firm is known and every live ending below it is an ending
+    # of a pulse that started. A row opened later would miss the preflight
+    # exit, which is the most common failed pulse a firm ever has. A dry run
+    # opens none: it is read-only by contract and leaves no trace (#128 D3).
+    # --drain-queue IS the label: the entry point already says where the
+    # pulse came from, so nothing passes it a flag and the two cannot drift.
+    ledger = _Ledger(
+        db_path, firm_id, dry_run=dry_run,
+        source=(pulse_ledger.QUEUE if drain_queue
+                else (source or pulse_ledger.UNSET)))
+    ledger.open()
+
     # Preflight: don't spawn N doomed subprocesses (and write N failed
     # member_run rows) when the Member runtime isn't wired at all.
     if not dry_run:
@@ -135,10 +238,10 @@ def _run_resolved(
                 "ok": False,
                 "reason": "runtime-not-wired",
                 "detail": resolve_detail,
-            })
+            }, ledger)
 
     if drain_queue:
-        return _drain_queue(workspace, db_path, firm_id)
+        return _drain_queue(workspace, db_path, firm_id, ledger)
 
     # Overlap lock (live pulses only — dry-run is read-only): member runs
     # take 20-30 min each, so an hourly cadence CAN overlap a long pulse.
@@ -160,7 +263,7 @@ def _run_resolved(
                 "reason": "pulse-already-running",
                 "detail": ("another live pulse holds the pulse_lock row for "
                            f"{firm_id!r}; wait for it or `firm pulse --abort`"),
-            })
+            }, ledger)
         _start_heartbeat(db_path, firm_id, holder, stop_beat)
 
     conn = None
@@ -169,10 +272,10 @@ def _run_resolved(
         # and a connection that failed before the try skipped the finally that
         # lets them go, so the lock sat held for its TTL (#128, osprey's G1).
         conn = connect(db_path)
-        return _exit_with(
-            _pulse_once(conn, workspace, firm_id, dry_run=dry_run, only=only))
+        result = _pulse_once(conn, workspace, firm_id, dry_run=dry_run,
+                             only=only)
     except Exception as exc:
-        return _exit_with({"ok": False, "reason": "error", "message": str(exc)})
+        result = {"ok": False, "reason": "error", "message": str(exc)}
     finally:
         if conn is not None:
             conn.close()
@@ -183,6 +286,23 @@ def _run_resolved(
                 dblock.release(rconn, firm_id, holder)
             finally:
                 rconn.close()
+
+    # THE EXIT IS OUTSIDE THE TRY, AND THAT IS LOAD-BEARING (#128 D3).
+    #
+    # Measured on this branch: at the old exit point the pulse's own connection
+    # was still open AND still in a transaction, so the ledger's close -- which
+    # runs on its own connection, in `_exit_with` -- got `database is locked`
+    # and every successful pulse recorded `not closed`. The finally above is
+    # what releases it, and the finally runs on the way OUT of the try, so any
+    # exit inside the try is an exit with the database still held.
+    #
+    # Closing the row on the pulse's own connection instead would have meant
+    # committing whatever that transaction is carrying, which is the pulse's
+    # business and not the ledger's. Exiting after the connection is closed
+    # costs nothing and is also strictly better for the lock: a reader that
+    # starts another pulse the moment it sees this line can no longer bounce
+    # off a pulse_lock row that this process has not let go of yet.
+    return _exit_with(result, ledger)
 
 
 def _pulse_once(
@@ -348,7 +468,8 @@ def _start_heartbeat(
     threading.Thread(target=beat, daemon=True).start()
 
 
-def _drain_queue(workspace: Path, db_path: Path, firm_id: str) -> int:
+def _drain_queue(workspace: Path, db_path: Path, firm_id: str,
+                 ledger: "_Ledger | None" = None) -> int:
     """Claim pending pulse requests and pulse once per request.
 
     Waits for the pulse lock (up to _QUEUE_LOCK_WAIT_SEC per request)
@@ -416,11 +537,15 @@ def _drain_queue(workspace: Path, db_path: Path, firm_id: str) -> int:
 
     # An abandoned or failed request makes this ok: false, and the drain now
     # exits on it like every pulse (#128 U1): it used to return 0 regardless.
+    # ONE ROW FOR THE DRAIN PROCESS, not one per request: the ledger counts
+    # pulse processes, and per-request detail already lands in pulse_request.
+    # The row was opened with source `queue` by _run_resolved, which is the
+    # only place that knows the entry point.
     return _exit_with({
         "ok": all(r.get("ok", False) for r in results) if results else True,
         "drained": len(results),
         "results": results,
-    })
+    }, ledger)
 
 
 def _pid_alive(pid: int) -> bool:

@@ -192,7 +192,7 @@ def test_L1b_a_pulse_that_ended_on_a_branch_records_that_branchs_reason(tmp_path
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# L2 · a killed pulse leaves its row open, and the next pulse closes it `died`
+# L2 · a killed pulse leaves its row open, and the next pulse closes it
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _wedge_a_pulse(ws: Path, timeout: float = 60.0) -> subprocess.Popen:
@@ -232,8 +232,16 @@ def _wedge_a_pulse(ws: Path, timeout: float = 60.0) -> subprocess.Popen:
 
 
 @spawn_layer_rejects_this_platforms_binaries
-def test_L2_a_killed_pulse_leaves_its_row_open_and_the_next_one_closes_it_died(
+def test_L2_a_killed_pulse_leaves_its_row_open_and_the_next_one_closes_it(
         tmp_path):
+    """`unclosed`, not `died`.
+
+    The D3 design said `died` (brief lines 300, 316 and 379) and osprey's
+    verdict overruled it in those words at line 563: a pulse whose CLOSING
+    WRITE failed leaves the identical open row with the identical dead pid, so
+    `died` would name a crash nobody read. `unclosed` says exactly what was
+    measured -- nobody closed this row -- and says nothing about why.
+    """
     ws = _firm(tmp_path / "ws")
     child = _wedge_a_pulse(ws)
     child.kill()             # no handler runs: nothing of the pulse's closes
@@ -259,7 +267,7 @@ def test_L2_a_killed_pulse_leaves_its_row_open_and_the_next_one_closes_it_died(
     _assert_exit(run, rc=0, ok=True)
     rows = {r["id"]: r for r in _ledger(ws)}
     closed = rows[killed["id"]]
-    assert closed["outcome"] == "died", run.output
+    assert closed["outcome"] == "unclosed", run.output
     assert closed["ended_at"] is not None, (
         "a row closed out still has to be closed", run.output)
     assert len(rows) == 2, ("the closing pulse writes its own row too",

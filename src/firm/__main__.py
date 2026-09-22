@@ -69,6 +69,11 @@ def _force_utf8_streams() -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    # Imported here rather than at module scope, the way this file reaches for
+    # everything else it needs: the source labels come from the ledger so the
+    # parser and the column cannot hold two different lists.
+    from firm.services import pulse_ledger
+
     prog_name = Path(sys.argv[0]).name if sys.argv and sys.argv[0] else "cadre"
     if prog_name.endswith(".py"):
         prog_name = "cadre"
@@ -716,6 +721,25 @@ def _build_parser() -> argparse.ArgumentParser:
         "--drain-queue", action="store_true", dest="drain_queue",
         help="Claim pending pulse_request rows and pulse once per request, "
              "waiting for the pulse lock instead of failing on it.",
+    )
+    # A FLAG, NOT AN ENVIRONMENT VARIABLE (#128 D3, osprey's verdict item 4).
+    # A variable is inherited by everything below the process that sets it --
+    # spawn_member_run hands every Member run a copy of the pulse's whole
+    # environment, and each scheduler backend starts a Board pulse with the
+    # hub server's -- so a label there describes whoever set it, not the pulse
+    # that reads it. An argument belongs to exactly one process, every launch
+    # site already builds an argument list, and doctor can read a timer's
+    # label out of the installed definition without running a pulse.
+    #
+    # `unset` is deliberately NOT a choice: it is what a pulse with no flag
+    # records, and every timer installed before this flag existed passes none.
+    # Accepting it would let a caller fake the absence, and choices rejects a
+    # misspelling with a usage error where an environment value stores one
+    # silently.
+    pulse_parser.add_argument(
+        "--source", default=None, choices=list(pulse_ledger.SOURCES),
+        help="Where this pulse came from, recorded in the pulse ledger. "
+             "Omitted records 'unset'. --drain-queue records 'queue'.",
     )
 
     # ---- notify subparser ----
@@ -1409,6 +1433,7 @@ def main(argv: list[str] | None = None) -> int:
             firm_id=firm_id,
             only=args.only,
             drain_queue=args.drain_queue,
+            source=args.source,
         )
 
     if args.command == "backup":
