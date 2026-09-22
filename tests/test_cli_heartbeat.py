@@ -23,6 +23,28 @@ def _workspace_with_db(tmp_path):
     return ws
 
 
+def _workspace_with_ledger(tmp_path, started_at, firm_id="lab"):
+    """A workspace whose firm has really pulsed, in the ledger (#128 D3)."""
+    from firm.core.db import connect
+    from firm.core.migrate import apply_migrations
+    from firm.core.repo import create
+
+    ws = tmp_path / "ws"
+    (ws / ".firm").mkdir(parents=True)
+    conn = connect(ws / ".firm" / "firm.db")
+    try:
+        apply_migrations(conn)
+        create(conn, "firm", {"id": firm_id, "name": "Lab"})
+        conn.execute(
+            "INSERT INTO pulse_run (firm_id, started_at, ended_at, source,"
+            " holder, outcome, ok) VALUES (?, ?, ?, 'heartbeat', 'h:1:a',"
+            " 'ok', 1)", (firm_id, started_at, started_at))
+        conn.commit()
+    finally:
+        conn.close()
+    return ws
+
+
 @pytest.fixture
 def ctl(monkeypatch):
     """Record every scheduler CLI call; systemctl always succeeds."""
@@ -168,7 +190,7 @@ def test_disable_unknown_firm_fails(tmp_path, capsys, ctl):
 
 
 def test_status_reports_installed_timers(tmp_path, capsys, monkeypatch):
-    ws = _workspace_with_db(tmp_path)
+    ws = _workspace_with_ledger(tmp_path, "2026-07-10T11:45:00+00:00")
     unit_dir = tmp_path / "units"
     unit_dir.mkdir()
     (unit_dir / "cadre-heartbeat-lab.timer").write_text(
@@ -176,6 +198,9 @@ def test_status_reports_installed_timers(tmp_path, capsys, monkeypatch):
     (unit_dir / "cadre-heartbeat-lab.service").write_text(
         f"[Service]\nWorkingDirectory={ws}\n"
     )
+    # Deliberately STALE, and deliberately still here: the hub's file is what
+    # last_pulse used to be read from, so leaving it in place is what makes the
+    # assertion below discriminate rather than merely pass (#128 D3).
     (ws / ".firm" / "last-pulse.json").write_text("{}")
 
     def fake(argv, timeout=30):
@@ -200,7 +225,11 @@ def test_status_reports_installed_timers(tmp_path, capsys, monkeypatch):
     assert entry["firm_id"] == "lab"
     assert entry["state"] == "active"
     assert entry["workspace"] == str(ws)
-    assert "last_pulse" in entry
+    # THE LEDGER, NOT THE FILE (#128 D3). This asserted only that the key was
+    # present, which the hub file's mtime also satisfied; it now asserts the
+    # VALUE, which only the ledger can produce -- the file beside it carries a
+    # different time and is untouched by this read.
+    assert entry["last_pulse"] == "2026-07-10T11:45:00+00:00"
     assert "next_fire" in entry
     assert entry.get("scheduler") == "systemd"
 

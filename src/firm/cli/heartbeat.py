@@ -24,12 +24,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from firm.core.db import connect, get_db_path, resolve_firm_id
+from firm.core.db import connect, db_is_remote, get_db_path, resolve_firm_id
 from firm.core.proc import run_utf8
 from firm.pulse.environment import read_env_file
 from firm.pulse.spawn import resolve_claude_bin
 from firm.sched import resolve_scheduler
 from firm.sched.base import SchedulerError, interval_to_seconds
+from firm.services import pulse_ledger
 
 _UNIT_PREFIX = "cadre-heartbeat-"
 _INTERVAL_RE = re.compile(r"^\d+(s|m|min|h|d)$")
@@ -188,8 +189,15 @@ def run_enable(
             description=f"Cadre heartbeat pulse — firm {firm_id}",
             workdir=workspace,
             env=env,
+            # --source heartbeat is what makes a timer pulse tell itself
+            # apart from a Board one in the ledger (#128 D3). It goes in the
+            # INSTALLED argv, so doctor can read a timer's label out of the
+            # unit without running a pulse -- and so a timer installed before
+            # this flag existed keeps recording "unset", which is the true
+            # answer for it, rather than being guessed at.
             argv=[sys.executable, "-m", "firm", "pulse",
-                  "--workspace", str(workspace), "--firm-id", firm_id],
+                  "--workspace", str(workspace), "--firm-id", firm_id,
+                  "--source", pulse_ledger.HEARTBEAT],
             interval=interval,
         )
     except SchedulerError as exc:
@@ -340,6 +348,34 @@ def _service_python(stem: str, unit_dir: Path | None) -> str | None:
     return None
 
 
+def _last_pulse(workspace: Path, firm_id: str) -> tuple[str | None, str | None]:
+    """When this firm last pulsed, read from the ledger; or why it is unknown.
+
+    NOT the mtime of .firm/last-pulse.json, which is what this used to be. That
+    file is written by exactly one launcher, the hub's _fire_pulse, so a firm
+    whose pulses come from its own timer -- the firms this verb exists to
+    report on -- had no file and read as a firm that had never pulsed. The
+    ledger is written by every pulse (#128 D3).
+
+    Returns (started_at, None) when the ledger answered, (None, None) when it
+    answered and the firm has no pulses, and (None, reason) when it could not
+    be read at all.
+    """
+    db_path = get_db_path(workspace)
+    if not db_is_remote() and not db_path.exists():
+        return None, f"no firm database at {db_path}"
+
+    def work() -> str | None:
+        conn = connect(db_path)
+        try:
+            return pulse_ledger.last_started_at(conn, firm_id)
+        finally:
+            conn.close()
+
+    started, reason = pulse_ledger.best_effort(work)
+    return started, reason
+
+
 def run_status(*, unit_dir: Path | None = None) -> int:
     sched = _sched(unit_dir)
     entries = []
@@ -352,9 +388,16 @@ def run_status(*, unit_dir: Path | None = None) -> int:
         workspace = st.get("workdir")
         if workspace:
             entry["workspace"] = workspace
-            last_pulse = Path(workspace) / ".firm" / "last-pulse.json"
-            if last_pulse.exists():
-                entry["last_pulse"] = int(last_pulse.stat().st_mtime)
+            started, unavailable = _last_pulse(Path(workspace), firm_id)
+            if started is not None:
+                entry["last_pulse"] = started
+            elif unavailable is not None:
+                # THREE STATES, THREE KEYS (law 7, law 48). A ledger that
+                # cannot be read is not a firm that has never pulsed, and a
+                # reader that saw the same absence for both would go looking
+                # for a dead timer when the real answer is a missing
+                # migration.
+                entry["last_pulse_unavailable"] = unavailable
         for k in ("next_fire", "last_fire"):
             if st.get(k):
                 entry[k] = st[k]

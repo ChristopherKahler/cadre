@@ -37,6 +37,11 @@ EXPECTED_ENTITY_TABLES = {
     "escalation",
     "pulse_lock",
     "pulse_request",
+    # The pulse ledger, migration 016 (#128 D3): one row per pulse PROCESS, so
+    # a firm has a durable record that it pulsed even when nothing but its own
+    # timer ever starts one. Pinned here like the rest, so a table cannot
+    # arrive without someone saying what it is for.
+    "pulse_run",
     "firm_rev",
     "gen_spend",
 }
