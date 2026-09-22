@@ -515,11 +515,27 @@ def _drain_queue(workspace: Path, db_path: Path, firm_id: str,
     # pulse processes, and per-request detail already lands in pulse_request.
     # The row was opened with source `queue` by _run_resolved, which is the
     # only place that knows the entry point.
-    return _exit_with({
+    #
+    # THE COUNTS ARE SUMMED ACROSS THE REQUESTS, and they are ABSENT when no
+    # request reached a cycle at all (avocet's finding 1). `_count` writes NULL
+    # for a count the result does not carry, and that NULL is reserved for "no
+    # cycle ran" -- so a drain that ran three cycles and recorded a failure was
+    # making exactly the claim a pulse that died at its preflight makes, and a
+    # reader could not tell them apart. Summing to a plain 0 instead would make
+    # the opposite wrong claim on a drain where every request timed out waiting
+    # for the lock: "a cycle ran and found nothing". Absent, zero and a number
+    # are three answers (law 7), so the keys appear only when a cycle really
+    # ran.
+    output: dict[str, Any] = {
         "ok": all(r.get("ok", False) for r in results) if results else True,
         "drained": len(results),
         "results": results,
-    }, ledger)
+    }
+    ran_a_cycle = [r for r in results if isinstance(r.get("ran"), int)]
+    if ran_a_cycle:
+        for key in ("ran", "errors", "skipped"):
+            output[key] = sum(int(r.get(key) or 0) for r in ran_a_cycle)
+    return _exit_with(output, ledger)
 
 
 def _pid_alive(pid: int) -> bool:

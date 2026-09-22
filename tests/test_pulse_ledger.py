@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import ast
 import json
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -68,6 +69,7 @@ from tests.test_pulse_exit_contract import (
     _child_env,
     _firm,
     _hold_lock,
+    _live_holder,
     _pulse,
     _units,
 )
@@ -682,6 +684,92 @@ def test_L11_control_a_firm_with_no_ledger_table_reads_not_available(tmp_path):
     assert "not available" in card["detail"], card
     assert LEDGER_MIGRATION.split("_")[0] in card["detail"], (
         "the card names the migration that is missing", card)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# L15 · the drain's row carries the counts of the cycles it ran
+# ═══════════════════════════════════════════════════════════════════════════
+
+@spawn_layer_rejects_this_platforms_binaries
+def test_L15_the_drains_row_carries_the_counts_of_the_cycles_it_ran(tmp_path):
+    """The D3 bullet is "one row for the process, source queue, COUNTS SUMMED",
+    and until avocet read it the second half had a map row with nothing under
+    it. The drain's result carried no top-level counts, so ``_count`` wrote
+    NULL for all three -- and NULL is reserved for "no cycle ran". A drain that
+    ran a cycle and recorded a failure was making exactly the claim a pulse
+    that died at its preflight makes, and a reader could not tell them apart.
+    """
+    ws = _firm(tmp_path / "ws", members=(("MEM-001", "Lead", "active"),))
+    _units(ws, {"id": "UNIT-001", "assignee_member_id": "MEM-001"})
+    conn = connect(ws / ".firm" / "firm.db")
+    try:
+        pulse_queue.request_pulse(conn, FIRM, requested_by="board")
+        conn.commit()
+    finally:
+        conn.close()
+
+    run = _pulse(ws, "--drain-queue", claude=REFUSING_MEMBER)
+
+    result = _assert_exit(run, rc=1, ok=False, drained=1)
+    row = _one_row(ws)
+    assert row["source"] == "queue", run.output
+    assert (row["ran"], row["errors"], row["skipped"]) == (
+        result["ran"], result["errors"], result["skipped"]), run.output
+    assert row["errors"] >= 1, (
+        "the failed Member run inside the drained cycle is on the row, not "
+        "only inside results[]", run.output)
+    assert row["ran"] is not None, (
+        "NULL here would say no cycle ran, which is false", run.output)
+
+
+def test_L15_control_a_drain_that_ran_no_cycle_claims_no_counts(tmp_path):
+    """The other half, and the reason the keys are ABSENT rather than 0: an
+    empty queue drains nothing, so there is no cycle to count. A plain zero
+    would say "a cycle ran and found nothing", which is the same wrong answer
+    in the other direction (law 7)."""
+    ws = _firm(tmp_path / "ws")
+
+    run = _pulse(ws, "--drain-queue", claude=REFUSING_MEMBER)
+
+    result = _assert_exit(run, rc=0, ok=True, drained=0)
+    assert "ran" not in result, result
+    assert "errors" not in result, result
+    assert "skipped" not in result, result
+    row = _one_row(ws)
+    assert (row["ran"], row["errors"], row["skipped"]) == (None, None, None), row
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# L16 · a row held by a pulse that is STILL RUNNING is left open
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_L16_a_row_whose_local_holder_is_alive_is_left_open(tmp_path):
+    """The third case, and nothing pinned it until avocet mutated the guard.
+
+    L2 covers a dead local holder and L3 covers another machine's row. This
+    host, this pid, STILL RUNNING is the one a close-out that lost its
+    liveness check would get wrong -- it would close the row of a pulse that
+    is still going and record it ``unclosed``, and every other leg would stay
+    green. A pulse takes 20-30 minutes, so this is not a corner: it is what
+    the table looks like whenever two pulses overlap.
+    """
+    ws = _firm(tmp_path / "ws")
+    holder = _live_holder("import time", "print('ready', flush=True)",
+                          "time.sleep(120)")
+    try:
+        assert pulse_cli._pid_alive(holder.pid), (
+            "precondition: the holder's pid must be alive")
+        alive = _open_row_held_by(
+            ws, f"{socket.gethostname()}:{holder.pid}:t128blive")
+
+        run = _pulse(ws)
+
+        row = {r["id"]: r for r in _ledger(ws)}[alive]
+        assert row["ended_at"] is None, (
+            "a pulse that is still running has not ended", run.output)
+        assert row["outcome"] is None, run.output
+    finally:
+        holder.kill()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
