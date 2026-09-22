@@ -172,14 +172,21 @@ __INVENTORY__
 
 - Start from the work, not from a template. What must happen every week for
   this business to move? Those are your Operations.
-- Staff the smallest org that covers the work. Three to six Members. A firm
-  with a Member who has nothing to claim is a firm that wastes the Board's money.
+- Staff the full shape. Roles are free: a Member with no work assigned is
+  skipped by the pulse and costs nothing, while a missing role hides the real
+  shape and forces another Member to double up. Prefer specialists to
+  generalists. When a spec is given, every role in it becomes a Member: none
+  merged, none dropped.
 - Every Member owns an outcome, not a tool. "Grows the audience" is a role.
   "Uses Instagram" is not.
 - Name them like people, because the Board will talk to them like people.
   One word. Distinct. No cute AI puns, no "Bot", no "AI" in the name.
-- Give exactly one Member the lead. They report to the Board; everyone else
-  reports to them.
+- Give exactly one Member the lead; the lead reports to the Board. Every other
+  Member names who they report to (reports_to). Build a multi-level chart with
+  a span of control near four, five at most, never a flat one where everyone
+  reports to the lead. A checker never reports to the people or the work it
+  checks; it reports to the lead, outside the operation it checks. When a spec
+  names the chart, use it as written.
 - Be explicit about what needs a Gate. Anything published, anything spent,
   anything sent to another human. Default to gating; trust is earned later.
 - Staff the model like you staff the org. Every run bills the Board, and the
@@ -191,6 +198,17 @@ __INVENTORY__
   that, if true at the end of a quarter, means this firm worked. A firm with
   no number cannot fail — it can only be busy, which is worse. Give the Board
   a number to argue with, not prose to admire.
+
+- An Operation may carry its own goal as well, one level down from the firm's.
+  The firm still has exactly ONE north star; an Operation's goal is how that
+  department knows it is holding up its end. Give one only where there is a
+  real number to give.
+- Name the Board's own approvals once, at the firm level, in "gates". Those
+  ride on every Member's contract on top of whatever that Member needs
+  approval for. A Member's own "gates" are the ones specific to their work.
+- Give every Member the base domains their role owns, in "domains" — the
+  narrow subjects that Member reads and writes. A specialist with its own
+  domain retrieves a tighter context on every run than one sharing the firm's.
 
 ## Output
 
@@ -206,8 +224,13 @@ Return ONLY a JSON object, no prose before or after, no code fence:
     "metric_unit": "what the number counts, e.g. pages/week — '' if the target has no clean unit",
     "why": "One line: why THIS number proves the premise."
   }},
+  "gates": ["What the Board must approve before it happens — applies to every Member"],
   "operations": [
-    {{"name": "Department name", "purpose": "One line — what this department is accountable for."}}
+    {{
+      "name": "Department name",
+      "purpose": "One line — what this department is accountable for.",
+      "goal": {{"target": "This department's own measurable outcome — omit the whole key if there is no real number", "metric_value": 3, "metric_unit": "what the number counts", "why": "One line."}}
+    }}
   ],
   "members": [
     {{
@@ -216,6 +239,8 @@ Return ONLY a JSON object, no prose before or after, no code fence:
       "owns": "One sentence: the outcome they are accountable for.",
       "operation": "The name of the Operation they work in — must match one above exactly",
       "leads": true or false,
+      "reports_to": "The NAME of the Member they report to — must match one above exactly. null for the lead, who reports to the Board.",
+      "domains": ["the base domains this role owns, e.g. backend, design — [] if none obvious"],
       "model": "opus, sonnet, or haiku — the Claude tier this Member runs on (fable exists above opus; do not use it unless the Board asks)",
       "skills": ["skill or command names they'd carry — [] if none obvious"],
       "gates": ["what this Member must get Board approval for, in plain words"]
@@ -234,8 +259,10 @@ Return ONLY a JSON object, no prose before or after, no code fence:
   }}
 }}
 
-Exactly one Member has "leads": true. Every Member's "operation" matches an
-Operation name exactly. Every Member's "model" is one of opus, sonnet, haiku.
+Exactly one Member has "leads": true, and only the lead has "reports_to": null.
+Every other Member's "reports_to" names a Member above them in this same list,
+with no cycles. Every Member's "operation" matches an Operation name exactly.
+Every Member's "model" is one of opus, sonnet, haiku.
 Give two to four first_units — real work this firm could start on tonight,
 not setup chores.
 
