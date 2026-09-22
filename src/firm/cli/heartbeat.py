@@ -240,17 +240,18 @@ def run_enable(
     return 0
 
 
-def run_disable(firm_id: str | None = None, *, unit_dir: Path | None = None) -> int:
-    if not firm_id:
-        db = get_db_path(Path.cwd())
-        if db.exists():
-            conn = connect(db)
-            try:
-                firm_id = resolve_firm_id(conn)
-            except ValueError:
-                firm_id = None
-            finally:
-                conn.close()
+def run_disable(firm_id: str | None = None, *,
+                workspace: Path | None = None,
+                unit_dir: Path | None = None) -> int:
+    """Stop and remove a firm's heartbeat timer.
+
+    *workspace* names the firm the way ``enable`` does (#131): the three verbs
+    manage one timer and disagreed about how you say which one.
+    """
+    named = _firm_from(workspace, firm_id)
+    if isinstance(named, int):
+        return named
+    firm_id = named
     if not firm_id:
         _emit({"ok": False, "reason": "no firm id — pass --firm-id or run "
                                       "from a firm workspace"})
@@ -267,7 +268,70 @@ def run_disable(firm_id: str | None = None, *, unit_dir: Path | None = None) -> 
     # Never firm.schedule, which holds the firm's business hours (#134).
     ws_str = st.get("workdir")
 
-    sched.remove(stem)
+    # THE BACKEND CAN RAISE, AND ON WINDOWS IT ORDINARILY DOES (avocet's G2
+    # finding 1). `SystemdScheduler.remove` unlinks the unit files, and a file
+    # another process holds open cannot be deleted on Windows -- an editor, a
+    # backup agent, an antivirus scanner, a sync client. On Linux the same call
+    # raises on a read-only mount, an immutable attribute or directory
+    # permissions. Bare, it escaped through `main()`, which has no catch-all:
+    # traceback on stderr, STDOUT EMPTY, exit 1. That broke the contract this
+    # file exists to hold (one JSON object on every exit of every verb) and
+    # never reached condition 2 below, because the raise happens INSIDE
+    # `remove()`, before the re-query.
+    #
+    # THE BOUNDARY, stated where the code is: `remove()` unlinks `.timer` then
+    # `.service`, so a raise part-way through can leave a HALF-REMOVED unit.
+    # This verb reports the raise and repairs nothing. Repairing a half-removed
+    # unit belongs to the backend or to the doctor, not to a verb whose one job
+    # is to say what happened.
+    #
+    # It takes condition 2's branch for the same reason condition 2 exists: the
+    # state is partial or unknown, so clearing `firm.pulse_interval` or
+    # finalizing the runs would be a claim this verb cannot support. And it does
+    # NOT re-query here -- `status` is the verb for asking, and a second
+    # unguarded backend call inside a handler is this same defect one line over.
+    try:
+        answer = sched.remove(stem)
+    except Exception as exc:
+        _emit({"ok": False, "reason": "remove-raised", "firm_id": firm_id,
+               "error": {"type": type(exc).__name__, "message": str(exc)},
+               "schedule_recorded": False,
+               "cleanup": {"lock": "not-attempted",
+                           "reason": "the removal raised, so what the timer is "
+                                     "doing is unknown and the lock may still "
+                                     "be its pulse's"}})
+        return 1
+
+    # PROVED, NOT TRUSTED (#131). This used to be `sched.remove(stem)` with the
+    # answer discarded and `ok: true` printed regardless, so a removal that
+    # failed reported success and the timer kept firing.
+    #
+    # The proof is the scheduler's own query, not `remove()`'s list. On Windows
+    # that list collects leftover files -- the stub, the spec, the log, a
+    # pre-#119 .cmd, the containment file -- beside the task name, so a
+    # non-empty list can mean "I deleted a stale log and nothing else". On
+    # systemd and launchd it names unit FILES that existed, which is a
+    # filesystem fact rather than a scheduler one.
+    #
+    # WHAT `installed` MEANS DIFFERS BY BACKEND, and this is the honest
+    # sentence for it (osprey's Q5): on Windows it is `schtasks /Query`, a real
+    # question put to the scheduler; on systemd and launchd it is whether the
+    # unit definition still exists after reload, which is the strongest
+    # question those platforms answer. Teaching them a real query is not this
+    # change.
+    if sched.status(stem).get("installed"):
+        # NOTHING ELSE CHANGES (osprey's condition 2). The timer still fires,
+        # so `firm.pulse_interval` is still true and the lock is still that
+        # pulse's: clearing the interval would leave the row lying about a
+        # cadence that is still running, and finalizing the runs would close
+        # rows belonging to a pulse nobody stopped.
+        _emit({"ok": False, "reason": "not-removed", "firm_id": firm_id,
+               "scheduler_removed": answer,
+               "schedule_recorded": False,
+               "cleanup": {"lock": "not-attempted",
+                           "reason": "the timer is still installed, so the "
+                                     "lock is still its pulse's"}})
+        return 1
 
     schedule_recorded = False
     if ws_str:
@@ -309,7 +373,12 @@ def run_disable(firm_id: str | None = None, *, unit_dir: Path | None = None) -> 
                                        by="heartbeat disable",
                                        wait_seconds=5.0)
 
+    # `removed` is the unit this verb set out to remove and keeps its meaning
+    # for existing readers. `scheduler_removed` is what the backend itself said
+    # it removed -- reported for the record, never what the exit code rests on.
+    # Two different claims, so two keys.
     _emit({"ok": True, "firm_id": firm_id, "removed": f"{stem}.timer",
+           "scheduler_removed": answer,
            "schedule_recorded": schedule_recorded,
            "cleanup": cleanup})
     return 0
@@ -376,11 +445,77 @@ def _last_pulse(workspace: Path, firm_id: str) -> tuple[str | None, str | None]:
     return started, reason
 
 
-def run_status(*, unit_dir: Path | None = None) -> int:
+def _firm_from(workspace: Path | None, firm_id: str | None):
+    """The firm these verbs are being pointed at, or an exit code with its
+    JSON already printed.
+
+    A NAMED workspace with no database is a failure, not a quiet fall-through
+    to the current directory (#131, osprey's condition 3): an operator who
+    typed a path meant that path, and a verb that silently acted on a
+    different firm is the defect this whole issue is about. The words are
+    ``run_pulse``'s for the same missing database, so the verbs and the pulse
+    say one thing.
+    """
+    if workspace is not None:
+        db = get_db_path(workspace)
+        if not db_is_remote() and not db.exists():
+            _emit({"ok": False, "reason": "db-not-found",
+                   "workspace": str(workspace)})
+            return 1
+    if firm_id:
+        return firm_id
+    db = get_db_path(workspace if workspace is not None else Path.cwd())
+    if db_is_remote() or db.exists():
+        conn = connect(db)
+        try:
+            return resolve_firm_id(conn)
+        except ValueError:
+            return None
+        finally:
+            conn.close()
+    return None
+
+
+def run_status(*, unit_dir: Path | None = None,
+               workspace: Path | None = None,
+               firm_id: str | None = None) -> int:
+    """List installed heartbeat timers.
+
+    With NEITHER *workspace* nor *firm_id*, every installed heartbeat is
+    listed -- that is what this verb is for. With either, the answer is about
+    one firm, and a firm with no timer installed is ``ok: true`` with an empty
+    list beside its id: the query ran and found none, which is an answer and
+    not a failure (law 7).
+    """
+    wanted: str | None = None
+    if workspace is not None or firm_id is not None:
+        named = _firm_from(workspace, firm_id)
+        if isinstance(named, int):
+            return named
+        if named is None:
+            # A FLAG WAS GIVEN AND NOTHING RESOLVED, which is not the same as
+            # no flag at all. `wanted = None` would fall through to listing
+            # every installed heartbeat, and an operator who named a workspace
+            # would read someone else's timers as the answer to their question
+            # -- the silent fall-through condition 3 forbids, one branch over.
+            # `disable` already fails here because it needs the id to build a
+            # stem; `status` did not, because a None filter reads as no filter.
+            # The word is the pulse's for the same failure (`cli/pulse.py`).
+            payload: dict = {"ok": False, "reason": "firm-id-unresolved"}
+            if workspace is not None:
+                payload["workspace"] = str(workspace)
+            if firm_id is not None:
+                payload["firm_id"] = firm_id
+            _emit(payload)
+            return 1
+        wanted = named
+
     sched = _sched(unit_dir)
     entries = []
     for stem in sched.list_installed(_UNIT_PREFIX):
         firm_id = stem[len(_UNIT_PREFIX):]
+        if wanted is not None and firm_id != wanted:
+            continue
         st = sched.status(stem)
         entry: dict = {"firm_id": firm_id, "timer": stem,
                        "state": st.get("state", "unknown"),
@@ -427,5 +562,12 @@ def run_status(*, unit_dir: Path | None = None) -> int:
     # them is edited, and then nobody notices.
     from firm.identity import installed_identity
 
-    _emit({"ok": True, "cadre": installed_identity(), "heartbeats": entries})
+    payload: dict = {"ok": True, "cadre": installed_identity(),
+                     "heartbeats": entries}
+    if wanted is not None:
+        # Named beside the list, so an empty answer says WHAT it is empty
+        # about. Without it, "no timers" and "no timers for this firm" print
+        # the same thing.
+        payload["firm_id"] = wanted
+    _emit(payload)
     return 0

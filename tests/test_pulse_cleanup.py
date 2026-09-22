@@ -268,7 +268,11 @@ def test_l5_heartbeat_disable_cleans_up_after_the_task_it_removed(
             self.removed: list[str] = []
 
         def status(self, stem):
-            return {"installed": True, "state": "ready", "workdir": str(ws)}
+            # D3 asks the scheduler AGAIN after remove(), so a fake that
+            # answers "installed" forever reports a removal that did not
+            # happen. This models the half it always claimed to.
+            return {"installed": stem not in self.removed,
+                    "state": "ready", "workdir": str(ws)}
 
         def remove(self, stem):
             self.removed.append(stem)
@@ -574,10 +578,18 @@ def test_l6_both_verbs_finalize_through_the_same_function(
     class _Sched:
         name = "systemd"
 
+        def __init__(self) -> None:
+            self.gone: set[str] = set()
+
         def status(self, stem):
-            return {"installed": True, "state": "active", "workdir": str(ws)}
+            # D3 asks the scheduler AGAIN after remove(), so a fake that
+            # answers "installed" forever reports a removal that did not
+            # happen. This models the half it always claimed to.
+            return {"installed": stem not in self.gone,
+                    "state": "active", "workdir": str(ws)}
 
         def remove(self, stem):
+            self.gone.add(stem)
             return {"removed": [stem]}
 
     monkeypatch.setattr(cli_heartbeat, "_sched", lambda unit_dir=None: _Sched())
@@ -678,10 +690,18 @@ def test_l7_heartbeat_disable_carries_the_unclosed_row_to_the_operator(
     class _Sched:
         name = "systemd"
 
+        def __init__(self) -> None:
+            self.gone: set[str] = set()
+
         def status(self, stem):
-            return {"installed": True, "state": "active", "workdir": str(ws)}
+            # D3 asks the scheduler AGAIN after remove(), so a fake that
+            # answers "installed" forever reports a removal that did not
+            # happen. This models the half it always claimed to.
+            return {"installed": stem not in self.gone,
+                    "state": "active", "workdir": str(ws)}
 
         def remove(self, stem):
+            self.gone.add(stem)
             return {"removed": [stem]}
 
     monkeypatch.setattr(cli_heartbeat, "_sched", lambda unit_dir=None: _Sched())

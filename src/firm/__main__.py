@@ -19,6 +19,38 @@ import os
 import sys
 from pathlib import Path
 
+class _JsonUsageParser(argparse.ArgumentParser):
+    """An argparse parser whose usage errors are one JSON object on STDOUT.
+
+    Used for `cadre heartbeat ...` only (#131). Every heartbeat verb prints one
+    pretty-printed object through `cli/heartbeat.py::_emit` -- except when
+    argparse rejected the arguments, which put usage on stderr and left stdout
+    EMPTY. A caller that parses stdout got nothing and could not tell a usage
+    error from a crash; `dashboard/founding.py::set_pulse` already depends on
+    exactly one object coming back.
+
+    IT HAS TO REACH EVERY LEVEL. The five argument-error shapes are raised by
+    three different parsers -- the top level, the heartbeat parser, and a verb
+    subparser -- and which one raises a given shape MOVES as flags are added
+    (measured: `heartbeat status --nope` reached the top level only while
+    `status` had no arguments of its own). An override on one level would pass
+    some shapes and fail others, which is the false PASS this shape exists to
+    prevent. `argparse.add_subparsers` defaults `parser_class` to `type(self)`,
+    so making the TOP parser this class carries it to every subparser
+    underneath, and the mutation that breaks that is worth keeping (Q10).
+
+    `parser` names the level that raised it, so a reader -- and a leg -- can
+    tell which one did, rather than matching substrings in a usage blob.
+    `message` is argparse's OWN words: one source for the wording, and it names
+    the offending flag.
+    """
+
+    def error(self, message: str) -> None:      # type: ignore[override]
+        print(json.dumps({"ok": False, "reason": "usage",
+                          "parser": self.prog, "message": message}, indent=2))
+        raise SystemExit(2)
+
+
 class _VersionOnRequest(argparse._VersionAction):
     """``--version``, resolved only when the flag is given.
 
@@ -68,7 +100,7 @@ def _force_utf8_streams() -> None:
             pass  # already wrapped, or not a real stream
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser(json_usage: bool = False) -> argparse.ArgumentParser:
     # Imported here rather than at module scope, the way this file reaches for
     # everything else it needs: the source labels come from the ledger so the
     # parser and the column cannot hold two different lists.
@@ -77,7 +109,11 @@ def _build_parser() -> argparse.ArgumentParser:
     prog_name = Path(sys.argv[0]).name if sys.argv and sys.argv[0] else "cadre"
     if prog_name.endswith(".py"):
         prog_name = "cadre"
-    parser = argparse.ArgumentParser(
+    # One class for the whole tree, because `add_subparsers` defaults
+    # `parser_class` to `type(self)`: set it here and every level below
+    # inherits it, which is what condition 1 asks for.
+    parser_class = _JsonUsageParser if json_usage else argparse.ArgumentParser
+    parser = parser_class(
         prog=prog_name,
         description="Cadre — Coordinated Agent Deployment Runtime Engine. Orchestrates a Firm of AI Members.",
     )
@@ -788,7 +824,13 @@ def _build_parser() -> argparse.ArgumentParser:
              "scheduler: systemd user timers on Linux/WSL2, launchd on "
              "macOS, Task Scheduler on Windows.",
     )
-    heartbeat_sub = heartbeat_parser.add_subparsers(dest="heartbeat_command")
+    # required=True so ARGPARSE raises for a bare `heartbeat` and the words are
+    # its own, rather than this file inventing a message for the one shape
+    # argparse would otherwise let through. Bare `heartbeat` used to print help
+    # and exit 0, which tells a calling script it worked -- for example one
+    # whose verb variable came out empty (osprey's verdict item 6).
+    heartbeat_sub = heartbeat_parser.add_subparsers(dest="heartbeat_command",
+                                                    required=True)
 
     hb_enable = heartbeat_sub.add_parser(
         "enable", help="Install and start the heartbeat timer for a firm.",
@@ -810,13 +852,33 @@ def _build_parser() -> argparse.ArgumentParser:
     hb_disable = heartbeat_sub.add_parser(
         "disable", help="Stop and remove the heartbeat timer for a firm.",
     )
+    # --workspace with enable's meaning (#131). The three verbs manage one
+    # timer and disagreed about how you name the firm it belongs to, and the
+    # failure was silent: `disable --workspace /some/firm` was an
+    # `unrecognized arguments` error from the TOP-LEVEL parser, exit 2,
+    # nothing on stdout, and the timer kept firing.
+    hb_disable.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db (defaults to current directory).",
+    )
     hb_disable.add_argument(
         "--firm-id", dest="firm_id", default=None,
         help="Firm scope. Defaults to the firm this workspace's db holds.",
     )
 
-    heartbeat_sub.add_parser(
+    hb_status = heartbeat_sub.add_parser(
         "status", help="List installed heartbeat timers with liveness and last pulse.",
+    )
+    # With NEITHER flag `status` keeps listing every installed heartbeat --
+    # that is what the verb is for. Either one narrows it to a single firm.
+    hb_status.add_argument(
+        "--workspace", type=Path, default=None,
+        help="Workspace containing .firm/firm.db. With no flags, every "
+             "installed heartbeat is listed.",
+    )
+    hb_status.add_argument(
+        "--firm-id", dest="firm_id", default=None,
+        help="Firm scope. With no flags, every installed heartbeat is listed.",
     )
 
     # ---- rail subparsers (Cadre OS addons — lazy delegates) ----
@@ -1120,7 +1182,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     _force_utf8_streams()
-    parser = _build_parser()
+    # The JSON usage contract is heartbeat's alone: every other command keeps
+    # argparse's usage on stderr with stdout empty, which is what every other
+    # caller of this CLI already expects. Read before the parse, because the
+    # parse is the thing being changed.
+    raw = sys.argv[1:] if argv is None else argv
+    parser = _build_parser(json_usage=bool(raw) and raw[0] == "heartbeat")
     args = parser.parse_args(argv)
 
     if args.command == "init":
@@ -1463,13 +1530,16 @@ def main(argv: list[str] | None = None) -> int:
             from firm.cli.heartbeat import run_disable
 
             firm_id = args.firm_id or None
-            return run_disable(firm_id)
+            return run_disable(firm_id, workspace=args.workspace)
         if args.heartbeat_command == "status":
             from firm.cli.heartbeat import run_status
 
-            return run_status()
-        parser.parse_args(["heartbeat", "--help"])
-        return 0
+            return run_status(workspace=args.workspace,
+                              firm_id=args.firm_id or None)
+        # No fallback here any more: `heartbeat_sub` is required, so argparse
+        # has already refused a bare `heartbeat` before this line can run. The
+        # fallback that used to sit here printed help and exited 0.
+        raise AssertionError("unreachable: the heartbeat verb is required")
 
     if args.command == "slack":
         try:
