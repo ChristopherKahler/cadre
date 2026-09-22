@@ -23,12 +23,86 @@ from firm.core import repo
 from firm.core.db import connect, get_db_path
 
 _FIRM_ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,31}$")
-
-
 _MODEL_TIERS = ("fable", "opus", "sonnet", "haiku")
-
-
 _DEFAULT_MODEL = "sonnet"
+
+
+def _resolve_chart(members: list[dict[str, Any]],
+                   lead_name: str) -> list[dict[str, Any]]:
+    """#135. Settle every member's `reports_to` and return the HIRE ORDER.
+
+    Depth order, not a second pass. `create_member` validates the foreign key
+    it is given (`services/member.py`, `validate_fk(conn, "member",
+    data.get("reports_to_member_id"))`), so hiring a member only after their
+    parent exists keeps that check meaningful. The alternative — hire flat and
+    then `repo.update` the parents in — writes the tree through a path that
+    validates nothing.
+
+    Cycle detection is the same walk: a member the walk never reaches has no
+    path to the lead, which is what a cycle IS here. One algorithm, not two.
+
+    The rules, in the order they are applied:
+
+      * the lead reports to the Board, so a lead naming anyone is refused
+        rather than quietly ignored;
+      * an absent or null `reports_to` means the lead, which is exactly what
+        every firm founded before #135 has and is what makes an old-shape
+        proposal found today's firm;
+      * a name nobody on the roster carries, a member naming itself, and a
+        cycle are each refused, naming the member and the value.
+    """
+    by_name = {m["name"]: m for m in members}
+    for m in members:
+        target = str(m.get("reports_to") or "").strip()
+        if m["name"] == lead_name:
+            if target:
+                raise ValueError(
+                    f"the lead {m['name']!r} reports to the Board, not to "
+                    f"{target!r} — remove reports_to from the lead")
+            m["reports_to"] = None
+            continue
+        if not target:
+            m["reports_to"] = lead_name
+            continue
+        if target == m["name"]:
+            raise ValueError(f"member {m['name']!r} reports to itself")
+        if target not in by_name:
+            raise ValueError(
+                f"member {m['name']!r} reports to {target!r}, who is not on "
+                f"this roster")
+        m["reports_to"] = target
+
+    order: list[dict[str, Any]] = []
+    placed: set[str] = set()
+    frontier = [m for m in members if m["reports_to"] is None]
+    while frontier:
+        order.extend(frontier)
+        placed.update(m["name"] for m in frontier)
+        frontier = [m for m in members
+                    if m["name"] not in placed and m["reports_to"] in placed]
+    if len(order) != len(members):
+        stuck = sorted(m["name"] for m in members if m["name"] not in placed)
+        raise ValueError(
+            f"reports_to makes a cycle: {', '.join(stuck)} report to each "
+            f"other and never reach the lead")
+    return order
+
+
+def _goal_shape(raw: Any) -> dict[str, Any] | None:
+    """#135. The north star's shape, reused for an operation's own goal.
+
+    One function for both so the two can never disagree about what a goal
+    looks like — the same reason `_one_spelling` exists one module over.
+    """
+    if not isinstance(raw, dict) or not str(raw.get("target") or "").strip():
+        return None
+    value = raw.get("metric_value")
+    return {
+        "target": str(raw["target"]).strip()[:300],
+        "metric_value": value if isinstance(value, (int, float)) else None,
+        "metric_unit": str(raw.get("metric_unit") or "").strip()[:60],
+        "why": str(raw.get("why") or "").strip()[:300],
+    }
 
 
 def _validate(proposal: dict[str, Any],
@@ -42,6 +116,13 @@ def _validate(proposal: dict[str, Any],
     *inv* is the arsenal index the prompt was built from; loadout picks that
     don't resolve against it are dropped — the Board never reviews a ghost.
     With inv=None (commit-time revalidation) the loadout passes through as-is.
+
+    #135 ADDED four keys and two refusals. The keys — `members[].reports_to`,
+    `members[].domains`, `operations[].goal` and a firm-level `gates` — are
+    each absent-means-today's-firm, so a proposal written before they existed
+    founds exactly the firm it founded before. The refusals are the price of
+    naming people by name: duplicate member names become ambiguous the moment
+    one member can point at another, and a chart can be cyclic.
     """
     def _loadout(kind: str) -> list[dict[str, str]]:
         seen: set[str] = set()
@@ -61,7 +142,11 @@ def _validate(proposal: dict[str, Any],
         raise ValueError(f"invalid firm_id {fid!r}")
 
     ops = [
-        {"name": str(o["name"]).strip(), "purpose": str(o.get("purpose") or "").strip()}
+        {"name": str(o["name"]).strip(),
+         "purpose": str(o.get("purpose") or "").strip(),
+         # #135: an operation may carry its own measurable outcome. Absent
+         # means the operation simply has no goal, which is today's firm.
+         "goal": _goal_shape(o.get("goal"))}
         for o in proposal.get("operations") or []
         if isinstance(o, dict) and o.get("name")
     ]
@@ -96,9 +181,28 @@ def _validate(proposal: dict[str, Any],
             "skills": [str(s) for s in (m.get("skills") or [])
                        if s and (allowed is None or str(s) in allowed)],
             "gates": [str(g) for g in (m.get("gates") or []) if g],
+            # #135: kept raw here and settled by `_resolve_chart` below, once
+            # the lead is known — the default is "reports to the lead" and
+            # the lead is not decided until the coercion a few lines down.
+            "reports_to": m.get("reports_to"),
+            # #135: the base domains this role owns, straight to
+            # `create_member`'s `suggested_domains`. Absent is an empty list.
+            "domains": [str(d).strip() for d in (m.get("domains") or [])
+                        if str(d).strip()],
         })
     if not members:
         raise ValueError("proposal has no members")
+
+    # #135. NAMES MUST BE UNIQUE, because `reports_to` names people. Before
+    # this key a duplicate name cost one row in `commit`'s `by_name` map and
+    # nothing else; now it makes "reports to Sam" ambiguous, and an ambiguous
+    # chart resolved by dict order is worse than a refusal.
+    names = [m["name"] for m in members]
+    duplicated = sorted({n for n in names if names.count(n) > 1})
+    if duplicated:
+        raise ValueError(
+            f"two members share the name {duplicated[0]!r}; reports_to names "
+            f"people, so every member needs their own name")
 
     leads = [m for m in members if m["leads"]]
     if len(leads) != 1:  # the agent gets this wrong occasionally; the org can't be headless
@@ -106,26 +210,25 @@ def _validate(proposal: dict[str, Any],
             m["leads"] = False
         members[0]["leads"] = True
 
+    # #135. Settle the chart and hire in depth order.
+    members = _resolve_chart(members, next(m["name"] for m in members
+                                           if m["leads"]))
+
     # The firm's ONE goal. Coerced to shape here, REQUIRED at commit — a firm
     # with no number cannot fail, only be busy, and the Board must see and
     # own the number before the hire. None (agent omitted it) is survivable
     # on the roster screen, where the Board writes one; not past it.
-    ns = proposal.get("north_star")
-    north_star = None
-    if isinstance(ns, dict) and str(ns.get("target") or "").strip():
-        mv = ns.get("metric_value")
-        north_star = {
-            "target": str(ns["target"]).strip()[:300],
-            "metric_value": mv if isinstance(mv, (int, float)) else None,
-            "metric_unit": str(ns.get("metric_unit") or "").strip()[:60],
-            "why": str(ns.get("why") or "").strip()[:300],
-        }
+    north_star = _goal_shape(proposal.get("north_star"))
 
     return {
         "firm_id": fid,
         "name": str(proposal.get("name") or fid).strip(),
         "premise": str(proposal.get("premise") or "").strip(),
         "north_star": north_star,
+        # #135: the Board's own approvals, applied to every contract at
+        # commit. Absent is none, which is today's firm.
+        "gates": [str(g).strip() for g in (proposal.get("gates") or [])
+                  if str(g).strip()],
         "operations": ops,
         "members": members,
         "loadout": {"mcp": _loadout("mcp"), "skills": _loadout("skills"),
@@ -149,7 +252,7 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
     Everything before this point was a conversation. This is the moment the
     firm exists. Routed through the same ``run_init`` + service layer a
     hand-seeded firm uses, so nothing about this firm's Records betrays that
-    it was born in a browser.
+    it was born in a browser — or, since #135, at a terminal.
     """
     from firm.cli.init import run_init
     from firm.services import contract as contract_svc
@@ -212,37 +315,57 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
             "north_star": ns["target"],
         })
 
+        from firm.services import goal as goal_svc
+
+        def _write_goal(target_shape: dict[str, Any], *, level: str,
+                        parent_type: str, parent_id: str) -> None:
+            """#135. One writer for the firm's goal and an operation's.
+
+            Two call sites building the same row two ways is how a metric
+            ends up on one level and not the other; `_goal_shape` already
+            made the two shapes one, and this keeps the write one too.
+            """
+            metric: dict[str, Any] = {}
+            if target_shape.get("metric_value") is not None:
+                metric["value"] = target_shape["metric_value"]
+            if target_shape.get("metric_unit"):
+                metric["unit"] = target_shape["metric_unit"]
+            goal_svc.create_goal(conn, fid, {
+                "target": target_shape["target"],
+                "parent_entity_type": parent_type,
+                "parent_entity_id": parent_id,
+                "level": level,
+                **({"metric": metric} if metric else {}),
+            })
+
         # The number, as a Goal row — the denominator every drift verdict,
         # brief, and goal-health banner divides by. Board-authored: the Board
         # read and could edit it on the roster screen, so committing IS the
         # approval. Members propose theirs later via `firm goal propose`.
-        from firm.services import goal as goal_svc
-        metric: dict[str, Any] = {}
-        if ns.get("metric_value") is not None:
-            metric["value"] = ns["metric_value"]
-        if ns.get("metric_unit"):
-            metric["unit"] = ns["metric_unit"]
-        goal_svc.create_goal(conn, fid, {
-            "target": ns["target"],
-            "parent_entity_type": "firm",
-            "parent_entity_id": fid,
-            "level": "firm",
-            **({"metric": metric} if metric else {}),
-        })
+        _write_goal(ns, level="firm", parent_type="firm", parent_id=fid)
+
+        # #135: the Board's own approvals ride on every contract, unioned
+        # with the member's own rather than replacing them. `sorted` so two
+        # firms founded from one proposal hold the list in one order.
+        firm_gates = set(proposal.get("gates") or [])
 
         # Members before Operations: an Operation names its owner, not the reverse.
-        # Lead first — everyone else reports to them, so they must exist to be pointed at.
-        lead_id: str | None = None
+        # #135: the roster arrives in DEPTH order from `_resolve_chart`, so a
+        # member's parent is always already hired and `create_member`'s own
+        # foreign-key check is doing real work. The lead is first by
+        # construction, since the lead is the only member with no parent.
         by_name: dict[str, str] = {}
+        lead_id: str | None = None
         hired: list[dict[str, Any]] = []
-        for m in sorted(proposal["members"], key=lambda m: not m["leads"]):
+        for m in proposal["members"]:
             con = contract_svc.create_contract(conn, fid, {
                 "name": f"{m['name']} — {m['role']}",
                 "runtime_type": "claude_code",
                 "skill_loadout": {"skills": m["skills"]},
                 # Trust is earned. A new hire's gates are declared up front and
                 # relaxed later — this list is what the Board must sign off on.
-                "validation_config": {"gates_required": m["gates"]},
+                "validation_config": {
+                    "gates_required": sorted(firm_gates | set(m["gates"]))},
                 # Generous on purpose: the orchestrator's 300s fallback kills a
                 # first real run mid-work, and a founded firm's first
                 # experience must never be a timeout to troubleshoot. The
@@ -259,7 +382,23 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
                 "description": m["owns"],
                 "contract_id": con["id"],
                 "suggested_skills": m["skills"],
-                "reports_to_member_id": None if m["leads"] else lead_id,
+                # #135: the role's own base domains. The firm's domain block
+                # is still derived from the whole roster by
+                # `base_domain.sync`; this is the per-role list the operator's
+                # spec documents carry and the column has always had.
+                #
+                # OMITTED WHEN EMPTY, and that is not tidiness. Measured
+                # before the branch existed: passing `[]` writes an empty
+                # list where today's code leaves the column NULL, so an
+                # old-shape proposal would found a firm that differs from
+                # today's by one column on every member. R17 says "exactly
+                # the firm it founds today, row for row", and a leg that
+                # needs a tolerant helper to read past that difference is a
+                # leg with a hole in it. `create_member` only writes the
+                # fields it is given.
+                **({"suggested_domains": m["domains"]} if m["domains"] else {}),
+                "reports_to_member_id": (None if m["reports_to"] is None
+                                         else by_name[m["reports_to"]]),
             }, cwd=str(workspace))
             repo.update(conn, "contract", con["id"], {"member_id": mem["id"]})
             if m["leads"]:
@@ -280,6 +419,12 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
                 "description": op["purpose"],
                 "owner_member_id": by_name.get(owner["name"]) if owner else None,
             })
+            # #135: an operation's own measurable outcome, at its own level.
+            # `00-Firm-Design-Methodology.md` §3.9 asks for a goal per level;
+            # before this a firm could only hold one.
+            if op.get("goal"):
+                _write_goal(op["goal"], level="operation",
+                            parent_type="operation", parent_id=op_row["id"])
             if first_op_id is None:
                 first_op_id = op_row["id"]
 
