@@ -750,11 +750,11 @@ def test_c1_a_timer_pulse_member_runs_this_installs_firm(tmp_path, capsys):
     PATH in its spec. The pulse's result line lands in the launcher's log.
     """
     from firm.sched.base import run_cmd
-    from firm.sched.winsched import WinSched
+    from firm.sched.winsched import WindowsScheduler
 
     live = _live166(tmp_path, "c1166")
     # A short directory on purpose: the task command must fit schtasks' limit.
-    sched = WinSched(launcher_dir=Path(tempfile.mkdtemp(prefix="c166")))
+    sched = WindowsScheduler(launcher_dir=Path(tempfile.mkdtemp(prefix="c166")))
     stem = f"cadre-live166-{int(time.time())}"
     try:
         sched.install_timer(
