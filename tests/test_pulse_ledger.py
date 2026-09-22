@@ -739,6 +739,57 @@ def test_L15_control_a_drain_that_ran_no_cycle_claims_no_counts(tmp_path):
     assert (row["ran"], row["errors"], row["skipped"]) == (None, None, None), row
 
 
+@spawn_layer_rejects_this_platforms_binaries
+def test_L15_control_a_drain_whose_request_never_reached_a_cycle(
+        tmp_path, capsys, monkeypatch):
+    """The branch the empty-queue control cannot reach (#159, avocet's N5).
+
+    The other control drains an EMPTY queue, so `results` is empty and the
+    counts are absent for a second reason: there is nothing to sum. This is the
+    case the code is really about -- `results` NOT empty, and no entry in it
+    carrying a cycle -- and avocet measured that forcing the counts to zero
+    there reddened no leg in any of the three files.
+
+    IN-PROCESS, and here is why. The state needs a request that gives up
+    waiting for the pulse lock, and the wait is `_QUEUE_LOCK_WAIT_SEC` = 1800
+    seconds at `_QUEUE_RETRY_SEC` = 10. A child-process leg would either wait
+    half an hour or need those two constants changed on disk. They are patched
+    here instead, and nothing else about the path is faked: the lock is really
+    held, the drain really claims the request, really waits, and really
+    abandons it.
+
+    The lock is held from ANOTHER host with a fresh heartbeat, so it cannot be
+    stolen as stale and the drain cannot take it however long it waits.
+    """
+    ws = _firm(tmp_path / "ws")
+    conn = connect(ws / ".firm" / "firm.db")
+    try:
+        pulse_queue.request_pulse(conn, FIRM, requested_by="board")
+        conn.commit()
+    finally:
+        conn.close()
+    _hold_lock(ws, "other-host-159:1:helditself")
+    monkeypatch.setattr(pulse_cli, "_QUEUE_LOCK_WAIT_SEC", 1)
+    monkeypatch.setattr(pulse_cli, "_QUEUE_RETRY_SEC", 0)
+    monkeypatch.setenv("CADRE_CLAUDE_BIN", sys.executable)
+
+    rc = pulse_cli.run_pulse(ws, drain_queue=True)
+
+    result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert result["drained"] == 1, result
+    assert result["results"][0]["reason"] == "lock-wait-timeout", (
+        "the leg is provably on the branch it claims, and not on the "
+        "empty-queue one", result)
+    assert rc == 1, result
+    for key in ("ran", "errors", "skipped"):
+        assert key not in result, (
+            "no cycle ran, so a zero here would claim one ran and found "
+            "nothing", key, result)
+    row = _one_row(ws)
+    assert (row["ran"], row["errors"], row["skipped"]) == (None, None, None), row
+    assert row["source"] == "queue", row
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # L16 · a row held by a pulse that is STILL RUNNING is left open
 # ═══════════════════════════════════════════════════════════════════════════
