@@ -2267,6 +2267,10 @@ function candidateRow(m, i){
         ${modelPick(m, i)}
       </div>
       <div class="owns">${esc(m.owns)}</div>
+      ${(m.reports_to || (m.domains || []).length) ? `<div class="needs">
+        ${m.reports_to ? `<span class="chip">Reports to ${esc(m.reports_to)}</span>` : ''}
+        ${(m.domains || []).map(d => `<span class="chip">${esc(d)}</span>`).join('')}
+      </div>` : ''}
       ${gates.length ? `<div class="needs">
         ${gates.map(g => `<span class="chip gate">Asks you: ${esc(g)}</span>`).join('')}
         ${(m.skills || []).slice(0, 3).map(s => `<span class="chip">${esc(s)}</span>`).join('')}
@@ -2438,6 +2442,7 @@ function viewRoster(){
       <div class="dept-name">
         <h3>${esc(op.name)}</h3>
         <span class="purpose">${esc(op.purpose)}</span>
+        ${op.goal && op.goal.target ? `<span class="purpose">Goal: ${esc(op.goal.target)}</span>` : ''}
       </div>
       <div class="candidates">${crew.map(({m, i}) => candidateRow(m, i)).join('')}</div>
     </div>`;

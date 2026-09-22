@@ -14,6 +14,7 @@ stays `firm`; `cadre` is the public-facing distribution/command name.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -86,7 +87,34 @@ def _build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument(
         "workspace",
         type=Path,
-        help="Path to the workspace where .firm/ will be created.",
+        # Optional, because `--proposal-template` prints a schema and has no
+        # directory to print it about. argparse refuses the command before
+        # any code of ours runs otherwise.
+        nargs="?",
+        default=None,
+        help="Path to the workspace where .firm/ will be created, or the "
+             "firms ROOT when founding with --proposal.",
+    )
+    init_parser.add_argument(
+        "--proposal",
+        type=Path,
+        metavar="FILE",
+        help="Found a complete firm from a proposal file, at "
+             "<root>/<firm_id>. See --proposal-template for the shape.",
+    )
+    init_parser.add_argument(
+        "--brief",
+        type=Path,
+        metavar="FILE",
+        help="Found a complete firm from a written spec, by running the "
+             "founding agent on it.",
+    )
+    init_parser.add_argument(
+        "--proposal-template",
+        dest="proposal_template",
+        action="store_true",
+        help="Print the proposal schema, with every key and what happens to "
+             "it, and exit.",
     )
     init_parser.add_argument(
         "--force",
@@ -1072,14 +1100,54 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "init":
-        from firm.cli.init import run_init
+        from firm.cli.init import run_brief, run_found, run_init
 
-        return run_init(
+        if args.proposal_template:
+            # The JSON goes to stdout and the legend to stderr, so
+            # `cadre init --proposal-template > firm.json` leaves a file that
+            # parses while a session reading the terminal still sees what
+            # every key does.
+            from firm.services.founding import proposal_template
+
+            body, legend = proposal_template()
+            sys.stdout.write(body)
+            sys.stderr.write(legend)
+            return 0
+        if args.proposal and args.brief:
+            print(json.dumps({"ok": False, "error":
+                              "--proposal and --brief are two doors onto the "
+                              "same path; pass one"}))
+            return 1
+        if args.workspace is None:
+            print(json.dumps({"ok": False, "error":
+                              "cadre init needs a directory: the workspace to "
+                              "initialize, or the firms root to found into"}))
+            return 1
+        if args.proposal:
+            return run_found(args.workspace, args.proposal)
+        if args.brief:
+            return run_brief(args.workspace, args.brief)
+
+        rc = run_init(
             args.workspace,
             force=args.force,
             demo=args.demo,
             install_hooks_flag=args.install_hooks_flag,
         )
+        # THE SENTENCE #135 EXISTS BECAUSE OF. A bare `cadre init` makes a
+        # workspace and nothing else: no roster, no goal, no Cadre extension
+        # in the firm's tier. It used to say nothing about that, so a session
+        # that ran it believed it had founded a firm. Printed here rather
+        # than inside `run_init`, because `commit` calls `run_init` too and
+        # that firm IS being founded.
+        if rc == 0:
+            print("\nThis is a workspace. A firm is not founded here: no "
+                  "roster, no goal, no Cadre extension in its own tier.")
+            print("  cadre init --proposal-template      the proposal schema")
+            print("  cadre init <root> --proposal <file> found a whole firm")
+            print("  cadre init <root> --brief <spec.md> found one from a "
+                  "written spec")
+        return rc
 
     if args.command == "brief":
         from firm.services.brief import run_brief
