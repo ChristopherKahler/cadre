@@ -483,13 +483,42 @@ def test_r12_the_re_export_binds_the_names_into_the_dashboard_module(
             f"dashboard.{name} is not the same object as services.{name}, so "
             f"the two doors are two paths again")
 
-    spy = object()
-    monkeypatch.setattr(dash, "_validate", spy)
-    assert dash._run_founding.__globals__["_validate"] is spy, (
+    sentinel = object()
+    monkeypatch.setattr(dash, "_validate", sentinel)
+    assert dash._run_founding.__globals__["_validate"] is sentinel, (
         "_run_founding does not resolve `_validate` from the dashboard "
         "module's globals, so every test that patches it there is testing "
         "nothing")
-    assert dash._run_reshuffle.__globals__["_validate"] is spy
+    assert dash._run_reshuffle.__globals__["_validate"] is sentinel
+
+    # AND THE PATCH MUST BE THE ONE THAT RUNS. The assertion above proves
+    # only that the patch landed in the right dict; mutation NI showed that
+    # a body calling `_svc._validate(...)` leaves it landed and unused, and
+    # this leg green over it. So the run is driven far enough to reach
+    # `_validate` for real.
+    seen: list[dict[str, Any]] = []
+
+    def spy(proposal, inv=None):
+        seen.append(proposal)
+        return svc._validate(proposal, inv)
+
+    agent = _FakeAgent(_chart_proposal())
+    monkeypatch.setattr(dash, "_validate", spy)
+    monkeypatch.setattr(dash, "popen_utf8", agent, raising=True)
+    monkeypatch.setattr(dash, "resolve_claude_bin",
+                        lambda: ("/usr/bin/claude", "fake"))
+    monkeypatch.setattr(dash, "_house_rules", lambda: "(elided)")
+    monkeypatch.setattr(dash, "_inventory", lambda: ("(no arsenal)", {}))
+    dash._jobs["J12"] = {"status": "running", "proc": None, "narration": []}
+    try:
+        dash._run_founding("J12", "a two-person writing firm")
+    finally:
+        dash._jobs.pop("J12", None)
+
+    assert seen, (
+        "`_run_founding` reached its own `_validate` without going through "
+        "the patched name, so every test that patches it on the dashboard "
+        "module is testing an unpatched run")
 
 
 # ---------------------------------------------------------------------------
@@ -618,10 +647,19 @@ def test_r17b_the_hub_prompt_asks_for_the_keys_and_the_shape():
 
     prompt = _FOUNDING_PROMPT.format(brief="a two-person writing firm")
 
-    for key in ("reports_to", "domains", '"goal"', '"gates"'):
-        assert key in prompt, (
-            f"the founding prompt never asks the agent for {key}, so the hub "
-            f"door cannot produce a firm the terminal door accepts")
+    # THE OUTPUT BLOCK, not the whole prompt. Mutation NP removes
+    # `"reports_to"` from the shape the agent is told to return, and two
+    # earlier versions of this check could not see it: the bare word also
+    # appears in a guidance bullet, and `"reports_to":` also appears in the
+    # rules sentence below the block. A key the agent is told about in prose
+    # but never shown in the shape is a key it will not return.
+    head = prompt.index("Return ONLY a JSON object")
+    tail = prompt.index("Exactly one Member has", head)
+    block = prompt[head:tail]
+    for key in ("reports_to", "domains", "goal", "gates"):
+        assert f'"{key}":' in block, (
+            f"the founding prompt's JSON output block has no {key!r} key, so "
+            f"the hub door cannot produce a firm the terminal door accepts")
 
     for says in ("Staff the full shape", "span of control near four"):
         assert says in prompt, (
@@ -656,7 +694,16 @@ class _FakeAgent:
         self.calls.append({"argv": list(argv), "cwd": kwargs.get("cwd"),
                            "env": dict(kwargs.get("env") or {})})
         self.stdout = iter([
-            json.dumps({"type": "assistant", "message": "thinking"}) + "\n",
+            # A real assistant frame carries an OBJECT in `message`, and
+            # `Narrator.feed` reads it as one. The first version of this
+            # fake put a string there; the narrator raised inside
+            # `_run_founding`'s stream loop, which catches everything and
+            # finishes the job as failed — so R12 read as "the patch was
+            # not used" when the fake was simply the wrong shape.
+            json.dumps({"type": "assistant",
+                        "message": {"content": [{"type": "text",
+                                                 "text": "thinking"}]}})
+            + "\n",
             json.dumps({"type": "result",
                         "result": json.dumps(self.proposal)}) + "\n",
         ])
