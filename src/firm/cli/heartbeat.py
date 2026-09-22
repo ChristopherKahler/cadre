@@ -268,7 +268,39 @@ def run_disable(firm_id: str | None = None, *,
     # Never firm.schedule, which holds the firm's business hours (#134).
     ws_str = st.get("workdir")
 
-    answer = sched.remove(stem)
+    # THE BACKEND CAN RAISE, AND ON WINDOWS IT ORDINARILY DOES (avocet's G2
+    # finding 1). `SystemdScheduler.remove` unlinks the unit files, and a file
+    # another process holds open cannot be deleted on Windows -- an editor, a
+    # backup agent, an antivirus scanner, a sync client. On Linux the same call
+    # raises on a read-only mount, an immutable attribute or directory
+    # permissions. Bare, it escaped through `main()`, which has no catch-all:
+    # traceback on stderr, STDOUT EMPTY, exit 1. That broke the contract this
+    # file exists to hold (one JSON object on every exit of every verb) and
+    # never reached condition 2 below, because the raise happens INSIDE
+    # `remove()`, before the re-query.
+    #
+    # THE BOUNDARY, stated where the code is: `remove()` unlinks `.timer` then
+    # `.service`, so a raise part-way through can leave a HALF-REMOVED unit.
+    # This verb reports the raise and repairs nothing. Repairing a half-removed
+    # unit belongs to the backend or to the doctor, not to a verb whose one job
+    # is to say what happened.
+    #
+    # It takes condition 2's branch for the same reason condition 2 exists: the
+    # state is partial or unknown, so clearing `firm.pulse_interval` or
+    # finalizing the runs would be a claim this verb cannot support. And it does
+    # NOT re-query here -- `status` is the verb for asking, and a second
+    # unguarded backend call inside a handler is this same defect one line over.
+    try:
+        answer = sched.remove(stem)
+    except Exception as exc:
+        _emit({"ok": False, "reason": "remove-raised", "firm_id": firm_id,
+               "error": {"type": type(exc).__name__, "message": str(exc)},
+               "schedule_recorded": False,
+               "cleanup": {"lock": "not-attempted",
+                           "reason": "the removal raised, so what the timer is "
+                                     "doing is unknown and the lock may still "
+                                     "be its pulse's"}})
+        return 1
 
     # PROVED, NOT TRUSTED (#131). This used to be `sched.remove(stem)` with the
     # answer discarded and `ok: true` printed regardless, so a removal that

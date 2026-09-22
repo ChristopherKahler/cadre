@@ -573,6 +573,81 @@ def test_R8_a_removal_that_did_not_happen_exits_1_and_changes_nothing(
         "the lock still belongs to that pulse; nothing to finalize", result)
 
 
+class _RaisingScheduler(_RefusingScheduler):
+    """A scheduler whose `remove()` RAISES, which is the ordinary Windows failure.
+
+    The hostile input law 49 asks for: a guard tested only with safe input has
+    not been tested. `_RefusingScheduler` supplies a removal that RETURNED
+    without removing -- polite failure. Nothing in this file supplied one that
+    raised, and `PermissionError`/`OSError` appeared zero times in it, which is
+    how a bare `sched.remove(stem)` survived to CI.
+
+    In-process for the same reason R8 is: no real backend can be made to raise
+    on demand without touching the host's own timers, and a leg that chmod'ed a
+    unit directory would measure the filesystem rather than the contract.
+
+    The exception is the real one avocet read off a Windows traceback, error
+    number and wording both.
+    """
+
+    def remove(self, stem: str) -> dict:
+        self.removed_calls += 1
+        raise PermissionError(
+            32, "The process cannot access the file because it is being used "
+                "by another process")
+
+
+def test_R15_a_removal_that_RAISED_still_prints_one_object_and_changes_nothing(
+        tmp_path, capsys, monkeypatch):
+    """The raise reports itself instead of escaping as a traceback.
+
+    Bare, this printed NOTHING on stdout and a traceback on stderr, so the one
+    contract this file measures -- one JSON object on every exit of every verb
+    -- had a hole exactly where the backend is least reliable. It never reached
+    condition 2, because the crash is inside `remove()` and condition 2 is the
+    re-query after it.
+
+    The leg asserts BOTH halves: that the object is there and parses whole, and
+    that the verb changed nothing -- `firm.pulse_interval` untouched and
+    `release_and_finalize` never called. Reporting the raise while clearing the
+    interval anyway would pass the first half and fail the second.
+    """
+    ws = _firm_at(tmp_path / "ws")
+    conn = connect(ws / ".firm" / "firm.db")
+    try:
+        conn.execute("UPDATE firm SET pulse_interval = '15m' WHERE id = ?", (FIRM,))
+        conn.commit()
+    finally:
+        conn.close()
+    sched = _RaisingScheduler(ws)
+    monkeypatch.setattr(hb, "_sched", lambda unit_dir=None: sched)
+
+    called: list[str] = []
+    import firm.pulse.cleanup as cleanup_mod
+    monkeypatch.setattr(cleanup_mod, "release_and_finalize",
+                        lambda *a, **k: called.append("ran") or {})
+
+    rc = hb.run_disable(FIRM, workspace=ws)
+
+    out = capsys.readouterr().out
+    result = json.loads(out)                      # one object, parsed WHOLE
+    assert rc == 1, result
+    assert result["ok"] is False, result
+    assert result["reason"] == "remove-raised", result
+    assert result["firm_id"] == FIRM, result
+    assert result["error"]["type"] == "PermissionError", result
+    assert "another process" in result["error"]["message"], (
+        "the raise's own words, so an operator can act on it", result)
+    assert result["schedule_recorded"] is False, result
+    assert result["cleanup"]["lock"] == "not-attempted", result
+    assert sched.removed_calls == 1, ("it did try", result)
+    assert _interval(ws) == "15m", (
+        "what the timer is doing is unknown, so the interval is not a claim "
+        "this verb may retract", result)
+    assert called == [], (
+        "nothing was proved gone, so nothing is finalized", result)
+
+
 def test_R9_control_a_removal_that_worked_still_exits_0(tmp_path):
     """The control law 25 asks for: the leg that separates *repaired* from
     *silenced*. Fixing R8 by always exiting 1 would pass R8 and fail this."""
