@@ -134,6 +134,44 @@ def _emit(payload: dict) -> None:
     print(json.dumps(payload, indent=2))
 
 
+#: What became of a pulse that was running before `enable` changed the timer,
+#: in one word, derived ONLY from the cleanup's lock reading (#147).
+#:
+#: TOTAL OVER BOTH PRODUCERS. `pulse/cleanup.py` writes seven of these and THIS
+#: file writes the eighth (`not-attempted`, in the dicts `run_disable` builds by
+#: hand), so a mapping keyed to one module would have covered seven of eight and
+#: called itself total.
+#:
+#: FOUR READINGS COLLAPSE TO `unknown`, and the reason is the same each time:
+#: THE LOCK WAS NOT READ. `unknown` never means "a pulse survived" -- that is
+#: `survived`, and it is a different finding. `cleanup["reason"]` travels beside
+#: it and says which of the four it was.
+_PREVIOUS_PULSE = {
+    "none": "none",                         # nothing held the lock
+    "cleared": "ended",                     # the holder was dead; nothing from
+                                            # before this change remains
+    "held-by-a-live-pulse": "survived",     # still running, on the old settings
+    "remote-holder": "unknown",             # another host holds it
+    "no-db": "unknown",                     # no firm database to read
+    "firm-id-unresolved": "unknown",        # could not say whose lock
+    "unreadable": "unknown",                # the row would not read
+    "not-attempted": "unknown",             # never looked
+}
+
+
+def _previous_pulse(lock: str | None) -> str:
+    """One word for what became of the pulse that was running before.
+
+    UNRECOGNISED READS AS `unknown` rather than raising, because this is called
+    by a verb that has ALREADY INSTALLED THE TIMER: refusing to name a new lock
+    value would turn a successful install into a traceback. The other direction
+    is covered where it belongs -- a leg walks both modules' lock literals and
+    reddens if one is missing from `_PREVIOUS_PULSE`, so a new value is named by
+    a person rather than absorbed by this fallback.
+    """
+    return _PREVIOUS_PULSE.get(lock or "", "unknown")
+
+
 def run_enable(
     workspace: Path,
     firm_id: str | None,
@@ -201,8 +239,38 @@ def run_enable(
             interval=interval,
         )
     except SchedulerError as exc:
-        _emit({"ok": False, "reason": str(exc)})
+        # THE INSTALL RAISED, AND THIS VERB CANNOT SAY WHAT THAT COST (#147).
+        # `install_timer` raises from two places and they differ on exactly the
+        # thing an operator wants to know: `_prepare_task`, which is BEFORE
+        # `/End`, so nothing was ended; and `/Create`, which is AFTER `/End` was
+        # issued, so a running pulse may well have been ended and the old task
+        # definition still stands. Nothing here can tell those apart, so the
+        # report says so rather than choosing the comfortable one -- a message
+        # claiming nothing was ended would read as reassurance in the one case
+        # where the operator most needs to look.
+        _emit({"ok": False, "reason": str(exc),
+               "cleanup": {"lock": "not-attempted",
+                           "reason": "the install raised, so whether a running "
+                                     "pulse was ended is unknown and the "
+                                     "previous task definition stands"},
+               "previous_pulse": "unknown"})
         return 1
+
+    # WHAT BECAME OF THE PULSE THAT WAS RUNNING BEFORE (#147). The backend has
+    # just ended the launcher, and on a contained host that ended its tree; the
+    # same cleanup `disable` runs is what turns that into a fact, because it
+    # READS THE LOCK. `finalize_live_runs` stays False: a live holder's runs are
+    # not enable's to close.
+    #
+    # DERIVED FROM THE LOCK, NEVER FROM `/End`. `installed["ended"]` carries what
+    # schtasks said and is reported for the record; a task that was absent makes
+    # it fail and an idle one makes it say SUCCESS, and neither is a reading of
+    # a pulse.
+    from firm.pulse.cleanup import release_and_finalize
+
+    cleanup = release_and_finalize(workspace, firm_id, by="heartbeat enable",
+                                   wait_seconds=5.0)
+    previous_pulse = _previous_pulse(cleanup.get("lock"))
 
     # firm.pulse_interval is the single source of truth for cadence (fork 005) —
     # the hub reads it to tell "not operational" from "healthy and idle",
@@ -236,6 +304,11 @@ def run_enable(
         "claude_bin": claude_bin,
         "env_keys": sorted(env),
         "tool_paths_recorded": tool_paths_recorded,
+        # ADDITIVE, both of them. Existing readers lose nothing; the cleanup
+        # dict goes out WHOLE so its `reason` travels beside the one word and
+        # says which of the four unread readings produced an `unknown`.
+        "cleanup": cleanup,
+        "previous_pulse": previous_pulse,
     })
     return 0
 
