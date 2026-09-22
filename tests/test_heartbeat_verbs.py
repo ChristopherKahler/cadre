@@ -530,6 +530,44 @@ def test_R9_control_a_removal_that_worked_still_exits_0(tmp_path):
         "the scheduler's own query says not found", after.detail)
 
 
+class _QuietlyRemovingScheduler(_RefusingScheduler):
+    """Removes the task and reports nothing removed.
+
+    Real on Windows: `schtasks /Delete` returns non-zero for a task that is
+    already gone, so `remove()` appends nothing to its list while the task is
+    genuinely absent (`sched/winsched.py`).
+    """
+
+    def status(self, stem: str) -> dict:
+        if self.removed_calls:
+            return {"installed": False, "state": "absent", "failed": False}
+        return super().status(stem)
+
+
+def test_R14_a_removal_the_scheduler_reported_as_nothing_still_exits_0(
+        tmp_path, capsys, monkeypatch):
+    """The state that tells the fix from the lazy wrong fix.
+
+    Exiting 1 whenever `remove()`'s list is empty passes R8 and R9 both, so
+    mutation Q8 measured INERT until this leg existed. Here the list is empty
+    and the task is GONE, and the only thing that can tell the difference is
+    asking the scheduler again -- which is D3's whole point.
+    """
+    ws = _firm_at(tmp_path / "ws")
+    sched = _QuietlyRemovingScheduler(ws)
+    monkeypatch.setattr(hb, "_sched", lambda unit_dir=None: sched)
+    import firm.pulse.cleanup as cleanup_mod
+    monkeypatch.setattr(cleanup_mod, "release_and_finalize", lambda *a, **k: {})
+
+    rc = hb.run_disable(FIRM, workspace=ws)
+
+    result = json.loads(capsys.readouterr().out)
+    assert rc == 0, result
+    assert result["ok"] is True, result
+    assert result["scheduler_removed"] == {"removed": []}, (
+        "reported honestly, and not what the exit code rests on", result)
+
+
 def test_R10_the_payload_carries_the_schedulers_own_answer(tmp_path, capsys,
                                                            monkeypatch):
     """`remove()`'s answer is reported for the record even when the exit code
