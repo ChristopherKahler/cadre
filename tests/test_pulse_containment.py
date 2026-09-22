@@ -63,10 +63,13 @@ from firm.sched import winjob
 FIRM = "containco"
 
 #: The real-signal arms need a holder that exits on SIGTERM leaving children,
-#: and a process tree readable through `/proc`. On Windows `os.kill(pid,
-#: SIGTERM)` is `TerminateProcess`, so those arms are the live leg's, on CI
-#: (R1b). The R1a leg below deliberately does NOT carry this mark: it fakes the
-#: signal and therefore runs everywhere.
+#: The legs that carry it need a POSIX-only SHAPE -- a zombie, or a `/proc`
+#: walk -- and nothing more than that. The real-signal legs in this file do NOT
+#: carry it and DO run on Windows: the tree is a `Popen` chain, and
+#: `TerminateProcess` ends the holder there and leaves its children, which is
+#: R1b's arm measured in this file rather than only on CI. This note used to
+#: claim the opposite, and the Windows job log disagrees with it: the only
+#: containment legs skipped there are the zombie leg and the `ps` control.
 posix_only = pytest.mark.skipif(
     os.name != "posix",
     reason=("needs a POSIX-only shape: a zombie, or a `/proc` walk. The tree "
@@ -1194,8 +1197,10 @@ def test_the_descendant_read_never_asks_permission_to_signal(tmp_path, tree,
     descendant read makes therefore fails loudly and names the pid, instead of
     passing quietly and leaving the leg green for the wrong reason.
 
-    The Windows arm of this leg belongs to the live leg on CI, where a Windows
-    process tree exists; this file's tree is built with `fork`.
+    IT RUNS ON WINDOWS TOO. This used to say its Windows arm belonged to the
+    live leg because the tree here was built with `fork` -- both halves went
+    stale at once: the tree has been a plain `Popen` chain since the day after,
+    and the `OpenProcess` fake below is this leg's own Windows arm.
     """
     ws = _firm(tmp_path / "ws")
     _hold_lock(ws, f"{socket.gethostname()}:{tree.holder}:t148r5b")
@@ -1611,3 +1616,115 @@ def test_a_blind_read_after_the_grace_is_named_as_the_after_read(
     assert result["tree_read"]["failed"] == "after", result
     # The before read succeeded, so its own reading stands and is reported.
     assert "descendants_before" in result, result
+
+
+# ---------------------------------------------------------------------------
+# G2-5: a parent edge is a generation too
+# ---------------------------------------------------------------------------
+
+def test_the_walk_refuses_a_child_older_than_the_parent_it_names(monkeypatch):
+    """A stale ParentProcessId must not hand the holder someone else's tree.
+
+    WINDOWS NEVER UPDATES `ParentProcessId` WHEN A PARENT EXITS, and pids are
+    reused. So a holder whose pid once belonged to a process that has since
+    died inherits that process's live orphans -- and their whole subtree --
+    purely because the numbers match. osprey measured it on this machine: of
+    518 processes, 24 named a parent that was gone, and a `cmd.exe` created at
+    00:44 still named a parent pid now held by a `wsl.exe` created at 18:38. A
+    walk from that pid today calls the `cmd.exe` its descendant.
+
+    For abort that is strangers in `descendants_before`, then in `alive_after`,
+    then `ok: false` and exit 1 -- and a report telling the operator to go and
+    end processes that were never part of his run.
+
+    It is this module's own first rule, broken on the one edge it was never
+    applied to: a generation, not a pid. The holder is a generation and every
+    descendant is a generation, but the EDGE between them was a bare number.
+
+    The fix is an ordering fact rather than an identity one: a real child
+    cannot have started before its parent. On POSIX the kernel reparents, so a
+    ppid is never stale and the walk is unchanged.
+
+    TIER A, every host: the table is faked so the shape is the same everywhere
+    and the leg does not need a Windows box to say something true.
+    """
+    # THE WINDOWS BRANCH, DRIVEN THROUGH THE MODULE ATTRIBUTE so this runs on
+    # every host. The guard is Windows-only because only Windows leaves a
+    # stale parent pid behind; a leg that needed a Windows box to say so would
+    # leave the rule unmeasured everywhere else.
+    monkeypatch.setattr(descendants, "_WINDOWS", True)
+
+    holder = 1000
+    table = {
+        # The holder, and the tree that really is its own.
+        holder: (1, "500", "R"),
+        1001: (holder, "600", "R"),        # its child, started after it
+        1002: (1001, "700", "R"),          # and its grandchild
+        # A STRANGER: older than the holder, naming the holder's pid as its
+        # parent because the pid was reused after the real parent died.
+        2001: (holder, "100", "R"),
+        2002: (2001, "150", "R"),          # and the stranger's own child
+    }
+
+    found = {pid for pid, _created in descendants.descendants_of(holder, table)}
+
+    # The positive sibling first: if the real tree is not found, the absences
+    # below are measuring a walk that returned nothing at all.
+    assert found >= {1001, 1002}, (
+        f"the holder's own child and grandchild must be reported; got {found}")
+    assert 2001 not in found, (
+        f"the walk adopted a process that started BEFORE the holder it names "
+        f"as its parent: {sorted(found)}. Its pid matched; its generation did "
+        f"not.")
+    assert 2002 not in found, (
+        f"the stranger's own subtree came with it: {sorted(found)}")
+
+
+def test_an_unparsable_stamp_keeps_its_edge(monkeypatch):
+    """A reading we cannot compare must not drop a possible survivor.
+
+    The ordering check needs two numbers. When either stamp will not parse --
+    a `ps` column that moved, a CIM field that came back empty -- the edge is
+    KEPT rather than dropped. The two mistakes are not equal: a stranger in the
+    list costs an operator a name to read, and a dropped descendant is the
+    false green this whole issue exists to close.
+    """
+    monkeypatch.setattr(descendants, "_WINDOWS", True)
+
+    holder = 1000
+    table = {
+        holder: (1, "500", "R"),
+        1001: (holder, "not-a-number", "R"),
+        1002: (holder, "", "R"),
+    }
+
+    found = {pid for pid, _created in descendants.descendants_of(holder, table)}
+
+    assert found == {1001, 1002}, (
+        f"an edge whose stamps cannot be compared must be kept, not dropped; "
+        f"got {sorted(found)}")
+
+
+def test_a_posix_table_is_walked_unchanged(monkeypatch):
+    """POSIX keeps every edge, and that is correct rather than an oversight.
+
+    The kernel reparents an orphan the moment its parent exits, so a ppid
+    there is never stale and an ordering guard would only be a way to drop
+    real descendants over a clock that moved. The same table that loses two
+    entries under the Windows branch keeps all of them here, which is what
+    makes this a measurement of the guard rather than of the walk.
+    """
+    monkeypatch.setattr(descendants, "_WINDOWS", False)
+
+    holder = 1000
+    table = {
+        holder: (1, "500", "R"),
+        1001: (holder, "600", "R"),
+        2001: (holder, "100", "R"),        # older, and kept here
+        2002: (2001, "150", "R"),
+    }
+
+    found = {pid for pid, _created in descendants.descendants_of(holder, table)}
+
+    assert found == {1001, 2001, 2002}, (
+        f"POSIX must keep every edge; got {sorted(found)}")

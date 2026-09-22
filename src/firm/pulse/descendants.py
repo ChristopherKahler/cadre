@@ -55,6 +55,16 @@ TWO LIMITATIONS, BOTH STATED AT THE CODE RATHER THAN DISCOVERED LATER.
    reachable by the walk at all: on POSIX it has been reparented to init, and
    on Windows the dead parent's row is simply gone, so no chain of
    ``ParentProcessId`` leads to it from the holder.
+3. On Windows, a recorded creation stamp can invert for a REAL parent and
+   child, and R5e's guard would drop that child from the walk. Two known
+   causes: a backward wall-clock step between the two creations, and the
+   kernel's own boot processes -- ``System``, pid 4, is recorded AFTER 104 and
+   180, which it starts. Only the first can reach a pulse's tree, because a
+   holder is a user process started long after boot. That is the deliberate direction of the two:
+   on Windows the pulse contains itself (R2), so its Members end with the
+   holder and this walk VERIFIES that rather than being the thing that does
+   it. A dropped row costs a verification; a kept stranger costs an operator
+   killing something that was never his.
 """
 from __future__ import annotations
 
@@ -188,11 +198,16 @@ def _windows_table() -> dict[int, tuple[int, str, str]]:
 def process_table() -> dict[int, tuple[int, str, str]]:
     """``{pid: (ppid, created, state)}`` for every process this host can see.
 
-    Never raises: a table that could not be read comes back empty, and every
-    caller below treats an empty table as "nothing found" rather than as an
-    error. Abort must not fail because a reading failed -- it reports what it
-    saw, and an empty reading is a claim it is entitled to make wrongly far
-    less often than it is entitled to crash.
+    Never raises: a table that could not be read comes back empty, because a
+    pulse must not die over a reading.
+
+    AN EMPTY OR PARTIAL TABLE IS NOT "NOTHING FOUND" -- CHECK
+    :func:`blind_reason` BEFORE TRUSTING ONE. This docstring used to say every
+    caller treats an empty table as nothing found, which was true until R5d and
+    is exactly the false green #148 is about: a reader that could not run
+    reports every descendant dead. The distinction now lives in
+    `blind_reason`, and any caller that skips it inherits the bug this module
+    was written to close.
     """
     return _windows_table() if _WINDOWS else _posix_table()
 
@@ -213,6 +228,38 @@ def generation_of(pid: int,
     return (pid, entry[1])
 
 
+def _edge_holds(table: dict[int, tuple[int, str, str]], parent: int,
+                created_child: str) -> bool:
+    """Can this child really be *parent*'s? (R5e, Windows only.)
+
+    `Win32_Process.ParentProcessId` is the creator's pid AS IT WAS AT
+    CREATION. Windows never updates it when that creator exits, and pids are
+    reused -- so a process whose pid once belonged to something now dead
+    inherits that dead thing's live children, and their whole subtrees, purely
+    because the numbers match. Measured on this machine: of 518 processes, 24
+    named a parent pid that no live process held, and a `cmd.exe` created at
+    00:44 still named a parent pid now belonging to a `wsl.exe` created
+    eighteen hours later.
+
+    The test is an ordering fact rather than an identity one, because it is
+    the only one available: A CHILD CANNOT HAVE STARTED BEFORE ITS PARENT, so
+    an older "child" is naming a reused pid.
+
+    WHEN IN DOUBT, KEEP THE EDGE. A stamp that will not parse as an integer,
+    or a parent absent from the table, keeps it. The two mistakes are not
+    equal: a stranger in the list costs an operator a name to read, and a
+    dropped descendant is `ok: true` over a live Member, which is the whole of
+    #148.
+    """
+    row = table.get(parent)
+    if row is None:
+        return True
+    try:
+        return int(created_child) >= int(row[1])
+    except (TypeError, ValueError):
+        return True
+
+
 def descendants_of(pid: int,
                    table: dict[int, tuple[int, str, str]] | None = None
                    ) -> list[Generation]:
@@ -229,7 +276,13 @@ def descendants_of(pid: int,
     """
     table = process_table() if table is None else table
     children: dict[int, list[int]] = {}
-    for child, (parent, _created, _state) in table.items():
+    for child, (parent, created, _state) in table.items():
+        # ON WINDOWS A PARENT EDGE IS A GENERATION TOO (R5e). POSIX keeps every
+        # edge: the kernel reparents an orphan the moment its parent exits, so
+        # a ppid there is never stale and a guard could only drop real
+        # descendants over a clock that moved.
+        if _WINDOWS and not _edge_holds(table, parent, created):
+            continue
         children.setdefault(parent, []).append(child)
 
     found: list[Generation] = []

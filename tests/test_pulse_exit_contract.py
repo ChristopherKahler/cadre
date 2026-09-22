@@ -846,7 +846,9 @@ def test_abort_reports_a_holder_that_is_still_exiting_and_exits_1(tmp_path):
     ignore, so this branch cannot be produced there with a real signal. The
     every-host arm is `test_abort_refuses_to_say_ok_when_the_holder_is_still_alive`
     in `test_pulse_containment.py` (R1a, the signal faked), and the real-process
-    arm is the live leg on CI's Windows job (R1b).
+    arm is Condition 2's survivor leg -- the leaf leg -- on CI's Windows job
+    (R1b, addendum 1 at doc 6522-6525). It is NOT the live leg, which proves
+    containment rather than the `ok` flip.
     """
     ws = _firm(tmp_path / "ws")
     holder = _live_holder("import signal, time",
