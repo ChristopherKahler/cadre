@@ -187,8 +187,15 @@ def release_and_finalize(workspace: Path | str, firm_id: str | None = None, *,
 
     Returns what it found and what it did:
 
-    ``lock``      ``"none"`` (no row), ``"cleared"``, ``"held-by-a-live-pulse"``
-                  or ``"remote-holder"``.
+    ``lock``      what the lock was found to be, and this function writes SEVEN
+                  values, not four. Callers map them, so the list has to be the
+                  whole list: ``"none"`` (no row), ``"cleared"``,
+                  ``"held-by-a-live-pulse"``, ``"remote-holder"``,
+                  ``"no-db"``, ``"firm-id-unresolved"`` and
+                  ``"unreadable"``. The last four all mean THE LOCK WAS NOT
+                  READ, which is a different fact from a pulse having survived,
+                  and ``reason`` says which of them it was. (#147 found this
+                  paragraph naming four while the code wrote seven.)
     ``holder``    the holder string, when there was one.
     ``runs_finalized``  the ids closed, which is ``[]`` when there was nothing
                   to close -- a different fact from the key being absent.
