@@ -56,25 +56,61 @@ from firm.core.repo import create
 FIRM = "verbco"
 OTHER = "otherco"
 
-#: The argument-error shapes, enumerated from the parser at `6c740786` rather
-#: than guessed (law 31): `_build_parser` has one global option, `--version`,
-#: and `aliases=` appears nowhere in `__main__.py`.
-#:
-#: THE SECOND COLUMN IS THE PARSER THAT RAISES IT, AND IT IS PART OF THE
-#: ASSERTION. avocet measured that `heartbeat status --nope` reaches the
-#: TOP-LEVEL parser today only because `status` takes no arguments -- once D1
-#: gives it flags, the raising parser MOVES down a level. A leg that asserted
-#: only "one JSON object" would then pass because the error landed somewhere
-#: the override happens to cover, which is the false PASS the verdict's
-#: condition 1 exists for. The prog name argparse prints is how each parser
-#: signs its own usage line.
-USAGE_SHAPES = {
-    "an unknown flag":              (["heartbeat", "status", "--nope"], "cadre"),
-    "a missing value":              (["heartbeat", "enable", "--workspace"], "cadre heartbeat enable"),
-    "a bad verb":                   (["heartbeat", "bogus"], "cadre heartbeat"),
-    "a flag the verb does not take": (["heartbeat", "status", "--interval", "5m"], "cadre"),
-    "a flag before the verb":       (["heartbeat", "--nope", "status"], "cadre"),
-}
+#: The prog name the CHILD prints. `_build_parser` sets it from
+#: `Path(sys.argv[0]).name`, and anything ending `.py` becomes "cadre" -- which
+#: `python -m firm` always does. Composed as a literal rather than read from a
+#: parser built HERE, because this process's argv[0] is pytest's.
+CHILD_PROG = "cadre"
+
+
+def _usage_shapes() -> dict[str, tuple[list[str], str]]:
+    """Every argument-error shape, READ FROM THE PARSER at this head.
+
+    avocet's before-fact, and the reason this is a function rather than the
+    table it used to be: **the shape SET moves, not only the raising level.**
+    `heartbeat status --firm-id F` is a top-level argument error before D1 and
+    a VALID command after it. A hand-written table is a record of one tree and
+    a guess about every other, and the guess is silent -- a shape that stopped
+    being an error just stops being tested.
+
+    So the set is built from what the parser accepts right now: every verb
+    mistyped, every accepted flag mistyped, and every flag that takes a value
+    with the value omitted.
+
+    The second element is the parser that raises it, asserted exactly. The
+    rules, measured rather than assumed: argparse bubbles an unknown optional
+    up to the TOP level as "unrecognized arguments"; a missing value is raised
+    by the verb's own subparser; an unknown verb is raised by the heartbeat
+    parser, which owns the choices.
+    """
+    from firm.__main__ import _build_parser
+
+    parser = _build_parser()
+    heartbeat = parser._subparsers._group_actions[0].choices["heartbeat"]
+    verbs = heartbeat._subparsers._group_actions[0].choices
+
+    shapes: dict[str, tuple[list[str], str]] = {
+        "a mistyped verb": (["heartbeat", "statuss"], f"{CHILD_PROG} heartbeat"),
+        "a flag before the verb": (["heartbeat", "--nope", "status"], CHILD_PROG),
+    }
+    for verb, verb_parser in sorted(verbs.items()):
+        for action in verb_parser._actions:
+            for opt in action.option_strings:
+                if opt in ("-h", "--help"):
+                    continue
+                shapes[f"{verb} {opt} mistyped"] = (
+                    ["heartbeat", verb, f"{opt}x"], CHILD_PROG)
+                if action.nargs != 0:
+                    shapes[f"{verb} {opt} with no value"] = (
+                        ["heartbeat", verb, opt],
+                        f"{CHILD_PROG} heartbeat {verb}")
+    assert len(verbs) >= 3 and len(shapes) > len(verbs), (
+        "read the parser and found almost nothing, which proves NOTHING "
+        "(law 23)", sorted(verbs), sorted(shapes))
+    return shapes
+
+
+USAGE_SHAPES = _usage_shapes()
 
 
 class _Run:
