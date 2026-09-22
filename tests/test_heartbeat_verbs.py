@@ -69,11 +69,11 @@ OTHER = "otherco"
 #: condition 1 exists for. The prog name argparse prints is how each parser
 #: signs its own usage line.
 USAGE_SHAPES = {
-    "an unknown flag":              (["heartbeat", "status", "--nope"], "heartbeat status"),
-    "a missing value":              (["heartbeat", "enable", "--workspace"], "heartbeat enable"),
-    "a bad verb":                   (["heartbeat", "bogus"], "heartbeat"),
-    "a flag the verb does not take": (["heartbeat", "status", "--interval", "5m"], "heartbeat status"),
-    "a flag before the verb":       (["heartbeat", "--nope", "status"], "heartbeat"),
+    "an unknown flag":              (["heartbeat", "status", "--nope"], "cadre"),
+    "a missing value":              (["heartbeat", "enable", "--workspace"], "cadre heartbeat enable"),
+    "a bad verb":                   (["heartbeat", "bogus"], "cadre heartbeat"),
+    "a flag the verb does not take": (["heartbeat", "status", "--interval", "5m"], "cadre"),
+    "a flag before the verb":       (["heartbeat", "--nope", "status"], "cadre"),
 }
 
 
@@ -279,13 +279,11 @@ def test_R4_every_argument_error_prints_one_object_on_stdout(tmp_path, shape):
     assert result["reason"] == "usage", run.detail
     assert result["message"].strip(), ("argparse's own words, verbatim",
                                        run.detail)
-    assert f"usage: cadre {raised_by}" in result["message"] or \
-           f"usage: {Path(sys.executable).name} {raised_by}" in result["message"] or \
-           raised_by in result["message"], (
-        "WHICH parser raised it is part of the assertion: the raising level "
-        "moves when status gains flags, and a leg that did not pin it would "
-        "pass on an override that reaches only some levels", raised_by,
-        run.detail)
+    assert result["parser"] == raised_by, (
+        "WHICH level raised it is part of the assertion, and it is an exact "
+        "field rather than a substring of a usage blob: the raising level "
+        "MOVES as flags are added, and a leg that did not pin it would pass "
+        "on an override that reaches only some levels", raised_by, run.detail)
 
 
 def test_R4_control_the_message_names_the_offending_flag(tmp_path):
