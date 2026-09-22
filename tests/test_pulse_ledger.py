@@ -81,9 +81,6 @@ LEDGER_MIGRATION = "016_pulse_run"
 #: a caller fake the absence.
 SOURCES = ("heartbeat", "board", "cli", "queue")
 
-#: A pulse row that has not been closed yet.
-OPEN_ROW = "ended_at IS NULL"
-
 
 # ---------------------------------------------------------------------------
 # Reading the ledger

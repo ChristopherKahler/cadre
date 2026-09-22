@@ -54,10 +54,6 @@ def _now() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
-class LedgerUnavailable(RuntimeError):
-    """The ledger could not be read or written, with the reason in words."""
-
-
 def best_effort(work: Callable[[], Any]) -> tuple[Any, str | None]:
     """Run *work*; return ``(value, None)`` or ``(None, reason)``.
 
