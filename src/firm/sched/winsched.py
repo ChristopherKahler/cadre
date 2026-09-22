@@ -276,6 +276,24 @@ class WindowsScheduler:
                       env: dict[str, str], argv: list[str],
                       interval: str) -> dict[str, Any]:
         tr = self._prepare_task(stem)
+        # END BEFORE RE-CREATING, AND AFTER THE REFUSALS (#147). `/Create /F`
+        # replaces the task DEFINITION and leaves a running instance alone --
+        # measured on this platform -- so an operator who asked for a new
+        # interval got the new task and the OLD pulse, still running on the old
+        # settings, while `heartbeat status` described the new one.
+        #
+        # AFTER `_prepare_task` is the order that matters: every refusal happens
+        # before any side effect (this file's own rule), so a failed self-test
+        # cannot end a live pulse and then install nothing.
+        #
+        # `/End` ENDS THE LAUNCHER, and at #119 that left the command, its
+        # console and its python all running -- three survivors
+        # (`winlaunch.py:49-51`). What changed is #141: the launcher now puts
+        # ITSELF in a job with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and neither
+        # breakaway flag, and holds the handle for its own life, so its exit --
+        # however it is ended -- closes the handle and ends the tree.
+        ended_rc, ended_said = run_cmd(
+            ["schtasks", "/End", "/TN", self._tn(stem)])
         winlaunch.write_launcher(self.launcher_dir, stem, argv=argv, env=env,
                                  cwd=workdir, supervise=False,
                                  interval=interval)
@@ -285,7 +303,13 @@ class WindowsScheduler:
         rc, out = run_cmd(cmd)
         if rc != 0:
             raise SchedulerError(f"schtasks /Create: {out}")
-        return {"unit": self._tn(stem), "unit_dir": str(self.launcher_dir)}
+        # VERBATIM, AND NOTHING IS INFERRED FROM IT. A task that is absent makes
+        # `/End` fail and one that is idle makes it say SUCCESS, and NEITHER is
+        # a reading of a pulse. What became of the pulse is answered one layer
+        # up, from the LOCK, by `run_enable`. This is the record, not the
+        # finding, and a failed `/End` never stops the install.
+        return {"unit": self._tn(stem), "unit_dir": str(self.launcher_dir),
+                "ended": {"rc": ended_rc, "said": ended_said}}
 
     def install_service(self, stem: str, *, description: str, workdir: Path,
                         env: dict[str, str], argv: list[str]) -> dict[str, Any]:
