@@ -100,146 +100,6 @@ def test_a_real_timer_installs_reports_and_removes_without_a_trace():
         shutil.rmtree(launchers, ignore_errors=True)
     assert _query(name) == 1, f"{name} survived the test"
 
-
-# ---------------------------------------------------------------------------
-# #147 -- enable over a RUNNING heartbeat, on a real task (tiers B and C)
-# ---------------------------------------------------------------------------
-
-def _generations(marker: Path) -> set[tuple[int, str]]:
-    """The pids the launcher recorded, each with its creation time.
-
-    IDENTITY IS A GENERATION, NOT A PID, and that is lifted from #147's own
-    instrument rather than invented here: Windows hands a pid to another
-    process soon after the first exits, so a pid that is "still there" can be
-    a stranger. A generation cannot be mistaken for its successor.
-    """
-    if not marker.exists():
-        return set()
-    out = set()
-    for line in marker.read_text(encoding="utf-8").splitlines():
-        pid, _, created = line.partition(",")
-        if pid.strip().isdigit():
-            out.add((int(pid), created.strip()))
-    return out
-
-
-def _alive(gens: set[tuple[int, str]]) -> set[tuple[int, str]]:
-    """Which of those generations are still running, by pid AND creation time."""
-    from firm.sched.base import run_cmd
-    live = set()
-    for pid, created in gens:
-        rc, said = run_cmd(
-            ["powershell", "-NoProfile", "-Command",
-             f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}')"
-             ".CreationDate"], timeout=60)
-        if rc == 0 and said.strip() and created[:14] and created[:14] in said:
-            live.add((pid, created))
-    return live
-
-
-def test_enable_over_a_running_heartbeat_ends_its_tree(tmp_path, capsys):
-    """TIER C: Windows complied AND the pulse tree died. PASS, FAIL or VOID.
-
-    THIS LEG'S LAST PRINTED LINE IS ITS VERDICT, and VOID is never a pass. The
-    CI runner may produce no running instance at all (an interactive-only task
-    with no interactive session), and reporting that as either colour would be
-    a claim nobody measured.
-
-    THE CONTROL RUNS FIRST AND GATES THE ARM. Without it, a command that ended
-    on its own is indistinguishable from one the re-create ended, and the
-    answer is wrong in exactly the direction that matters. #147's own
-    instrument did this and said so.
-
-    THE CONTAINMENT RECORD IS READ BEFORE THE ACT, because `write_launcher`
-    DELETES it on every reinstall (winlaunch.py:126). Read afterwards it is
-    always absent, and the leg would call an uncontained host contained.
-    """
-    from firm.sched.base import run_cmd
-    from firm.sched.winsched import WindowsScheduler
-    from firm.sched import winlaunch
-
-    stem = f"{PREFIX}147"
-    launchers = tmp_path / "launchers"
-    marker = tmp_path / "gens.txt"
-    sched = WindowsScheduler(launcher_dir=launchers)
-
-    # A pulse that records its own generation and a detached grandchild's, then
-    # outlives this leg -- so anything still alive at the end really survived.
-    recorder = (
-        "import datetime,os,subprocess,sys,time\n"
-        "def stamp(p):\n"
-        "    import subprocess as s\n"
-        "    o=s.run(['powershell','-NoProfile','-Command',"
-        "f\"(Get-CimInstance Win32_Process -Filter 'ProcessId={p}').CreationDate\"],"
-        "capture_output=True,text=True).stdout.strip()\n"
-        "    return o\n"
-        "g=subprocess.Popen([sys.executable,'-c','import time;time.sleep(900)'])\n"
-        f"open(r'{marker}','w').write("
-        "f'{os.getpid()},{stamp(os.getpid())}\n{g.pid},{stamp(g.pid)}\n')\n"
-        "time.sleep(900)\n")
-
-    verdict = "VOID"
-    try:
-        sched.install_timer(stem, description="147 live",
-                            workdir=tmp_path, env={},
-                            argv=[sys.executable, "-c", recorder],
-                            interval="15m")
-        run_cmd(["schtasks", "/Run", "/TN", sched._tn(stem)], timeout=60)
-
-        deadline = time.time() + 30
-        gens: set = set()
-        while time.time() < deadline and len(gens) < 2:
-            gens = _generations(marker)
-            time.sleep(1)
-
-        control = _alive(gens)
-        print(f"[147] recorded generations: {sorted(gens)}")
-        print(f"[147] alive before the act : {sorted(control)}")
-        if len(control) < 2:
-            print("[147] /Run produced no running tree on this runner; "
-                  "nothing to end, so nothing is measured here")
-            print(f"[147] status(): {sched.status(stem)}")
-            print("[147] VOID: no running instance to act on")
-            return
-
-        record = winlaunch.containment_path(launchers, stem)
-        contained = record.exists() and "true" in record.read_text(
-            encoding="utf-8").lower()
-        print(f"[147] containment record before the act: "
-              f"{record.read_text(encoding='utf-8') if record.exists() else 'ABSENT'}")
-        if not contained:
-            print("[147] the launcher is not contained on this host, so ending "
-                  "it is not expected to end its tree")
-            print("[147] VOID: uncontained launcher")
-            return
-
-        # THE ACT: the product's own call, never raw schtasks.
-        sched.install_timer(stem, description="147 live",
-                            workdir=tmp_path, env={},
-                            argv=[sys.executable, "-c", recorder],
-                            interval="30m")
-
-        end = time.time() + 10
-        survivors = control
-        while time.time() < end and survivors:
-            survivors = _alive(control)
-            time.sleep(1)
-
-        print(f"[147] alive after the act  : {sorted(survivors)}")
-        print(f"[147] task still installed : {_query(sched._tn(stem)) == 0}")
-        verdict = "PASS" if not survivors else "FAIL"
-        assert not survivors, (
-            "enable re-created the task and left the old pulse tree running",
-            sorted(survivors))
-    finally:
-        # Ended BY GENERATION only: a pid whose creation time differs is a
-        # stranger and is never touched.
-        for pid, _created in _alive(_generations(marker)):
-            run_cmd(["taskkill", "/PID", str(pid), "/T", "/F"], timeout=60)
-        sched.remove(stem)
-        print(f"[147] {verdict}")
-
-
 # ---------------------------------------------------------------------------
 # #147 -- enable over a RUNNING heartbeat, on a real task (tiers B and C)
 # ---------------------------------------------------------------------------
@@ -415,7 +275,12 @@ def test_enable_over_a_running_heartbeat_ends_its_tree(tmp_path, capsys):
         say("containment record after: "
             f"{'PRESENT' if record_path.exists() else 'ABSENT'}")
 
-        verdict = "PASS" if not survivors else "FAIL"
+        # FAIL FIRST, PASS LAST. Setting PASS before the asserts printed PASS
+        # as this leg's last line while pytest said FAILED -- two readers of
+        # one run getting opposite answers, which is the same shape as VOID
+        # counting as a pass. The verdict is only PASS once every assertion
+        # below it has held.
+        verdict = "FAIL"
         assert not survivors, (
             "enable re-created the task and left the old pulse tree running",
             sorted(survivors))
@@ -427,6 +292,7 @@ def test_enable_over_a_running_heartbeat_ends_its_tree(tmp_path, capsys):
         assert not record_path.exists(), (
             "write_launcher deletes the containment record on reinstall; it is "
             "still there, so the re-create did not write a new launcher")
+        verdict = "PASS"
     finally:
         # The verdict and the table go out BEFORE the teardown, so a failure in
         # `remove()` cannot swallow the reading this leg exists to produce.
