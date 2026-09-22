@@ -25,6 +25,7 @@ REAL DESKTOP · REAL TASK SCHEDULER TRIGGER · PASS").
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -237,3 +238,204 @@ def test_enable_over_a_running_heartbeat_ends_its_tree(tmp_path, capsys):
             run_cmd(["taskkill", "/PID", str(pid), "/T", "/F"], timeout=60)
         sched.remove(stem)
         print(f"[147] {verdict}")
+
+
+# ---------------------------------------------------------------------------
+# #147 -- enable over a RUNNING heartbeat, on a real task (tiers B and C)
+# ---------------------------------------------------------------------------
+
+#: The program the task runs. A FILE, not a ``-c`` string, and that is a fix
+#: rather than a preference: the first draft built this as a nested f-string
+#: inside a test literal and DID NOT COMPILE -- ``SyntaxError: unterminated
+#: f-string``. On CI the task would have exited 1, written no marker, and the
+#: leg would have found nothing to measure, printed VOID, returned, and been
+#: COUNTED AS PASSED. The one leg that is the whole proof of this PR would have
+#: been green on a program that never ran.
+_RECORDER = '''\
+import os, subprocess, sys, time
+
+
+def stamp(pid):
+    out = subprocess.run(
+        ["powershell", "-NoProfile", "-Command",
+         "(Get-CimInstance Win32_Process -Filter 'ProcessId=%d').CreationDate"
+         % pid],
+        capture_output=True, text=True).stdout.strip()
+    return out
+
+
+grandchild = subprocess.Popen(
+    [sys.executable, "-c", "import time; time.sleep(900)"])
+
+# `with`, because this process then sleeps for 900 s: an unclosed write may
+# never flush, and a marker that arrives after the leg has finished is a
+# marker that was never there.
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    fh.write("%d,%s\\n" % (os.getpid(), stamp(os.getpid())))
+    fh.write("%d,%s\\n" % (grandchild.pid, stamp(grandchild.pid)))
+    fh.flush()
+    os.fsync(fh.fileno())
+
+time.sleep(900)
+'''
+
+
+def _generations(marker: Path) -> set[tuple[int, str]]:
+    """The pids the launcher recorded, each with its creation time.
+
+    IDENTITY IS A GENERATION, NOT A PID, lifted from #147's own instrument:
+    Windows hands a pid to another process soon after the first exits, so a pid
+    that is "still there" can be a stranger.
+    """
+    if not marker.exists():
+        return set()
+    out = set()
+    for line in marker.read_text(encoding="utf-8").splitlines():
+        pid, _, created = line.partition(",")
+        if pid.strip().isdigit() and created.strip():
+            out.add((int(pid), created.strip()))
+    return out
+
+
+def _alive(gens: set[tuple[int, str]]) -> set[tuple[int, str]]:
+    """Which generations are still running, by pid AND creation time."""
+    from firm.sched.base import run_cmd
+    live = set()
+    for pid, created in gens:
+        rc, said = run_cmd(
+            ["powershell", "-NoProfile", "-Command",
+             f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}')"
+             ".CreationDate"], timeout=60)
+        if rc == 0 and created and created[:14] in said:
+            live.add((pid, created))
+    return live
+
+
+def test_enable_over_a_running_heartbeat_ends_its_tree(tmp_path, capsys):
+    """TIER C: Windows complied AND the pulse tree died. PASS, FAIL or VOID.
+
+    VOID IS A SKIP, NOT A PASS. A CI runner may produce no running instance at
+    all (an interactive-only task with no interactive session), and a ``return``
+    there counts as PASSED under ``-ra`` while its prints are swallowed -- so
+    the claim would read as proved and the table would never reach the step log.
+    ``pytest.skip`` is distinct from a pass and visible in the summary.
+
+    THE CONTROL RUNS FIRST AND GATES THE ARM, twice over. ``compile()`` on the
+    recorder before anything is installed, because a program that does not
+    compile produces exactly the same empty marker as a pulse that was never
+    started -- and the first draft of this leg shipped with one that did not.
+    Then the liveness control: without it, a command that ended on its own is
+    indistinguishable from one the re-create ended.
+
+    THE CONTAINMENT RECORD IS READ BEFORE THE ACT, because ``write_launcher``
+    deletes it on every reinstall (winlaunch.py:126), and it is PARSED rather
+    than substring-matched: the record also carries ``supported: true``, so a
+    text test for "true" passes an UNCONTAINED host straight into a FAIL where
+    the honest answer is VOID.
+    """
+    from firm.sched.base import run_cmd
+    from firm.sched.winsched import WindowsScheduler
+    from firm.sched import winlaunch
+
+    # CONTROL 0: the program must compile before anything is installed.
+    compile(_RECORDER, "<recorder>", "exec")
+
+    # A UNIQUE STEM, this file's own rule. `/Create /F` over a stale livetest
+    # task would delete evidence this run did not create.
+    stem = f"{PREFIX}147-{os.getpid()}-{int(time.time())}"
+    rc, listing = run_cmd(["schtasks", "/Query", "/FO", "CSV", "/NH"], timeout=60)
+    assert rc == 0, f"schtasks could not list tasks: {listing[:300]}"
+    leftovers = [ln for ln in listing.splitlines() if f"\\Cadre\\{PREFIX}" in ln]
+    if leftovers:
+        pytest.fail("refusing to run: a live-test task from another run exists "
+                    f"and is not this test's to delete: {leftovers[:3]}")
+
+    launchers = tmp_path / "launchers"
+    marker = tmp_path / "gens.txt"
+    script = tmp_path / "recorder.py"
+    script.write_text(_RECORDER, encoding="utf-8")
+    sched = WindowsScheduler(launcher_dir=launchers)
+    readings: list[str] = []
+    verdict = "VOID"
+
+    def say(line: str) -> None:
+        readings.append(f"[147] {line}")
+
+    try:
+        sched.install_timer(stem, description="147 live", workdir=tmp_path,
+                            env={},
+                            argv=[sys.executable, str(script), str(marker)],
+                            interval="15m")
+        run_cmd(["schtasks", "/Run", "/TN", sched._tn(stem)], timeout=60)
+
+        deadline = time.time() + 30
+        gens: set = set()
+        while time.time() < deadline and len(gens) < 2:
+            gens = _generations(marker)
+            time.sleep(1)
+
+        control = _alive(gens)
+        say(f"recorded generations: {sorted(gens)}")
+        say(f"alive before the act : {sorted(control)}")
+        say(f"status() before      : {sched.status(stem)}")
+
+        if len(control) < 2:
+            say("/Run produced no running tree on this runner, so there was "
+                "nothing to end and nothing is measured here")
+            pytest.skip("[147] VOID: no running instance to act on -- "
+                        + " | ".join(readings))
+
+        record_path = winlaunch.containment_path(launchers, stem)
+        record = (json.loads(record_path.read_text(encoding="utf-8"))
+                  if record_path.exists() else {})
+        say(f"containment record before the act: {record or 'ABSENT'}")
+        if record.get("contained") is not True:
+            say("the launcher is not contained on this host, so ending it is "
+                "not expected to end its tree")
+            pytest.skip("[147] VOID: uncontained launcher -- "
+                        + " | ".join(readings))
+
+        # THE ACT: the product's own call, never raw schtasks, and a DIFFERENT
+        # interval so the spec can be read back as proof the re-create landed.
+        sched.install_timer(stem, description="147 live", workdir=tmp_path,
+                            env={},
+                            argv=[sys.executable, str(script), str(marker)],
+                            interval="30m")
+
+        end = time.time() + 10
+        survivors = control
+        while time.time() < end and survivors:
+            survivors = _alive(control)
+            time.sleep(1)
+
+        after = sched.status(stem)
+        say(f"alive after the act  : {sorted(survivors)}")
+        say(f"task still installed : {_query(sched._tn(stem)) == 0}")
+        say(f"status() after       : {after}")
+        say("containment record after: "
+            f"{'PRESENT' if record_path.exists() else 'ABSENT'}")
+
+        verdict = "PASS" if not survivors else "FAIL"
+        assert not survivors, (
+            "enable re-created the task and left the old pulse tree running",
+            sorted(survivors))
+        # Condition 3's post-act readings, ASSERTED rather than only printed.
+        assert _query(sched._tn(stem)) == 0, (
+            "the task did not survive its own re-create")
+        assert after.get("interval") == "30m", (
+            "the spec still names the old interval", after)
+        assert not record_path.exists(), (
+            "write_launcher deletes the containment record on reinstall; it is "
+            "still there, so the re-create did not write a new launcher")
+    finally:
+        # The verdict and the table go out BEFORE the teardown, so a failure in
+        # `remove()` cannot swallow the reading this leg exists to produce.
+        with capsys.disabled():
+            for line in readings:
+                print(line)
+            print(f"[147] {verdict}")
+        # Ended BY GENERATION only: a pid whose creation time differs is a
+        # stranger and is never touched.
+        for pid, _created in _alive(_generations(marker)):
+            run_cmd(["taskkill", "/PID", str(pid), "/T", "/F"], timeout=60)
+        sched.remove(stem)
