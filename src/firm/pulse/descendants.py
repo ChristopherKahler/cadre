@@ -247,14 +247,45 @@ def descendants_of(pid: int,
     return sorted(found)
 
 
-def still_alive(generations: list[Generation]) -> list[Generation]:
-    """The subset of *generations* still running, read fresh.
+def blind_reason(table: dict[int, tuple[int, str, str]]) -> str | None:
+    """Why this table cannot be trusted as a reading, or None. (R5d)
+
+    A READER THAT REPORTS ZERO MUST FIRST PROVE IT CAN SEE. Every reader above
+    returns an empty table when its command fails rather than raising — which
+    is right for a pulse that must not die over a reading, and catastrophic for
+    a caller that cannot tell "nothing is running" from "I could not look".
+    Those are different claims, and abort's whole promise rests on the
+    difference.
+
+    The proof is the one fact every caller has: its own pid. A table that does
+    not contain this very process is not a reading of this host, whatever the
+    cause — the command missing, a non-zero exit with empty output, a parse
+    that matched nothing.
+    """
+    if not table:
+        return ("the process table came back empty, so the reader could not "
+                "run at all")
+    me = os.getpid()
+    if me not in table:
+        return (f"the process table does not contain this very process "
+                f"({me}), so it is not a reading of this host")
+    return None
+
+
+def still_alive(generations: list[Generation],
+                table: dict[int, tuple[int, str, str]] | None = None
+                ) -> list[Generation]:
+    """The subset of *generations* still running.
 
     Matching on the creation time as well as the pid is what makes this a
     re-read of the SAME processes rather than a question about whoever holds
     those numbers now.
+
+    *table* is passed in by callers that must make ONE reading and use it for
+    everything (R5d): two reads taken moments apart can disagree, and a caller
+    that checked one of them for blindness has not checked the other.
     """
-    table = process_table()
+    table = process_table() if table is None else table
     alive: list[Generation] = []
     for pid, created in generations:
         entry = table.get(pid)

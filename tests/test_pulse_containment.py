@@ -604,26 +604,41 @@ def _abort(ws: Path, timeout: int = 120) -> tuple[int, dict | None, str]:
 # so a red leg below means the product and not the instrument.
 # ---------------------------------------------------------------------------
 
-def test_control_the_tree_is_three_generations_deep_and_all_are_alive(tree):
+def test_control_the_tree_is_three_generations_deep_and_all_are_alive(
+        tree, capsys):
     """Without this, every leg below could pass by measuring a tree that was
-    never built, and the leaf assertions would be vacuous."""
+    never built, and the leaf assertions would be vacuous.
+
+    It prints under `capsys.disabled()` so the lines reach the CI job log. They
+    did not, the first time: pytest captured them, and CI's macOS job passed
+    without ever saying which reader produced the green — which had to be
+    inferred from the skip list instead of read off the log.
+    """
     assert tree.holder and tree.middle and tree.leaf
     assert len({tree.holder, tree.middle, tree.leaf}) == 3, tree.stages
     for name, pid in (("holder", tree.holder), ("middle", tree.middle),
                       ("leaf", tree.leaf)):
         assert _alive(pid), f"the {name} died before the test began"
     assert _generation(tree.leaf) is not None
-    # WHICH READER PRODUCED THIS GREEN. On CI's macOS job there is no /proc and
-    # the ps reader is the only one there is, so a log that does not name the
-    # reader leaves it to be inferred from a passing test. Named here, the
-    # macOS log states it.
+    # WHICH READER PRODUCED THIS GREEN. On CI's macOS job there is no /proc
+    # and the ps reader is the only one there is, so a log that does not name
+    # the reader leaves it to be inferred from a passing test.
+    #
+    # `capsys.disabled()` IS LOAD-BEARING, NOT TIDINESS. Without it pytest
+    # captures these lines and they never reach the job log at all -- measured:
+    # CI's macOS job at 44943f1b passed with ZERO `[148]` lines in its log,
+    # while the comment that used to sit here claimed the log stated the
+    # reader. It did not. Remove the `disabled()` and this print goes back to
+    # telling nobody anything.
     reader = "proc" if _HAS_PROCFS else "ps"
-    print(f"[148] posix reader: {reader}")
-    print(f"[148] tree depth 3: holder={tree.holder} middle={tree.middle} "
-          f"leaf={tree.leaf}")
+    with capsys.disabled():
+        print(f"[148] posix reader: {reader}")
+        print(f"[148] tree depth 3: holder={tree.holder} "
+              f"middle={tree.middle} leaf={tree.leaf}")
 
 
-def test_control_the_leaf_sits_at_least_two_generations_below_the_holder(tree):
+def test_control_the_leaf_sits_at_least_two_generations_below_the_holder(
+        tree, capsys):
     """THE CONTROL ADDENDUM 2 ASKS FOR, stated as a property of the TREE rather
     than of the walk: if the leaf were a direct child, a one-level walk would
     find it and the leg that says "a one-level walk must redden" would prove
@@ -634,8 +649,9 @@ def test_control_the_leaf_sits_at_least_two_generations_below_the_holder(tree):
     that merely happened to be deep on this host would be two deep on another
     and these legs would quietly stop testing anything."""
     depth = _depth_below(tree.holder, tree.leaf)
-    print(f"[148] walk depth from holder {tree.holder} to leaf {tree.leaf}: "
-          f"{depth}")
+    with capsys.disabled():
+        print(f"[148] walk depth from holder {tree.holder} to leaf "
+              f"{tree.leaf}: {depth}")
     assert depth is not None, (
         f"the leaf {tree.leaf} is not a descendant of the holder "
         f"{tree.holder} at all")
@@ -1482,3 +1498,115 @@ def test_control_the_ps_reader_agrees_with_this_hosts_primary_reader():
         assert proc_said != "Z" and ps_said != "Z", (
             f"a reader called this running process a zombie: "
             f"/proc {proc_said!r}, ps {ps_said!r}")
+
+
+# ---------------------------------------------------------------------------
+# R5d: a reader that cannot see must say so
+# ---------------------------------------------------------------------------
+
+def _blind_abort(tmp_path, monkeypatch, capsys, table_for):
+    """Run an abort over a holder that really dies, with a faked table.
+
+    THE HOLDER DIES AND THE SIGNAL IS REAL, and that is the whole shape. An
+    earlier draft used a SURVIVING holder with the signal faked, R1a's shape --
+    but a surviving holder makes `lock` "signalled", which flips `ok` false by
+    itself, so a blind reader would have changed nothing and the leg would have
+    passed against the very defect it exists for. The blind state only bites on
+    the CLEARED branch, where nothing else is holding `ok` false.
+    """
+    ws = _firm(tmp_path / "ws")
+    base = tmp_path / "holder"
+    base.mkdir(parents=True, exist_ok=True)
+    alive = _Tree(base, depth=1)
+    try:
+        _hold_lock(ws, f"{socket.gethostname()}:{alive.holder}:t148blind")
+        monkeypatch.setattr(descendants, "process_table", table_for)
+
+        pulse_cli.run_pulse(ws, abort=True, firm_id=FIRM)
+        monkeypatch.undo()
+
+        return json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    finally:
+        monkeypatch.undo()
+        alive.close()
+
+
+def test_a_table_that_came_back_empty_is_blind_and_abort_says_so(
+        tmp_path, monkeypatch, capsys):
+    """R5d, TIER A': an empty table is not a reading that nothing is running.
+
+    Both table readers return `{}` when their command fails -- `ps` missing, a
+    non-zero exit with empty stdout, a parse that matched nothing -- and none
+    of them raises, because a pulse must not die over a reading. So the CALLER
+    has to tell "nothing is running" from "I could not look", and before R5d it
+    could not: the empty table read every descendant dead, `alive_after` came
+    back empty, and `ok` stayed true on the cleared branch. That is #148's own
+    false green, re-entering through the fix for it.
+    """
+    # The positive sibling, in the same run: the real table DOES contain this
+    # process, so the absence asserted below is a measurement and not a reader
+    # that has gone blind in some other way.
+    assert descendants.blind_reason(descendants.process_table()) is None
+
+    result = _blind_abort(tmp_path, monkeypatch, capsys, lambda: {})
+
+    assert result["ok"] is False, result
+    assert "alive_after" not in result, (
+        f"abort did not look, so it must not report an empty list as though "
+        f"it had\n{result}")
+    assert result["tree_read"]["failed"] == "before", result
+    assert "empty" in result["tree_read"]["reason"], result
+
+
+def test_a_table_without_our_own_pid_is_blind_and_abort_says_so(
+        tmp_path, monkeypatch, capsys):
+    """R5d: the proof a reader can see is the one fact every abort has.
+
+    A table that parsed SOMETHING but not this very process is not a reading of
+    this host -- a `ps` whose columns moved, a CIM query that returned a
+    fragment. It is indistinguishable from a good reading by size alone, which
+    is why the check is for a specific pid rather than for a count.
+    """
+    real = descendants.process_table
+
+    def missing_me():
+        table = dict(real())
+        table.pop(os.getpid(), None)
+        return table
+
+    result = _blind_abort(tmp_path, monkeypatch, capsys, missing_me)
+
+    assert result["ok"] is False, result
+    assert "alive_after" not in result, result
+    assert result["tree_read"]["failed"] == "before", result
+    assert str(os.getpid()) in result["tree_read"]["reason"], result
+
+
+def test_a_blind_read_after_the_grace_is_named_as_the_after_read(
+        tmp_path, monkeypatch, capsys):
+    """R5d: which read failed is part of the answer.
+
+    The before/after split is not decoration. A blind BEFORE read means abort
+    never saw the tree at all; a blind AFTER read means it saw the tree and
+    then could not check it. An operator does different things with those, so
+    `tree_read` names which one, and this leg is what keeps the two apart --
+    without it, a fix that always reported "before" would pass.
+    """
+    real = descendants.process_table
+    calls = {"n": 0}
+
+    def blind_on_the_second_call():
+        calls["n"] += 1
+        return real() if calls["n"] == 1 else {}
+
+    result = _blind_abort(tmp_path, monkeypatch, capsys,
+                          blind_on_the_second_call)
+
+    assert calls["n"] >= 2, (
+        f"abort read the table {calls['n']} time(s); this leg is about the "
+        f"SECOND read and there was not one")
+    assert result["ok"] is False, result
+    assert "alive_after" not in result, result
+    assert result["tree_read"]["failed"] == "after", result
+    # The before read succeeded, so its own reading stands and is reported.
+    assert "descendants_before" in result, result

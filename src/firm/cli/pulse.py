@@ -706,6 +706,10 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
     # vocabulary and its message unchanged. Liveness there is presence in the
     # process table with the same creation time, never permission to signal, so
     # it has no EPERM branch and a zombie reads dead (`pulse/descendants.py`).
+    # AND IT NEVER CLAIMS SUCCESS OVER A READING IT DID NOT TAKE (R5d): each of
+    # the two readings proves it can see by finding abort's own pid in it, and
+    # a blind one gives `ok: false` with `alive_after` ABSENT and `tree_read`
+    # naming which read failed and why.
     # The limitation, said here rather than found later: a process the holder
     # starts after the snapshot is not in it.
     result: dict[str, Any] = {"ok": True, "aborted": 0}
@@ -738,6 +742,7 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
     holder_pid: int | None = None
     holder_before: list[tuple[int, str]] = []
     before: list[tuple[int, str]] = []
+    blind_before: str | None = None
     conn = connect(db_path)
     try:
         try:
@@ -761,14 +766,20 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
                 # The walk is transitive: a Member arrives under a launcher, so
                 # the holder's direct children are launchers and the process
                 # doing the work is a generation below them.
-                before = descendants.descendants_of(holder_pid)
+                # ONE READING, USED FOR BOTH (R5d). The snapshot and the
+                # holder's own generation come from the same table, so they
+                # cannot disagree with each other, and one blindness check
+                # covers both.
+                table_before = descendants.process_table()
+                blind_before = descendants.blind_reason(table_before)
+                before = descendants.descendants_of(holder_pid, table_before)
                 # THE HOLDER IS A GENERATION TOO, taken here rather than after
                 # the act (G1-3). Read afterwards by pid alone, a pid handed to
                 # a new process between the signal and the re-read reads as the
                 # holder still being alive, and abort then flips `ok` false
                 # over a stranger. This module's own first rule is generation,
                 # not pid, and the holder is not an exception to it.
-                holder_gen = descendants.generation_of(holder_pid)
+                holder_gen = descendants.generation_of(holder_pid, table_before)
                 holder_before = [holder_gen] if holder_gen else []
                 os.kill(int(pid_str), signal.SIGTERM)
                 result["aborted"] += 1
@@ -825,22 +836,50 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
         # empty are different claims -- absent says abort did not look, empty
         # says it looked and found nothing -- and only the second can carry the
         # promise `ok` now makes.
-        result["descendants_before"] = descendants.as_result(before)
-        survivors = descendants.still_alive(before)
-        # The same reader for the holder as for everything else: matched on
-        # pid AND creation time, so a reused pid is a different process and
-        # reads as gone, which it is.
-        alive = sorted(descendants.still_alive(holder_before) + survivors)
-        result["alive_after"] = descendants.as_result(alive)
-        if alive or result.get("lock") == "signalled":
-            # THE ACCEPTANCE LINE, and the one behaviour this PR changes:
-            # after abort returns ok: true, no process belonging to that run is
-            # alive -- and if any is, abort does not report ok: true. Every
-            # reader of this command takes the last stdout line's `ok` as the
-            # answer (#128), so an ok: true beside a live Member is the report
-            # #148 was filed about, whatever the message next to it says. The
-            # words are unchanged; only the success bit moves.
+        table_after = descendants.process_table()
+        blind_after = descendants.blind_reason(table_after)
+        blind = (("before", blind_before) if blind_before
+                 else ("after", blind_after) if blind_after else None)
+
+        if blind_before is None:
+            # A blind AFTER read does not unmake the BEFORE one: that reading
+            # was taken and it stands.
+            result["descendants_before"] = descendants.as_result(before)
+
+        if blind is not None:
+            # ABORT NEVER CLAIMS SUCCESS OVER A READING IT DID NOT TAKE (R5d).
+            # `alive_after` stays ABSENT rather than empty, because absent says
+            # abort did not look and empty says it looked and found nothing --
+            # and only one of those is true here. `tree_read` says which read
+            # failed and why, so an operator has somewhere to go.
+            #
+            # NO `return` HERE, and that is deliberate. This function's ways
+            # out are pinned by the exit contract, because each one is a place
+            # the result line can be got wrong. This branch needs no exit of
+            # its own: it sets what it must and falls through to the single
+            # one at the bottom, where every other ending already goes.
+            which, why = blind
+            result["tree_read"] = {"failed": which, "reason": why}
             result["ok"] = False
+        else:
+            survivors = descendants.still_alive(before, table_after)
+            # The same reader for the holder as for everything else: matched
+            # on pid AND creation time, so a reused pid is a different process
+            # and reads as gone, which it is.
+            alive = sorted(
+                descendants.still_alive(holder_before, table_after)
+                + survivors)
+            result["alive_after"] = descendants.as_result(alive)
+            if alive or result.get("lock") == "signalled":
+                # THE ACCEPTANCE LINE, and the one behaviour this PR
+                # changes: after abort returns ok: true, no process belonging
+                # to that run is alive -- and if any is, abort does not report
+                # ok: true. Every reader of this command takes the last stdout
+                # line's `ok` as the answer (#128), so an ok: true beside a
+                # live Member is the report #148 was filed about, whatever the
+                # message next to it says. The words are unchanged; only the
+                # success bit moves.
+                result["ok"] = False
 
     if outcome.get("runs_not_finalized"):
         # One bad row never stops the rest, and never disappears either. This
