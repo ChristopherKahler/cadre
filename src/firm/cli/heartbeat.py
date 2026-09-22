@@ -460,6 +460,22 @@ def run_status(*, unit_dir: Path | None = None,
         named = _firm_from(workspace, firm_id)
         if isinstance(named, int):
             return named
+        if named is None:
+            # A FLAG WAS GIVEN AND NOTHING RESOLVED, which is not the same as
+            # no flag at all. `wanted = None` would fall through to listing
+            # every installed heartbeat, and an operator who named a workspace
+            # would read someone else's timers as the answer to their question
+            # -- the silent fall-through condition 3 forbids, one branch over.
+            # `disable` already fails here because it needs the id to build a
+            # stem; `status` did not, because a None filter reads as no filter.
+            # The word is the pulse's for the same failure (`cli/pulse.py`).
+            payload: dict = {"ok": False, "reason": "firm-id-unresolved"}
+            if workspace is not None:
+                payload["workspace"] = str(workspace)
+            if firm_id is not None:
+                payload["firm_id"] = firm_id
+            _emit(payload)
+            return 1
         wanted = named
 
     sched = _sched(unit_dir)

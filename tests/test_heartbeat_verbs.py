@@ -282,6 +282,40 @@ def test_R2_control_status_on_a_firm_with_no_timer_is_an_answer(tmp_path):
                                        run.detail)
 
 
+def test_R3b_status_with_a_flag_that_resolves_no_firm_does_not_list_them_all(
+        tmp_path):
+    """osprey's pre-PR finding, folded in before the PR.
+
+    A workspace whose database holds no firm resolves to nothing. Listing every
+    installed heartbeat there would answer a question about ONE firm with
+    somebody else's timers, which is the silent fall-through condition 3
+    forbids -- one branch over from the missing-database case. `disable`
+    already failed here because it needs the id to build a stem; `status` did
+    not, because a None filter reads as no filter.
+    """
+    home = _home(tmp_path)
+    other = _firm_at(tmp_path / "other", OTHER)
+    _install(home, other, OTHER)
+    empty = tmp_path / "firmless"
+    (empty / ".firm").mkdir(parents=True)
+    conn = connect(empty / ".firm" / "firm.db")
+    try:
+        apply_migrations(conn)          # a database with no firm row in it
+        conn.commit()
+    finally:
+        conn.close()
+
+    run = _cadre(home, "heartbeat", "status", "--workspace", str(empty))
+
+    result = run.one_object()
+    assert run.rc == 1, run.detail
+    assert result["ok"] is False, run.detail
+    assert result["reason"] == "firm-id-unresolved", run.detail
+    assert result["workspace"] == str(empty), run.detail
+    assert "heartbeats" not in result, (
+        "the other firm's timer is not an answer to this question", run.detail)
+
+
 def test_R3_status_takes_a_workspace(tmp_path):
     home = _home(tmp_path)
     ws = _firm_at(tmp_path / "ws")
