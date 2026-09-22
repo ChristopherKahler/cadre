@@ -235,7 +235,7 @@ def _win_table() -> dict[int, tuple[int, str]]:
         ["powershell", "-NoProfile", "-NonInteractive", "-Command",
          "Get-CimInstance Win32_Process | "
          "Select-Object ProcessId,ParentProcessId,"
-         "@{n='Created';e={$_.CreationDate.Ticks}} | ConvertTo-Json -Compress"],
+         "@{n='Created';e={$_.CreationDate.ToUniversalTime().Ticks}} | ConvertTo-Json -Compress"],
         capture_output=True, text=True, timeout=120).stdout.strip()
     if not out:
         return {}
@@ -1076,6 +1076,10 @@ def test_the_descendant_walker_names_no_permission_call_in_its_source():
     assert "/proc" in body, "the POSIX branch is gone; absence proves nothing"
     assert "Win32_Process" in body, (
         "the Windows branch is gone; absence proves nothing")
+    assert "ToUniversalTime" in body, (
+        "the Windows stamp has drifted back to a LOCAL tick count (R5c); two "
+        "reads either side of a daylight saving change would disagree for the "
+        "same process, and a live survivor would read as gone")
 
     assert "OpenProcess" not in body, (
         "the walker opens a handle to decide liveness; R5b forbids it, and it "
@@ -1176,3 +1180,172 @@ def test_alive_after_is_present_whenever_a_holder_was_signalled(tmp_path, tree):
     assert result.get("aborted") == 1, f"no holder was signalled\n{output}"
     assert "alive_after" in result, (
         f"a holder was signalled and abort did not say what survived\n{output}")
+
+
+def test_an_abort_never_carries_a_containment_record_it_did_not_take(
+        tmp_path, monkeypatch, capsys):
+    """G1-2: the containment answer belongs to a pulse, not to an abort.
+
+    `_CONTAINMENT` is a module global that `_exit_with` merges onto every
+    result, and `run_pulse` clears it on entry -- but abort returns BEFORE the
+    record is taken, so without a clear of its own an abort inherits whatever
+    the last pulse in this process left behind. It is not hypothetical:
+    `tests/test_pulse_cleanup.py` calls `_handle_abort` directly at :361,
+    :394, :496 and :597, in processes where other legs have run pulses.
+
+    So this drives exactly that order in one process: a real pulse first, then
+    a direct `_handle_abort`, and none of the four keys may survive the trip.
+    """
+    ws = _firm(tmp_path / "ws")
+    monkeypatch.setenv("CADRE_CLAUDE_BIN", _stand_in(tmp_path))
+    monkeypatch.setattr(winjob, "contain_this_process",
+                        lambda: winjob.Containment(True, "", 0x00002000))
+
+    pulse_cli.run_pulse(ws, firm_id=FIRM)
+    pulsed = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    # The positive sibling, in the same run: the keys ARE there for a pulse,
+    # so their absence below is a measurement and not a blind reader.
+    assert pulsed["contained"] is True, pulsed
+
+    pulse_cli._handle_abort(ws, FIRM)
+    aborted = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+
+    for key in ("contained", "containment_reason", "containment_flags",
+                "containment_supported"):
+        assert key not in aborted, (
+            f"the abort result carries {key!r}, which it never asked for: "
+            f"{aborted}")
+
+
+def test_the_holder_is_re_read_as_a_generation_not_as_a_pid(tmp_path,
+                                                            monkeypatch,
+                                                            capsys):
+    """G1-3: a pid reused between the signal and the re-read is a stranger.
+
+    The walker's own first rule is generation, not pid, and the holder is not
+    an exception to it. Read back by pid alone, a pid handed to a new process
+    in that window reads as the holder still being alive and abort flips `ok`
+    false over something that has nothing to do with this run.
+
+    TIER A, driven by moving the table under the re-read: the same pid comes
+    back with a DIFFERENT creation time, which is exactly what a reuse looks
+    like. The holder is real and the signal is faked, R1a's shape, so the
+    branch is entered on every host.
+    """
+    ws = _firm(tmp_path / "ws")
+    base = tmp_path / "holder"
+    base.mkdir(parents=True, exist_ok=True)
+    alive = _Tree(base, depth=1)
+    real_kill = os.kill
+    real_table = descendants.process_table
+
+    signalled = {"yet": False}
+    calls = {"n": 0}
+
+    def fake_kill(pid, sig, *rest):
+        if sig == 0:
+            return real_kill(pid, sig, *rest)
+        signalled["yet"] = True
+        return None
+
+    def drifting_table():
+        """Before the signal, the truth; after it, a REUSED pid.
+
+        THE DRIFT IS TIED TO THE SIGNAL, NOT TO A CALL COUNT, and that is a
+        fix rather than a preference. The first draft drifted after the first
+        read and measured nothing: abort reads the table TWICE before it
+        signals -- once for the descendants, once for the holder's own
+        generation -- so the pre-signal generation was already the drifted
+        one, matched itself on the re-read, and the leg failed while the
+        product was right. A pid is reused after a process dies, which is
+        after the signal; modelling it any other way models something that
+        cannot happen.
+        """
+        table = dict(real_table())
+        calls["n"] += 1
+        if signalled["yet"] and alive.holder in table:
+            ppid, created, state = table[alive.holder]
+            table[alive.holder] = (ppid, created + "9999", state)
+        return table
+
+    try:
+        _hold_lock(ws, f"{socket.gethostname()}:{alive.holder}:t148gen")
+        monkeypatch.setattr(os, "kill", fake_kill)
+        monkeypatch.setattr(descendants, "process_table", drifting_table)
+
+        pulse_cli.run_pulse(ws, abort=True, firm_id=FIRM)
+        monkeypatch.undo()
+
+        result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+        assert calls["n"] > 1, (
+            "the table was read once, so the re-read this leg is about never "
+            "happened and nothing was measured")
+        assert _pids_in(result.get("alive_after")) == [], (
+            f"the holder was re-read by pid alone: its creation time changed, "
+            f"so it is a different process and must read as gone\n{result}")
+        assert result["ok"] is True, result
+    finally:
+        monkeypatch.undo()
+        alive.close()
+
+
+#: .NET ticks at the Windows FILETIME epoch (1601-01-01 UTC), i.e. the number
+#: of 100 ns units from 0001-01-01 to 1601-01-01. Adding it converts a
+#: FILETIME to the same scale `CreationDate.Ticks` uses.
+_FILETIME_EPOCH_IN_DOTNET_TICKS = 504911232000000000
+
+
+@pytest.mark.skipif(os.name == "posix",
+                    reason="reads a Windows FILETIME through GetProcessTimes; "
+                           "the POSIX stamp is a boot-relative tick count and "
+                           "has no second channel to check it against")
+def test_the_windows_created_stamp_is_a_utc_count(capsys):
+    """R5c, TIER B and DRIVABLE: the walker's stamp against another channel.
+
+    `CreationDate` converts with `Kind` Local, so `.Ticks` would be a LOCAL
+    count -- not stable across a daylight saving change, and two reads either
+    side of one give different strings for the same process. `still_alive`
+    reads that as the process being gone, so `alive_after` comes back empty
+    over a live survivor: the dangerous direction.
+
+    The independent channel is `GetProcessTimes`, whose creation time is a
+    FILETIME in 100 ns units since 1601-01-01 UTC. Adding
+    `_FILETIME_EPOCH_IN_DOTNET_TICKS` puts it on the same scale as
+    `CreationDate.Ticks`. The two must agree within **[-9, 0] ticks**: CIM
+    truncates to microseconds and always downward, so the walker's value is
+    never larger and never more than 9 ticks smaller (avocet measured -9, -5
+    and -1 on three processes).
+
+    A drift back to local ticks reddens this by about five hours of ticks. The
+    static leg's `ToUniversalTime` presence is the second channel, so the
+    regression is caught by two different kinds of evidence.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    me = os.getpid()
+    walked = descendants.generation_of(me)
+    assert walked is not None, "the walker cannot see this very process"
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.GetCurrentProcess.restype = wintypes.HANDLE
+    k32.GetCurrentProcess.argtypes = []
+    k32.GetProcessTimes.restype = wintypes.BOOL
+    k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [
+        ctypes.POINTER(wintypes.FILETIME)] * 4
+    made, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
+    assert k32.GetProcessTimes(k32.GetCurrentProcess(), ctypes.byref(made),
+                               ctypes.byref(exited), ctypes.byref(kernel),
+                               ctypes.byref(user)), ctypes.get_last_error()
+    filetime = (made.dwHighDateTime << 32) | made.dwLowDateTime
+    independent = filetime + _FILETIME_EPOCH_IN_DOTNET_TICKS
+    difference = int(walked[1]) - independent
+
+    with capsys.disabled():
+        print(f"[148] walker stamp {walked[1]} vs GetProcessTimes "
+              f"{independent}, difference {difference} ticks")
+
+    assert -9 <= difference <= 0, (
+        f"the walker's stamp is {difference} ticks from an independent UTC "
+        f"reading of the same process. A local count differs by whole hours; "
+        f"CIM's microsecond truncation differs by at most 9 ticks, downward.")

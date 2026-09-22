@@ -742,7 +742,9 @@ def _build_parser(json_usage: bool = False) -> argparse.ArgumentParser:
     )
     pulse_parser.add_argument(
         "--abort", action="store_true",
-        help="SIGTERM all tracked in-flight Member runs and exit.",
+        help="Record the running pulse's process tree, SIGTERM its "
+             "holder, then look again: ok is true only when no process of "
+             "that run is still alive, and what survived is listed.",
     )
     pulse_parser.add_argument(
         "--firm-id", dest="firm_id", default=None,

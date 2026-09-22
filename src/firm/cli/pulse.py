@@ -224,8 +224,17 @@ def run_pulse(
     Args:
         workspace: Root of the firm workspace.
         dry_run: If True, show who would activate without spawning.
-        abort: If True, abort the live pulse — SIGTERM in-process children,
-            then signal or clear the DB pulse_lock holder — and exit.
+        abort: If True, abort the live pulse — record the holder's tree,
+            SIGTERM the holder, re-read after the grace window, and report
+            what is still alive; ``ok`` is true only when nothing of that
+            run is — and exit.
+
+    Before it spawns its first Member this pulse puts ITSELF in a
+    kill-on-close job, so ending the pulse ends its Members whoever started it
+    — a scheduled task, the hub's button, or a hand in a terminal (#148 R2).
+    A host where that job cannot be made still gets its pulse: containment
+    never raises into this function, and what it answered is reported on the
+    result line under ``contained`` (R3).
         firm_id: Firm scope; None resolves to the firm this workspace's
             db holds (see resolve_firm_id).
         only: Member id — Board-targeted pulse activating only this Member
@@ -660,7 +669,27 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
     ``cleared`` -- a holder this abort killed -- and ``stale-cleared``, a holder
     already dead when abort looked. The cleanup never signals anything, so it
     cannot tell those two apart and correctly calls both ``cleared``.
+
+    AND IT CHECKS BEFORE IT CLAIMS (#148). Before signalling, abort records the
+    holder's process tree as generations -- pid and creation time -- re-reads
+    them after the grace window, and reports ``descendants_before`` and
+    ``alive_after``; ``ok`` is true only when no process of that run is still
+    alive, and when one is, ``ok`` is false with exit 1 and the lock's own
+    words unchanged. Liveness there is presence in the process table, never
+    permission to signal, so a zombie reads dead and another user's descendant
+    still reads alive (:mod:`firm.pulse.descendants`).
     """
+    # THE CONTAINMENT RECORD IS NOT ABORT'S, AND IT IS CLEARED HERE (G1-2).
+    # `_CONTAINMENT` is a module global that `_exit_with` merges onto every
+    # result, and `run_pulse` clears it on entry -- but abort is the one way
+    # out that returns BEFORE the record is taken, so a pulse run earlier in
+    # the same process would leave `contained` and `containment_supported` on
+    # an abort result that never asked for them. Measured by osprey against
+    # `tests/test_pulse_cleanup.py`, which calls this function directly at
+    # :361, :394, :496 and :597.
+    global _CONTAINMENT
+    _CONTAINMENT = {}
+
     # WHAT THIS PROMISES NOW (#148). Abort writes down the holder's tree
     # before it signals anything, looks again after the grace window, and
     # reports `descendants_before` and `alive_after` as `[[pid, created], ...]`
@@ -699,6 +728,7 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
     # paying: the alternative is this function deciding that for itself again.
     was_alive = False
     holder_pid: int | None = None
+    holder_before: list[tuple[int, str]] = []
     before: list[tuple[int, str]] = []
     conn = connect(db_path)
     try:
@@ -724,6 +754,14 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
                 # the holder's direct children are launchers and the process
                 # doing the work is a generation below them.
                 before = descendants.descendants_of(holder_pid)
+                # THE HOLDER IS A GENERATION TOO, taken here rather than after
+                # the act (G1-3). Read afterwards by pid alone, a pid handed to
+                # a new process between the signal and the re-read reads as the
+                # holder still being alive, and abort then flips `ok` false
+                # over a stranger. This module's own first rule is generation,
+                # not pid, and the holder is not an exception to it.
+                holder_gen = descendants.generation_of(holder_pid)
+                holder_before = [holder_gen] if holder_gen else []
                 os.kill(int(pid_str), signal.SIGTERM)
                 result["aborted"] += 1
                 for _ in range(10):  # grace: let it exit and release the lock
@@ -781,9 +819,10 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
         # promise `ok` now makes.
         result["descendants_before"] = descendants.as_result(before)
         survivors = descendants.still_alive(before)
-        holder_gen = (descendants.generation_of(holder_pid)
-                      if holder_pid is not None else None)
-        alive = sorted(([holder_gen] if holder_gen else []) + survivors)
+        # The same reader for the holder as for everything else: matched on
+        # pid AND creation time, so a reused pid is a different process and
+        # reads as gone, which it is.
+        alive = sorted(descendants.still_alive(holder_before) + survivors)
         result["alive_after"] = descendants.as_result(alive)
         if alive:
             # THE ACCEPTANCE LINE, and the one behaviour this PR changes:

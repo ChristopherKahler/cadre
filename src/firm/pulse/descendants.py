@@ -35,10 +35,25 @@ holder that has not reaped a child -- an abort that can never succeed on a
 perfectly healthy firm. Windows has no zombies, so presence in the table is the
 whole answer there.
 
-THE LIMITATION, STATED AT THE CODE RATHER THAN DISCOVERED LATER: a process the
-holder starts AFTER the snapshot is not in it, and will not be reported. The
-snapshot is taken while the holder is alive and about to be signalled, so the
-window is small, but it is not zero.
+A STAMP COMPARES ONLY WITH ITSELF, ON THE SAME HOST. The POSIX string is a
+count of clock ticks since boot; the Windows string is .NET ticks since
+0001-01-01 UTC. They are never comparable to each other, and neither is
+meaningful on another machine. The Windows one is taken through
+``ToUniversalTime()`` rather than as local ticks (R5c): ``CreationDate``
+converts with ``Kind`` Local, and a local count is not stable across a daylight
+saving change -- two reads either side of one give different strings for the
+same process, which reads as that process being GONE. Empty over a live
+survivor is the dangerous direction.
+
+TWO LIMITATIONS, BOTH STATED AT THE CODE RATHER THAN DISCOVERED LATER.
+
+1. A process the holder starts AFTER the snapshot is not in it, and will not be
+   reported. The snapshot is taken while the holder is alive and about to be
+   signalled, so the window is small, but it is not zero.
+2. A descendant whose INTERMEDIATE parent exited before the snapshot is not
+   reachable by the walk at all: on POSIX it has been reparented to init, and
+   on Windows the dead parent's row is simply gone, so no chain of
+   ``ParentProcessId`` leads to it from the holder.
 """
 from __future__ import annotations
 
@@ -106,7 +121,8 @@ def _windows_table() -> dict[int, tuple[int, str, str]]:
             ["powershell", "-NoProfile", "-NonInteractive", "-Command",
              "Get-CimInstance Win32_Process | "
              "Select-Object ProcessId,ParentProcessId,"
-             "@{n='Created';e={$_.CreationDate.Ticks}} | "
+             "@{n='Created';e={$_.CreationDate.ToUniversalTime()"
+             ".Ticks}} | "
              "ConvertTo-Json -Compress"],
             capture_output=True, timeout=120).stdout.strip()
     except (OSError, subprocess.SubprocessError):
