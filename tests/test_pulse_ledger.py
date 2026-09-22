@@ -635,6 +635,36 @@ def test_L11_control_a_firm_pulsing_on_its_interval_has_no_gap(tmp_path):
     assert card["ok"] is True, card
 
 
+def test_L11_control_an_interval_that_is_not_an_interval_does_not_break_doctor(
+        tmp_path):
+    """`interval_to_seconds` raises on anything that is not a simple span, and
+    `diagnose` has no handler at that level -- so one bad row would take down
+    the whole of `cadre doctor`, which is the verb an operator reaches for when
+    something is already wrong. Nothing in the product writes such a row today;
+    that is a reason it is unlikely, not a reason to assume it."""
+    from firm.cli import doctor
+
+    ws = _firm(tmp_path / "ws")
+    _pulses_at(ws, "2026-09-21T09:00:00+00:00", "2026-09-21T14:00:00+00:00")
+    conn = connect(ws / ".firm" / "firm.db")
+    try:
+        conn.execute("UPDATE firm SET pulse_interval = 'whenever' WHERE id = ?",
+                     (FIRM,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    checks = doctor.diagnose(ws, FIRM, unit_dir=tmp_path / "units")
+
+    card = next((c for c in checks if c["key"] == "pulse-gap"), None)
+    assert card is not None, [c["key"] for c in checks]
+    assert card["state"] == "undeterminable", card
+    assert "whenever" in card["detail"], card
+    assert any(c["key"] == "credentials" for c in checks), (
+        "the cards AFTER this one still ran, which is the point",
+        [c["key"] for c in checks])
+
+
 def test_L11_control_a_firm_with_no_ledger_table_reads_not_available(tmp_path):
     """Law 48's half of item 5: "the table is missing" and "no pulses" are
     different claims and must not print the same card. A firm without

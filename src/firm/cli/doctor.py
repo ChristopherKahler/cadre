@@ -379,18 +379,33 @@ def diagnose(workspace: Path, firm_id: str, *,
                 f"{len(starts)} pulse(s) recorded; a window needs two",
                 state="undeterminable"))
         else:
-            windows = pulse_ledger.gaps(
-                starts, interval_to_seconds(pulse_interval))
-            named = "; ".join(f"no pulse started between {a} and {b}"
-                              for a, b in windows[:3])
-            if len(windows) > 3:
-                named += f"; and {len(windows) - 3} more"
-            checks.append(_check(
-                "pulse-gap", "The pulse ledger shows no gaps", not windows,
-                "operator",
-                named if windows else
-                f"{len(starts)} pulses recorded, none more than two intervals "
-                f"({pulse_interval}) apart"))
+            try:
+                # RAISES on anything that is not a simple span. Migration 015
+                # clears a malformed value and `heartbeat enable` validates its
+                # argument, so nothing in the product writes one -- but the
+                # verb an operator runs when something is already wrong must
+                # not be the thing that breaks on a bad row.
+                every = interval_to_seconds(pulse_interval)
+            except ValueError as exc:
+                checks.append(_check(
+                    "pulse-gap", "The pulse ledger shows no gaps", False,
+                    "mechanical",
+                    f"firm.pulse_interval is {pulse_interval!r}, which is not "
+                    f"an interval: {exc}",
+                    fix="reconcile the row to timer truth",
+                    state="undeterminable"))
+            else:
+                windows = pulse_ledger.gaps(starts, every)
+                named = "; ".join(f"no pulse started between {a} and {b}"
+                                  for a, b in windows[:3])
+                if len(windows) > 3:
+                    named += f"; and {len(windows) - 3} more"
+                checks.append(_check(
+                    "pulse-gap", "The pulse ledger shows no gaps", not windows,
+                    "operator",
+                    named if windows else
+                    f"{len(starts)} pulses recorded, none more than two "
+                    f"intervals ({pulse_interval}) apart"))
 
         # 8d. stranded units — board (#128 C2)
         #
