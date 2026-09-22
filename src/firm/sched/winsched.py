@@ -305,7 +305,16 @@ class WindowsScheduler:
         # A .cmd launcher is what cadre wrote before #119; an upgraded install
         # can still hold one, and removing the heartbeat must take it too.
         for leftover in (self._stub(stem), self._spec(stem), self._log(stem),
-                         self.launcher_dir / f"{stem}.cmd"):
+                         self.launcher_dir / f"{stem}.cmd",
+                         # #141 writes this one beside the others, and remove
+                         # not knowing about it was a REGRESSION rather than a
+                         # gap: the file survived, the directory was then not
+                         # empty, and the directory stopped being deleted --
+                         # which it was before #141 (DoD D5, remove leaves
+                         # nothing). The name comes from the function that
+                         # writes it, so there is one producer of it and this
+                         # list cannot drift from the writer again.
+                         winlaunch.containment_path(self.launcher_dir, stem)):
             if leftover.exists():
                 leftover.unlink()
                 removed.append(leftover.name)
@@ -377,6 +386,30 @@ class WindowsScheduler:
                 out["workdir"] = recorded["cwd"]
             if recorded.get("interval"):
                 out["interval"] = recorded["interval"]
+        # Is the pulse TREE contained (#141, condition C3)? `state` is task
+        # liveness and says nothing about it: a task can be ready, fire
+        # perfectly, and still leave its pulse running when it is ended.
+        #
+        # ABSENT IS NOT FALSE. A task installed before this shipped, or one that
+        # has not run since, has written no record, and reporting "not
+        # contained" from a file that does not exist would send an operator
+        # after a failure that never happened. `contained` stays absent from
+        # this dict until a launcher has actually answered.
+        containment = winlaunch.containment_path(self.launcher_dir, stem)
+        if containment.exists():
+            try:
+                held = json.loads(containment.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                out["contained"] = False
+                out["containment_reason"] = (
+                    f"the containment record at {containment} could not be "
+                    f"read, so whether this tree is contained is unknown and "
+                    f"is reported as not contained: {exc}")
+            else:
+                out["contained"] = bool(held.get("contained"))
+                out["containment_reason"] = held.get("reason") or ""
+                if held.get("limit_flags"):
+                    out["containment_flags"] = held["limit_flags"]
         return out
 
     def list_installed(self, prefix: str) -> list[str]:

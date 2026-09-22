@@ -53,6 +53,7 @@ command and its console running (#119 fork doc, M-W2 arm A4b-1).
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import subprocess
@@ -62,6 +63,7 @@ from pathlib import Path
 from typing import IO, Any, Callable
 
 from firm.core.proc import run_utf8
+from firm.sched import winjob
 
 #: Seconds a supervised command waits before it runs again.
 BACKOFF_SECONDS = 5
@@ -116,6 +118,12 @@ def write_launcher(directory: Path, stem: str, *, argv: list[str],
     stub = directory / f"{stem}.pyw"
     stub.write_text(stub_text(spec_path, directory / f"{stem}.log"),
                     encoding="utf-8")
+    # A REINSTALL DROPS THE OLD CONTAINMENT ANSWER (#141). It was written by a
+    # launcher that no longer exists, and carrying it forward would let
+    # `status()` report a freshly installed task as contained before any
+    # launcher of THIS install has run -- a true-looking reading of a process
+    # that is gone. Absent until answered is the honest state.
+    containment_path(directory, stem).unlink(missing_ok=True)
     return stub
 
 
@@ -133,23 +141,126 @@ def _fresh(log: IO[str]) -> None:
     log.truncate()
 
 
+def containment_path(directory: Path, stem: str) -> Path:
+    """Where a launcher records whether its tree is contained (#141, C3)."""
+    return directory / f"{stem}.containment.json"
+
+
+def record_containment(directory: Path, stem: str,
+                       held: winjob.Containment) -> Path:
+    """Write the containment answer where `status()` can read it.
+
+    A LOG LINE IS NOT ENOUGH ON ITS OWN, which is condition C3: a machine where
+    the job cannot be made goes back to today's behaviour, and without a record
+    there is nothing to show for it. The log is also rewritten on every run of a
+    supervised command, so an answer that lives only there disappears the next
+    time the command restarts.
+    """
+    written = containment_path(directory, stem)
+    written.parent.mkdir(parents=True, exist_ok=True)
+    record = held.as_record(os.getpid(),
+                            dt.datetime.now().isoformat(timespec="seconds"))
+    written.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    return written
+
+
 def main(spec_path: str | os.PathLike[str], log: IO[str], *,
          run: Callable[..., Any] = run_utf8,
-         sleep: Callable[[float], Any] = time.sleep) -> int:
+         sleep: Callable[[float], Any] = time.sleep,
+         contain: Callable[[], winjob.Containment] = winjob.contain_this_process
+         ) -> int:
     """Run the command *spec_path* describes, with its output on *log*.
 
     A timer runs it once and returns its exit code; a command that cannot start
     raises, so the stub writes the traceback and exits non-zero. A service runs
     it again :data:`BACKOFF_SECONDS` after every exit, a failure to start
     included, and never returns.
+
+    CONTAINMENT HAPPENS FIRST, before the command exists (#141). A child started
+    before the job is assigned is OUTSIDE it, and closing the handle later never
+    reaches that child -- so the order is the property, not the presence of a
+    job. ``schtasks /End`` ends this process, its handle closes with it, and
+    everything it started ends too; without that, `/End` was measured leaving
+    three processes of the command running five seconds later (M-W2, arm A4b-1).
+
+    A HOST THAT CANNOT CONTAIN STILL GETS ITS PULSE. Refusing to run would turn
+    a locked-down machine into a firm with no heartbeat, which is worse than
+    today's leak. What it never does is run quietly: the answer goes into the
+    log and into the record `status()` reads.
     """
     spec = json.loads(Path(spec_path).read_text(encoding="utf-8"))
     argv = list(spec["argv"])
     env = dict(os.environ)
     env.update(spec.get("env") or {})
     supervise = bool(spec.get("supervise"))
+
+    try:
+        held = contain()
+    except Exception as exc:                    # noqa: BLE001
+        # CONTAINMENT MUST NOT BE ABLE TO KILL THE PULSE, which is the same
+        # rule the record write below already follows. `contain_this_process`
+        # says it never raises, and this launcher must not depend on that
+        # promise being kept by every future edit of another module: anything
+        # raised out of `main` is caught by the stub, written to the log as a
+        # traceback and exited 3, WITH THE COMMAND NEVER STARTED. avocet
+        # measured exactly that (#146 FINDING 1) by breaking one kernel call.
+        #
+        # An uncontained pulse is a pulse that outlives its task, which is the
+        # defect #141 closes. A pulse that never runs is every heartbeat on the
+        # machine, silently. The first is what this reports; the second is what
+        # it refuses to cause.
+        held = winjob.Containment(
+            False, f"containment raised instead of answering: {exc}")
+    try:
+        record_containment(Path(spec_path).parent, spec["stem"], held)
+        record_failure = ""
+    except Exception as exc:                    # noqa: BLE001
+        # THE RECORD MUST NOT BE ABLE TO KILL THE PULSE. Anything raised out of
+        # `main` is caught by the stub, written to the log as a traceback, and
+        # exited 3 -- with the command never started. So an unguarded write
+        # here would mean a read-only launcher directory or a full disk stops
+        # the heartbeat, and it would stop it in order to fail to write a note
+        # SAYING the heartbeat is fine.
+        #
+        # It is the same rule the containment itself follows: a host that
+        # cannot make a job still gets its pulse. The record reports a degraded
+        # state; it is never allowed to cause one. What it does instead is say
+        # so in the log, because a `status()` silent about containment with no
+        # reason anywhere is the one outcome an operator cannot act on.
+        record_failure = (
+            f"winlaunch: the containment record could not be written, so "
+            f"`heartbeat status` will not say whether this tree is contained: "
+            f"{exc}")
+
     while True:
         _fresh(log)
+        if record_failure:
+            print(record_failure, file=log, flush=True)
+        if held.supported and not held.contained:
+            # Inside the loop, AFTER `_fresh`: a supervised command truncates
+            # this log on every restart, so a line printed once before the loop
+            # would be gone from the log an operator actually opens.
+            #
+            # ONLY WHERE THE MECHANISM EXISTS. On a host with no job objects
+            # there is nothing an operator could do about it and this launcher
+            # is not that host's scheduler, so the line would be noise in every
+            # log forever. The RECORD still says `contained: false` with the
+            # reason on every platform, which is what condition C3 asks for --
+            # the difference is between telling someone about a failure they
+            # can fix and shouting about a mechanism their kernel never had.
+            print(f"winlaunch: the pulse tree is NOT contained, so ending this "
+                  f"task will not end what it started: {held.reason}",
+                  file=log, flush=True)
+        elif held.supported and held.reason:
+            # CONTAINED, BUT DEGRADED. The tree is in the job -- membership was
+            # read back before this -- and only the flags the record prints are
+            # missing. Said here too, because `limit_flags: null` in the record
+            # with nothing in the log is a state an operator cannot act on, and
+            # because the read failing at all is a kernel call misbehaving on
+            # this host and worth one line.
+            print(f"winlaunch: the pulse tree IS contained, but the job's "
+                  f"limit flags could not be read: {held.reason}",
+                  file=log, flush=True)
         try:
             done = run(argv, cwd=spec["cwd"], env=env, stdin=subprocess.DEVNULL,
                        stdout=log, stderr=log)

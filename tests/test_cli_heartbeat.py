@@ -209,3 +209,191 @@ def test_status_empty_ok(tmp_path, capsys, ctl):
     rc = hb.run_status(unit_dir=tmp_path)
     assert rc == 0
     assert json.loads(capsys.readouterr().out)["heartbeats"] == []
+
+
+def test_status_carries_the_containment_answer_to_the_operator(
+        tmp_path, capsys, monkeypatch):
+    """Condition C3: the operator is told the pulse tree is NOT contained, and why.
+
+    avocet's FINDING 3. The answer is produced one layer down and dropped
+    before anybody sees it: `WindowsScheduler.status` puts `contained`,
+    `containment_reason` and `containment_flags` on its dict, and `run_status`
+    copies `next_fire` and `last_fire` out of that dict and nothing else. K4
+    calls `status` directly, so every existing leg reads the layer BELOW the
+    one an operator uses, and all of them pass over this.
+
+    avocet measured both layers side by side: status() said contained false
+    with the reason "CreateJobObjectW failed, GetLastError=5 (Access is
+    denied.)", and `firm heartbeat status` printed firm_id, timer, state,
+    scheduler and interpreter -- nothing about containment at all.
+
+    This arm drives the CLI verb, which is the surface C3 names.
+    """
+    ws = _workspace_with_db(tmp_path)
+    unit_dir = tmp_path / "units"
+    unit_dir.mkdir()
+
+    class _Sched:
+        name = "winsched"
+
+        def list_installed(self, prefix):
+            return [prefix + "lab"]
+
+        def status(self, stem):
+            return {"installed": True, "state": "ready", "failed": False,
+                    "workdir": str(ws), "next_fire": "tomorrow",
+                    "contained": False,
+                    "containment_reason": "CreateJobObjectW failed, "
+                                          "GetLastError=5 (Access is denied.)",
+                    "containment_flags": "0x00002000"}
+
+    monkeypatch.setattr(hb, "_sched", lambda unit_dir=None: _Sched())
+    monkeypatch.setattr(hb, "_service_python", lambda stem, unit_dir: None)
+
+    rc = hb.run_status(unit_dir=unit_dir)
+
+    assert rc == 0
+    entry = json.loads(capsys.readouterr().out)["heartbeats"][0]
+    assert entry.get("contained") is False, (
+        f"`firm heartbeat status` does not tell the operator whether the pulse "
+        f"tree is contained; it printed {sorted(entry)}")
+    assert "Access is denied" in (entry.get("containment_reason") or ""), (
+        "the reason the tree is not contained never reaches the operator, so "
+        "they are told there is a problem with no way to act on it")
+    assert entry.get("containment_flags") == "0x00002000", entry
+
+
+def test_status_says_nothing_about_containment_when_the_layer_below_does_not(
+        tmp_path, capsys, monkeypatch):
+    """The control. A scheduler with no answer must not grow an invented one.
+
+    Without this, copying the keys through could be written as
+    `entry["contained"] = st.get("contained")` and every systemd and launchd
+    heartbeat would start reporting `contained: null` -- a claim about a
+    mechanism those hosts do not have. Absent is the honest answer there, and
+    it is the same distinction `supported` draws one layer down.
+    """
+    ws = _workspace_with_db(tmp_path)
+    unit_dir = tmp_path / "units"
+    unit_dir.mkdir()
+
+    class _Sched:
+        name = "systemd"
+
+        def list_installed(self, prefix):
+            return [prefix + "lab"]
+
+        def status(self, stem):
+            return {"installed": True, "state": "active", "failed": False,
+                    "workdir": str(ws)}
+
+    monkeypatch.setattr(hb, "_sched", lambda unit_dir=None: _Sched())
+    monkeypatch.setattr(hb, "_service_python", lambda stem, unit_dir: None)
+
+    rc = hb.run_status(unit_dir=unit_dir)
+
+    assert rc == 0
+    entry = json.loads(capsys.readouterr().out)["heartbeats"][0]
+    for key in ("contained", "containment_reason", "containment_flags"):
+        assert key not in entry, (
+            f"{key} was invented for a scheduler that never answered it: "
+            f"{entry}")
+
+
+def test_status_carries_a_CONTAINED_tree_through_with_its_flags(
+        tmp_path, capsys, monkeypatch):
+    """The other arm, and the one that makes the first one able to fail.
+
+    avocet's FINDING 6, measured as mutations on a 23-file set: `run_status`
+    could report EVERY contained tree as not contained (N2) and drop
+    `containment_flags` entirely (N1) with 0 legs red. A single arm that only
+    ever looks at an uncontained tree cannot catch a copy that hard-codes
+    False, because False is what it expects.
+
+    So the good case is asserted too: contained TRUE, with the flags the
+    kernel agreed to. `contained` and `contained is True` are different
+    assertions here -- the first passes on the string "no", which is what a
+    copy through the wrong key would produce.
+    """
+    ws = _workspace_with_db(tmp_path)
+    unit_dir = tmp_path / "units"
+    unit_dir.mkdir()
+
+    class _Sched:
+        name = "winsched"
+
+        def list_installed(self, prefix):
+            return [prefix + "lab"]
+
+        def status(self, stem):
+            return {"installed": True, "state": "ready", "failed": False,
+                    "workdir": str(ws), "contained": True,
+                    "containment_reason": "",
+                    "containment_flags": "0x00002000"}
+
+    monkeypatch.setattr(hb, "_sched", lambda unit_dir=None: _Sched())
+    monkeypatch.setattr(hb, "_service_python", lambda stem, unit_dir: None)
+
+    rc = hb.run_status(unit_dir=unit_dir)
+
+    assert rc == 0
+    entry = json.loads(capsys.readouterr().out)["heartbeats"][0]
+    assert entry.get("contained") is True, (
+        f"a CONTAINED tree is not reported as contained to the operator; "
+        f"the entry said {entry.get('contained')!r}")
+    assert entry.get("containment_flags") == "0x00002000", (
+        f"the flags the kernel agreed to never reach the operator: {entry}")
+    assert entry.get("containment_reason") == "", (
+        f"a contained tree grew a reason it does not have: {entry}")
+
+
+def test_status_carries_a_contained_tree_that_could_not_read_its_flags(
+        tmp_path, capsys, monkeypatch):
+    """The third state, and it is new as of the FINDING 1 fix (avocet, 19:01).
+
+    `contain_this_process` used to answer contained-with-an-empty-reason or
+    not-contained-with-a-reason, and nothing else. Guarding the flag read
+    added a third: CONTAINED, with the membership settled and read back, and a
+    NON-EMPTY reason saying the limit flags could not be read. The tree is
+    protected; only the number is missing.
+
+    So this arm exists to stop the CLI copy from ever growing a branch on
+    `reason` being non-empty, which would read this state as a failure and
+    tell an operator their contained tree is loose. The copy branches on
+    nothing -- it carries whatever the scheduler answered -- and that is the
+    property held here.
+    """
+    ws = _workspace_with_db(tmp_path)
+    unit_dir = tmp_path / "units"
+    unit_dir.mkdir()
+
+    class _Sched:
+        name = "winsched"
+
+        def list_installed(self, prefix):
+            return [prefix + "lab"]
+
+        def status(self, stem):
+            return {"installed": True, "state": "ready", "failed": False,
+                    "workdir": str(ws), "contained": True,
+                    "containment_reason":
+                        "the job was made and this process is in it, but its "
+                        "limit flags could not be read: "
+                        "QueryInformationJobObject failed, GetLastError=5"}
+
+    monkeypatch.setattr(hb, "_sched", lambda unit_dir=None: _Sched())
+    monkeypatch.setattr(hb, "_service_python", lambda stem, unit_dir: None)
+
+    rc = hb.run_status(unit_dir=unit_dir)
+
+    assert rc == 0
+    entry = json.loads(capsys.readouterr().out)["heartbeats"][0]
+    assert entry.get("contained") is True, (
+        f"a CONTAINED tree whose flags could not be read was reported as "
+        f"{entry.get('contained')!r}; the operator is told their pulse tree "
+        f"is loose when it is not")
+    assert "could not be read" in (entry.get("containment_reason") or ""), (
+        f"the degraded read left no trace on the surface an operator uses: "
+        f"{entry}")
+    assert "containment_flags" not in entry, (
+        f"flags were invented for a reading that failed: {entry}")

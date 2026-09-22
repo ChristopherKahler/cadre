@@ -461,6 +461,20 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
     a systemd-killed pulse left its lock row, the next pulse bounced off it,
     and abort reported "No active processes" while the table stayed wedged).
     A holder on another machine is reported and left to the TTL steal.
+
+    CLEARING THE LOCK AND CLOSING THE ORPHANED RUNS IS NOT DONE HERE. Both are
+    :func:`firm.pulse.cleanup.release_and_finalize`'s, and this function held a
+    second copy of them until PR 142 landed on this file (#141; the debt was
+    recorded in that module's docstring rather than left to be found). Two
+    copies of the rule that decides when a lock may be cleared are two rules,
+    and a fix to one leaves the other deciding the old way with nothing in the
+    suite to say so.
+
+    What stays here is what belongs to abort and to nothing else: SIGTERM for
+    the holder, the count of what was signalled, and the difference between
+    ``cleared`` -- a holder this abort killed -- and ``stale-cleared``, a holder
+    already dead when abort looked. The cleanup never signals anything, so it
+    cannot tell those two apart and correctly calls both ``cleared``.
     """
     result: dict[str, Any] = {"ok": True, "aborted": 0}
 
@@ -482,6 +496,13 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
                        "workspace": str(workspace), "lock": "no-db"})
         return _exit_with(result)
 
+    # THE READ AND THE SIGNAL ARE ABORT'S; the clear and the close are the
+    # cleanup's. That means the holder is read twice -- once here to decide
+    # whether to signal it, once inside `release_and_finalize` to decide
+    # whether it may be cleared. Two reads of one row in a CLI invocation is
+    # the price of one rule about when a lock may be cleared, and it is worth
+    # paying: the alternative is this function deciding that for itself again.
+    was_alive = False
     conn = connect(db_path)
     try:
         try:
@@ -492,73 +513,67 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
                            "lock": "firm-id-unresolved", "message": str(exc)})
             return _exit_with(result)
         holder = dblock.current_holder(conn, firm_id)
-        if holder is None:
-            result["lock"] = "none"
-        else:
+        if holder is not None:
             result["holder"] = holder
             host, pid_str, _nonce = holder.split(":", 2)
-            if host != socket.gethostname():
-                result["lock"] = "remote-holder"
-                result["message"] = ("lock held from another machine; "
-                                     "its TTL frees it if the holder is dead")
-            elif _pid_alive(int(pid_str)):
+            if host == socket.gethostname() and _pid_alive(int(pid_str)):
+                was_alive = True
                 os.kill(int(pid_str), signal.SIGTERM)
                 result["aborted"] += 1
                 for _ in range(10):  # grace: let it exit and release the lock
                     time.sleep(0.5)
                     if not _pid_alive(int(pid_str)):
                         break
-                if _pid_alive(int(pid_str)):
-                    result["lock"] = "signalled"
-                    result["message"] = ("holder signalled, still exiting; "
-                                         "lock left for its own release")
-                else:
-                    dblock.release(conn, firm_id, holder)
-                    result["lock"] = "cleared"
-            else:
-                dblock.release(conn, firm_id, holder)
-                result["lock"] = "stale-cleared"
-        # A signalled process cannot finalize its own row, so abort owns it.
-        # Without this the run stays status='running' forever and every
-        # "is this firm busy" reader believes a run that is already dead.
-        # Not for a remote holder: those runs belong to the other machine.
-        if result.get("lock") != "remote-holder":
-            result["runs_finalized"] = _finalize_orphans(conn, firm_id)
-            conn.commit()
     finally:
         conn.close()
 
+    # A signalled process cannot finalize its own row, so abort owns it --
+    # `finalize_live_runs=True`. Without it the run stays status='running'
+    # forever and every "is this firm busy" reader believes a run that is
+    # already dead. `wait_seconds=0` because the grace window above has already
+    # been given; the cleanup waiting again would double it.
+    from firm.pulse import cleanup as pulse_cleanup
+
+    outcome = pulse_cleanup.release_and_finalize(
+        workspace, firm_id, by="firm pulse --abort", wait_seconds=0.0,
+        finalize_live_runs=True)
+
+    # ABORT'S OWN VOCABULARY, which `test_pulse_exit_contract.py` pins. The
+    # cleanup cannot tell a holder abort killed from one that was already dead,
+    # because it never signalled anything -- abort can, and `was_alive` is how.
+    lock = outcome.get("lock")
+    if lock == "cleared":
+        result["lock"] = "cleared" if was_alive else "stale-cleared"
+    elif lock == "held-by-a-live-pulse":
+        result["lock"] = "signalled"
+        result["message"] = ("holder signalled, still exiting; "
+                             "lock left for its own release")
+    elif lock == "remote-holder":
+        result["lock"] = "remote-holder"
+        result["message"] = ("lock held from another machine; "
+                             "its TTL frees it if the holder is dead")
+    else:
+        result["lock"] = lock
+        if outcome.get("reason"):
+            result["message"] = outcome["reason"]
+    if lock != "remote-holder" and "runs_finalized" in outcome:
+        # OMITTED for a remote holder, which is what abort did before it
+        # delegated: those runs belong to the other machine, and abort never
+        # looked at them. The cleanup always initialises the key, so copying it
+        # unconditionally would put `runs_finalized: []` on a remote-holder
+        # result -- a number abort never had the standing to report. Absent and
+        # empty are different claims (avocet, 18:51).
+        result["runs_finalized"] = outcome["runs_finalized"]
+    if outcome.get("runs_not_finalized"):
+        # One bad row never stops the rest, and never disappears either. This
+        # used to be a `warn` line of its own on stdout, printed from the
+        # private finalizer. It CANNOT be printed from here: every reader of
+        # this command takes the LAST stdout line as the result (#128), and
+        # `test_every_way_out_of_the_pulse_goes_through_the_exit_function`
+        # failed on exactly that when this was a print -- a guard catching a
+        # real defect in the change that introduced it. Carried in the result
+        # instead, where it reaches the same readers and cannot get between
+        # them and their answer.
+        result["runs_not_finalized"] = outcome["runs_not_finalized"]
+
     return _exit_with(result)
-
-
-def _finalize_orphans(conn: Any, firm_id: str) -> list[str]:
-    """Close every member_run still marked running for this firm.
-
-    Goes through ``on_run_end`` rather than an UPDATE so the usage_event and
-    records rows a normal finish writes are written here too -- an aborted run
-    that leaves no trace on Records is invisible to the Board reviewing what
-    happened.
-    """
-    from firm.hooks.run_record import on_run_end
-
-    rows = conn.execute(
-        "SELECT id FROM member_run WHERE firm_id = ? AND status = 'running'",
-        (firm_id,),
-    ).fetchall()
-    closed: list[str] = []
-    for row in rows:
-        run_id = row["id"] if hasattr(row, "keys") else row[0]
-        try:
-            on_run_end(
-                conn,
-                firm_id=firm_id,
-                run_id=run_id,
-                final_status="failed",
-                notes="aborted by the Board (firm pulse --abort)",
-                error={"reason": "aborted", "by": "board"},
-            )
-            closed.append(run_id)
-        except Exception as exc:                     # never let one bad row
-            print(json.dumps({"warn": "could not finalize",  # abort the abort
-                              "run_id": run_id, "error": str(exc)}))
-    return closed
