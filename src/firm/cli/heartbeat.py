@@ -179,6 +179,16 @@ def run_enable(
     *,
     unit_dir: Path | None = None,
 ) -> int:
+    """Install this firm's heartbeat timer, and say what became of the old one.
+
+    ON WINDOWS, ENABLE OVER A RUNNING HEARTBEAT ENDS THE PULSE IN FLIGHT
+    (#147). `schtasks /Create /F` replaces the task definition and leaves a
+    running instance alone, so the backend issues `schtasks /End` before the
+    re-create; the launcher holds a kill-on-close job, so ending it ends its
+    tree. What became of that pulse is reported under `previous_pulse` --
+    `none`, `ended`, `survived` or `unknown` -- read from the pulse lock and
+    never from what the scheduler said.
+    """
     workspace = workspace.expanduser().resolve()
     if not get_db_path(workspace).exists():
         _emit({"ok": False, "reason": "db-not-found", "workspace": str(workspace)})
@@ -256,6 +266,16 @@ def run_enable(
                "previous_pulse": "unknown"})
         return 1
 
+    # WHAT THE BACKEND SAID WHEN IT ENDED THE OLD TASK, for the record and
+    # NEVER what the exit code rests on -- `run_disable`'s `scheduler_removed`
+    # is the same idea beside `removed`. PRESENCE-KEYED: only Windows re-creates
+    # over a live task, so only Windows answers, and inventing a null for the
+    # other two would be a claim about a mechanism they never had.
+    #
+    # An earlier draft of this function CLAIMED this was reported and never put
+    # it in the payload. A report claimed and not printed is not a report.
+    scheduler_ended = installed.get("ended")
+
     # WHAT BECAME OF THE PULSE THAT WAS RUNNING BEFORE (#147). The backend has
     # just ended the launcher, and on a contained host that ended its tree; the
     # same cleanup `disable` runs is what turns that into a fact, because it
@@ -309,6 +329,8 @@ def run_enable(
         # says which of the four unread readings produced an `unknown`.
         "cleanup": cleanup,
         "previous_pulse": previous_pulse,
+        **({"scheduler_ended": scheduler_ended}
+           if scheduler_ended is not None else {}),
     })
     return 0
 

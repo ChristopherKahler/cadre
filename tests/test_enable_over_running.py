@@ -629,3 +629,204 @@ def test_C6_an_install_that_raised_reports_unknown_and_says_why(
         "the reason must not claim nothing was ended: install_timer raises "
         "both before and after /End, and this verb cannot tell which", result)
     assert "previous task definition stands" in result["cleanup"]["reason"], result
+
+
+def test_C7_a_refusal_BEFORE_the_install_carries_neither_key(
+        tmp_path, monkeypatch, capsys, quiet_systemctl):
+    """THE THIRD STATE OF THE KEY, and it is asserted by PRESENCE.
+
+    `run_enable` has three shapes of exit and they differ in what they may
+    honestly say about a pulse:
+
+    * refused BEFORE any install -- nothing was installed, nothing was ended,
+      and there is no cleanup to report, so BOTH KEYS ARE ABSENT;
+    * the install RAISED -- `not-attempted` / `unknown`, because whether a
+      running pulse was ended cannot be known here;
+    * installed -- the lock reading, whatever it was.
+
+    Absent and `unknown` are different answers. Emitting `previous_pulse:
+    unknown` on a refusal that never reached the scheduler would tell an
+    operator the fate of a pulse was UNREADABLE when in truth nothing was ever
+    attempted -- the same collapse `#158` fought one verb over, and the reason
+    this leg asserts the KEY and not a value.
+
+    Driven through the claude-runtime refusal because it is a real
+    pre-install refusal that conftest arms on every test in this repo.
+    """
+    ws = _firm_at(tmp_path / "ws")
+    monkeypatch.setenv("CADRE_CLAUDE_BIN", str(tmp_path / "no-such-runtime"))
+
+    rc = hb.run_enable(ws, FIRM, "15m", unit_dir=tmp_path / "units")
+
+    result = json.loads(capsys.readouterr().out)
+    assert rc == 1, result
+    assert result["ok"] is False, result
+    assert "cleanup" not in result, (
+        "a refusal before the install has no cleanup to report", result)
+    assert "previous_pulse" not in result, (
+        "and no pulse whose fate it may name -- absent is not unknown", result)
+
+    # THE POSITIVE SIBLING, IN THIS LEG. Asserting only that the keys are
+    # ABSENT is green against a build that never emits them at all -- which is
+    # exactly what the base sha does, so this leg would have passed there and
+    # measured nothing. The successful enable has to carry BOTH in the same run,
+    # or "absent on a refusal" is a statement about keys that do not exist.
+    monkeypatch.setenv("CADRE_CLAUDE_BIN", sys.executable)
+    rc_ok = hb.run_enable(ws, FIRM, "15m", unit_dir=tmp_path / "units")
+    ok = json.loads(capsys.readouterr().out)
+    assert rc_ok == 0, ok
+    assert "cleanup" in ok and "previous_pulse" in ok, (
+        "the same verb must carry both keys when it DOES install, or the "
+        "assertion above is about keys nothing ever emits", ok)
+
+
+def test_C8_the_backends_answer_is_reported_and_absent_where_there_is_none(
+        tmp_path, capsys, quiet_systemctl, monkeypatch):
+    """`scheduler_ended` is carried where a backend answered, and ABSENT where
+    none did -- `disable`'s `scheduler_removed` beside `removed` is the same
+    idea, for the record and never what the exit code rests on.
+
+    BOTH DIRECTIONS IN ONE LEG. The Windows backend answers, so the key is
+    there; systemd never re-creates over a live task, so it never answers, and
+    inventing a null for it would be a claim about a mechanism that host does
+    not have.
+
+    An earlier draft of `run_enable` CLAIMED in a comment that this was
+    reported and never put it in the payload. A report claimed and not printed
+    is not a report, which is why this leg asserts the KEY.
+    """
+    ws = _firm_at(tmp_path / "ws")
+
+    # systemd: no such answer, so no such key.
+    plain = _enable(ws, tmp_path / "units", capsys)
+    assert "scheduler_ended" not in plain, (
+        "systemd does not end a task to re-create it and must claim nothing",
+        plain)
+
+    # winsched, faked at run_cmd: it answers, so the key is carried.
+    monkeypatch.setattr(winsched_mod, "run_cmd",
+                        lambda a, timeout=30: (0, "SUCCESS: fake"))
+    monkeypatch.setattr(winsched_mod, "_resolve_pythonw",
+                        lambda: Path(sys.executable))
+    monkeypatch.setattr(winsched_mod, "_pythonw_self_test", lambda p: (True, ""))
+    monkeypatch.setattr(
+        hb, "_sched",
+        lambda unit_dir=None: WindowsScheduler(launcher_dir=tmp_path / "wl"))
+
+    rc = hb.run_enable(ws, FIRM, "15m")
+    win = json.loads(capsys.readouterr().out)
+
+    assert rc == 0, win
+    assert "scheduler_ended" in win, (
+        "the backend answered and the payload dropped it", win)
+    assert win["scheduler_ended"]["said"] == "SUCCESS: fake", (
+        "verbatim, the way the backend said it", win)
+
+
+def test_C9_the_behaviour_is_written_where_someone_reads_it(tmp_path):
+    """Condition 6: said where an operator will meet it, not only in a PR.
+
+    Two surfaces, because they are read by different people at different
+    moments: the function's own docstring, for whoever opens the code, and
+    `cadre heartbeat enable --help`, for whoever is about to run it on a firm
+    that is pulsing right now. The second is the one that matters: this verb
+    now ENDS something, and a person about to run it deserves to learn that
+    before it happens rather than from `previous_pulse` afterwards.
+    """
+    assert hb.run_enable.__doc__, "run_enable carries no docstring at all"
+    doc = hb.run_enable.__doc__
+    assert "ENDS THE PULSE IN FLIGHT" in doc, doc
+    assert "previous_pulse" in doc, doc
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "firm", "heartbeat", "enable", "--help"],
+        capture_output=True, timeout=120, stdin=subprocess.DEVNULL)
+    helptext = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode == 0, helptext
+    assert "ENDS THE" in helptext and "PULSE IN FLIGHT" in helptext, (
+        "the operator about to run it is not told that it ends one", helptext)
+    assert "previous_pulse" in helptext, helptext
+
+
+# ---------------------------------------------------------------------------
+# the SHIPPING CHANNEL, proved once (addendum 4). Everything above drives
+# `run_enable` directly; these two drive the real CLI a caller runs.
+# ---------------------------------------------------------------------------
+
+def _fake_systemctl(bin_dir: Path, exit_code: int) -> dict[str, str]:
+    """A `systemctl` FIRST on PATH that exits *exit_code* and says nothing.
+
+    POSIX ONLY, and the reason is not squeamishness: `CreateProcess` searches
+    System32 before PATH, so on Windows no shim can shadow `schtasks.exe`, and
+    a real `/Create` is not a test's to make.
+    """
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    shim = bin_dir / "systemctl"
+    shim.write_text(f"#!/bin/sh\nexit {exit_code}\n", encoding="utf-8")
+    shim.chmod(0o755)
+    return {"PATH": f"{bin_dir}{os.pathsep}" + os.environ.get("PATH", "")}
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="a shim cannot shadow schtasks.exe: CreateProcess searches System32 "
+           "before PATH, and a real /Create is not a test's to make. The "
+           "Windows shipping channel is proved by the live leg in "
+           "tests/test_winsched_live.py, on CI.")
+def test_C10_the_real_cli_reports_the_ended_pulse(tmp_path):
+    """THE SHIPPING CHANNEL, once. Everything else drives `run_enable` directly.
+
+    argparse, `main()` and `sys.exit` are not exercised by an in-process call,
+    and they are what a caller and the hub actually meet. One leg through them
+    is what makes the rest of this file a statement about the product rather
+    than about a function.
+    """
+    home = _home(tmp_path)
+    ws = _firm_at(tmp_path / "ws")
+    _seed_lock(ws, alive=False)
+
+    env = _child_env_for(home)
+    env.update(_fake_systemctl(tmp_path / "bin", 0))
+    env["CADRE_SCHEDULER"] = "systemd"
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "firm", "heartbeat", "enable",
+         "--workspace", str(ws), "--firm-id", FIRM, "--interval", "15m"],
+        capture_output=True, env=env, timeout=180, stdin=subprocess.DEVNULL)
+
+    result = json.loads(proc.stdout.decode("utf-8", "replace"))
+    assert proc.returncode == 0, (result, proc.stderr.decode("utf-8", "replace"))
+    assert result["ok"] is True, result
+    assert result["cleanup"]["lock"] == "cleared", result
+    assert result["previous_pulse"] == "ended", result
+
+
+def test_C11_the_real_cli_reports_an_install_that_raised(tmp_path):
+    """The same channel on the failure path, and it runs EVERYWHERE.
+
+    `CADRE_SCHEDULER=systemd` is forced so the child never reaches winsched or
+    launchd whatever host this is, and `systemctl` fails: a shim exiting 1 on
+    POSIX, and simply absent on Windows, which fails the same way for a
+    different reason. Either way the install raises and the object must carry
+    the wording that does not overclaim.
+    """
+    home = _home(tmp_path)
+    ws = _firm_at(tmp_path / "ws")
+
+    env = _child_env_for(home)
+    env["CADRE_SCHEDULER"] = "systemd"
+    if sys.platform != "win32":
+        env.update(_fake_systemctl(tmp_path / "bin", 1))
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "firm", "heartbeat", "enable",
+         "--workspace", str(ws), "--firm-id", FIRM, "--interval", "15m"],
+        capture_output=True, env=env, timeout=180, stdin=subprocess.DEVNULL)
+
+    result = json.loads(proc.stdout.decode("utf-8", "replace"))
+    assert proc.returncode == 1, result
+    assert result["ok"] is False, result
+    assert result["cleanup"]["lock"] == "not-attempted", result
+    assert result["previous_pulse"] == "unknown", result
+    assert "whether a running pulse was ended is unknown" in \
+        result["cleanup"]["reason"], result

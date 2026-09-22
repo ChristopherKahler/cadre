@@ -834,6 +834,15 @@ def _build_parser(json_usage: bool = False) -> argparse.ArgumentParser:
 
     hb_enable = heartbeat_sub.add_parser(
         "enable", help="Install and start the heartbeat timer for a firm.",
+        description=(
+            "Install and start the heartbeat timer for a firm. On Windows, "
+            "running this over a heartbeat that is already running ENDS THE "
+            "PULSE IN FLIGHT: the task is re-created, so the old one is ended "
+            "first (schtasks /End before the re-create; the launcher holds a "
+            "kill-on-close job, so ending it ends its tree). What became of "
+            "that pulse is reported under previous_pulse -- none, ended, "
+            "survived or unknown -- read from the pulse lock, never from what "
+            "the scheduler said."),
     )
     hb_enable.add_argument(
         "--workspace", type=Path, default=None,
