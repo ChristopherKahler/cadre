@@ -430,6 +430,46 @@ def _validate(proposal: dict[str, Any],
     }
 
 
+def _arm_policy_gate(workspace: Path, firm_id: str) -> dict[str, Any]:
+    """Arm the firm's NEVER gate the way `doctor --fix` and Train do (#168).
+
+    The same two calls, in the Train step's order (`dashboard/wiring.py`):
+    materialize `.firm/policy.json` from the records just written, then
+    install and register the gate. No second installer.
+
+    Degraded, never un-founded (osprey's ruling c on #168). At founding the
+    firm has no deny rules to enforce yet, and failing the founding here would
+    leave a firm that `init` then refuses to found again. So a failure is
+    reported in the result with its fix, and nothing the operator already had
+    is touched: `install_policy_hook` writes `settings.json` only after
+    reading it cleanly.
+    """
+    from firm.cli.install_hooks import install_policy_hook
+    from firm.services import policy as policy_svc
+
+    settings = workspace / ".claude" / "settings.json"
+    fix = f"cadre doctor --workspace {workspace} --fix"
+    try:
+        conn = connect(get_db_path(workspace))
+        try:
+            policy_svc.materialize(conn, workspace, firm_id)
+        finally:
+            conn.close()
+        install_policy_hook(workspace)
+    except json.JSONDecodeError as exc:
+        # The only JSON read here is a settings.json that was already there;
+        # the policy's own reader swallows a bad column (`policy._parse_vc`).
+        return {"armed": False,
+                "detail": f"the NEVER gate is not armed: {settings} is not "
+                          f"valid JSON ({exc}) and was left as it is. Repair "
+                          f"it, then run: {fix}"}
+    except Exception as exc:
+        return {"armed": False,
+                "detail": f"the NEVER gate is not armed: "
+                          f"{type(exc).__name__}: {exc}. Run: {fix}"}
+    return {"armed": True, "detail": f"installed and registered in {settings}"}
+
+
 def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
     """Scaffold the workspace and write the approved org.
 
@@ -646,6 +686,12 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
     finally:
         conn.close()
 
+    # The NEVER gate, armed the moment the firm's records exist (#168 GAP 2).
+    # Founding used to leave it to the hub's Train step, and the CLI has no
+    # Train, so every firm founded with `cadre init` started with its gate off
+    # until someone ran `cadre doctor --fix`.
+    policy_gate = _arm_policy_gate(workspace, fid)
+
     # The firm's state, written where base's ingest is already looking. The
     # manifest has always declared these three files; until `base_export`
     # existed nothing wrote them, so a founded firm's roster never reached its
@@ -660,6 +706,9 @@ def commit(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
         "name": proposal["name"],
         "workspace": str(workspace),
         "hired": hired,
+        # Whether the NEVER gate is armed; when it is not, why and the fix.
+        # Absent is not armed, so it is always present (#168).
+        "policy_gate": policy_gate,
         # Reported separately from base_graph, because they fail separately:
         # the domain wire is about rules reaching Members, this is about the
         # roster reaching the graph. One flag covering both would hide either.

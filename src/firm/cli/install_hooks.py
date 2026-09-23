@@ -38,9 +38,67 @@ PACKAGE_PATH_MARKER = "python-path"
 
 
 POLICY_HOOK_SCRIPT_NAME = "cadre-policy-gate.py"
-POLICY_HOOK_COMMAND = (
-    f"python3 $CLAUDE_PROJECT_DIR/.claude/hooks/{POLICY_HOOK_SCRIPT_NAME}"
+
+#: What the gate's registered command does when the gate DID NOT RUN (#168,
+#: osprey's ruling a). It is appended to the command, so it only ever sees
+#: the command's own exit code.
+#:
+#: The gate script always exits 0: its own `try` turns every internal error
+#: into an allow (the template's contract below). So a non-zero exit here can
+#: only mean the gate never ran: the interpreter is missing (127), the script
+#: is missing or does not parse (2 or 1), or the interpreter was killed.
+#: Claude Code blocks a PreToolUse call only on a deny JSON or on exit 2, and
+#: lets every other failure through (read from Claude Code 2.1.280), so
+#: without this a gate that cannot start is a NEVER that silently stopped
+#: firing, on every tool call.
+#:
+#: - A Member (CADRE_MEMBER_ID set, the same test the gate itself makes) gets
+#:   exit 2 and this message: the call is blocked. Fail closed.
+#: - The Board (no CADRE_MEMBER_ID) gets exit 0. A session the operator opens
+#:   in the firm's folder is where `cadre doctor --fix` runs, so the gate's
+#:   own failure must never lock the operator out of the repair.
+#: - Unchanged: a gate that STARTS and then fails inside still allows the
+#:   call, by the template's contract ("it must never brick a session").
+#: - The one case this cannot close: a Windows host with no Git Bash. Claude
+#:   Code says it "requires either Git for Windows (for bash) or PowerShell",
+#:   and without Git Bash it runs hooks under PowerShell, where this bash
+#:   command does not parse (measured: exit 1 under pwsh 7 and Windows
+#:   PowerShell 5.1), so the call proceeds there.
+_POLICY_GATE_DID_NOT_RUN = (
+    ' || { [ -z "$CADRE_MEMBER_ID" ] || { echo "cadre: this firm\'s NEVER'
+    ' gate did not run, so the call is blocked. Stop and report it; do not'
+    ' work around it. The Board runs: cadre doctor --fix" >&2; exit 2; }; }'
 )
+
+
+def policy_hook_command() -> str:
+    """The command line the NEVER gate is registered under.
+
+    It names the interpreter running this install, never a bare `python3`
+    (#168). `python3` resolves on Linux and macOS and does not exist on a
+    default Windows install, and a gate that cannot start is a gate that is
+    off: measured on Windows with `python3` off the PATH, the old command
+    exited 127 and Claude Code let the forbidden call through. Both paths
+    are quoted: a Windows interpreter path routinely holds a space, and so
+    can a firm's folder.
+
+    ONE SOURCE for both ends. `_register_policy_hook` registers exactly this
+    and the doctor's `policy-gate` check compares against exactly this, so a
+    firm armed under any other command (the old `python3` form, or another
+    install's interpreter) reads as not current, and `doctor --fix`
+    re-points it instead of adding a second entry.
+
+    The cost, stated rather than hidden: firms commit `.claude/settings.json`,
+    and this path is right on the machine that armed the firm. On a clone it
+    names an interpreter that is not there, so the gate cannot start, its
+    Members are blocked (`_POLICY_GATE_DID_NOT_RUN`), and `doctor --fix` on
+    that machine re-points it. The write-back gate below has always carried
+    its interpreter the same way.
+    """
+    return (f'"{sys.executable}" '
+            f'"$CLAUDE_PROJECT_DIR/.claude/hooks/{POLICY_HOOK_SCRIPT_NAME}"'
+            + _POLICY_GATE_DID_NOT_RUN)
+
 
 _POLICY_HOOK_TEMPLATE = '''#!/usr/bin/env python3
 """PreToolUse policy gate — the Contract's NEVERs, enforced at the boundary.
@@ -263,10 +321,12 @@ if __name__ == "__main__":
 def render_policy_hook() -> str:
     """The gate, with `firm.hooks.shell_intent` spliced in.
 
-    The hook cannot import the resolver (system python3, no `firm`), and a
-    second hand-written copy of it would be ESC-021's offline replica: a
-    model of the gate that agrees with itself while the real gate does
-    something else. So there is one source, vendored at install time.
+    The hook must not import the resolver: it is stdlib-only by design, so
+    that an ImportError can never disable a NEVER, whatever interpreter it
+    runs under (#168 moved it off the system `python3` onto the install's
+    own). And a second hand-written copy of it would be ESC-021's offline
+    replica: a model of the gate that agrees with itself while the real gate
+    does something else. So there is one source, vendored at install time.
 
     Every caller that needs the gate's text goes through here — installing
     it AND the doctor's drift check — or the check would compare a firm's
@@ -311,20 +371,52 @@ def _register_hook(settings: dict) -> bool:
 
 
 def _register_policy_hook(settings: dict) -> bool:
-    """Add the PreToolUse policy-gate entry if not present."""
+    """Register the gate under `policy_hook_command()`, exactly once.
+
+    Matched on the SCRIPT, not the whole command line, the rule the
+    write-back gate's registration uses below. A firm armed before #168
+    carries `python3 ...`, and one armed from another install names that
+    install's interpreter; either is re-pointed in place. Matching the whole
+    command would append a second gate beside the stale one, and the stale
+    one would go on failing open. A further entry that runs the gate is
+    removed, and an entry that removal empties goes with it. Every other hook
+    and key is left as it was. Returns True if modified.
+    """
+    command = policy_hook_command()
     hooks = settings.setdefault("hooks", {})
     pre_tool = hooks.setdefault("PreToolUse", [])
+    found = False
+    modified = False
+    emptied: list[dict] = []
     for entry in pre_tool:
         if not isinstance(entry, dict):
             continue
-        for hook in entry.get("hooks", []) or []:
-            if isinstance(hook, dict) and hook.get("command") == POLICY_HOOK_COMMAND:
-                return False
-    pre_tool.append({
-        "matcher": "*",
-        "hooks": [{"type": "command", "command": POLICY_HOOK_COMMAND}],
-    })
-    return True
+        before = entry.get("hooks", []) or []
+        kept = []
+        for hook in before:
+            if (isinstance(hook, dict)
+                    and POLICY_HOOK_SCRIPT_NAME in str(hook.get("command") or "")):
+                if found:
+                    modified = True          # a second gate: drop it
+                    continue
+                found = True
+                if hook.get("command") != command:
+                    hook["command"] = command   # re-point at this install
+                    modified = True
+            kept.append(hook)
+        if len(kept) != len(before):
+            entry["hooks"] = kept
+            if not kept:
+                emptied.append(entry)
+    if emptied:
+        pre_tool[:] = [e for e in pre_tool if not any(e is x for x in emptied)]
+    if not found:
+        pre_tool.append({
+            "matcher": "*",
+            "hooks": [{"type": "command", "command": command}],
+        })
+        modified = True
+    return modified
 
 
 def install_policy_hook(workspace: Path) -> tuple[int, list[str]]:
@@ -417,14 +509,16 @@ WRITEBACK_HOOK_SCRIPT_NAME = "cadre-writeback-gate.py"
 def writeback_hook_command() -> str:
     """The command line the Stop gate is registered under.
 
-    The two hooks above hardcode ``python3``. That resolves on Linux and macOS
+    The session-pulse hook above hardcodes ``python3`` (the policy gate did
+    too, until #168). That resolves on Linux and macOS
     and does not exist on a default Windows install, and Windows is a real host
     for this framework now — WindowsScheduler resolves and reports available().
     The interpreter running this install is present by definition and can run a
     stdlib-only script, so that is the one written in. It is quoted because a
     Windows interpreter path routinely contains a space; the script path keeps
-    the unquoted ``$CLAUDE_PROJECT_DIR`` form the other two hooks use, so the
-    expansion behaves identically to the hooks already proven in the field.
+    the unquoted ``$CLAUDE_PROJECT_DIR`` form the session-pulse hook uses, so the
+    expansion behaves identically to the hooks already proven in the field. (The
+    policy gate quotes its script path since #168; this one does not yet.)
     """
     return (f'"{sys.executable}" '
             f"$CLAUDE_PROJECT_DIR/.claude/hooks/{WRITEBACK_HOOK_SCRIPT_NAME}")
