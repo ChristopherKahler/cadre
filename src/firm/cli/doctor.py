@@ -91,7 +91,7 @@ def diagnose(workspace: Path, firm_id: str, *,
              unit_dir: Path | None = None) -> list[dict[str, Any]]:
     """The report card. Read-only — every finding carries its route."""
     from firm.cli.heartbeat import _UNIT_PREFIX, _sched
-    from firm.cli.install_hooks import POLICY_HOOK_COMMAND, POLICY_HOOK_SCRIPT_NAME
+    from firm.cli.install_hooks import POLICY_HOOK_SCRIPT_NAME, policy_hook_command
     from firm.pulse import preflight
     from firm.services import pulse_ledger
     from firm.services import policy as policy_svc
@@ -152,23 +152,35 @@ def diagnose(workspace: Path, firm_id: str, *,
             current = hook_file.read_text(encoding="utf-8") == render_policy_hook()
         except OSError:
             current = False
+        # Registered means registered under THIS install's command, the one
+        # `install_policy_hook` writes (#168). A gate registered under any
+        # other command -- the old `python3` form, which cannot start on a
+        # Windows host with no python3, or another install's interpreter --
+        # is not current, `--fix` re-points it, and the detail names it.
+        gate_command = policy_hook_command()
         registered = False
+        elsewhere: list[str] = []
         try:
             settings = json.loads(
                 (workspace / ".claude" / "settings.json").read_text(encoding="utf-8"))
-            registered = any(
-                h.get("command") == POLICY_HOOK_COMMAND
+            commands = [
+                str(h.get("command") or "")
                 for e in (settings.get("hooks") or {}).get("PreToolUse") or []
-                for h in (e.get("hooks") or []) if isinstance(h, dict))
+                for h in (e.get("hooks") or []) if isinstance(h, dict)]
+            registered = gate_command in commands
+            elsewhere = [c for c in commands
+                         if POLICY_HOOK_SCRIPT_NAME in c and c != gate_command]
         except (OSError, json.JSONDecodeError):
             pass
         armed = hook_file.is_file() and registered and current
+        detail = ("installed, registered, matches the shipped gate" if armed
+                  else (f"hook file: {hook_file.is_file()}, registered: {registered}, "
+                        f"matches shipped gate: {current}"))
+        if not registered and elsewhere:
+            detail += f"; registered under another command: {elsewhere[0]}"
         checks.append(_check(
             "policy-gate", "NEVER-enforcement gate armed and current", armed,
-            "mechanical",
-            "installed, registered, matches the shipped gate" if armed
-            else (f"hook file: {hook_file.is_file()}, registered: {registered}, "
-                  f"matches shipped gate: {current}"),
+            "mechanical", detail,
             fix="install + register the current PreToolUse policy gate"))
 
         # 4. policy materialized and fresh — mechanical
