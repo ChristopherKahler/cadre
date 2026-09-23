@@ -25,7 +25,10 @@ from __future__ import annotations
 import json
 import os
 import platform
+import shutil
+import site
 import sys
+import sysconfig
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
@@ -103,6 +106,55 @@ def _package_path() -> str | None:
         return str(Path(_build_info.__file__).resolve().parent)
     except Exception:
         return None
+
+
+def scripts_folders_asked() -> list[str]:
+    """Where THIS interpreter installs console scripts, in the order
+    `own_scripts_dir` asks: the default scheme, then the user scheme when this
+    interpreter's user site is on (a venv's `firm` is never in the user
+    scheme's folder, and on WSL the `firm` there was measured to be another
+    install's, #166 L12). Never raises."""
+    asked: list[str] = []
+    schemes: list[str | None] = [None]
+    if site.ENABLE_USER_SITE:
+        try:
+            schemes.append(sysconfig.get_preferred_scheme("user"))
+        except Exception:
+            pass
+    for scheme in schemes:
+        try:
+            folder = (sysconfig.get_path("scripts") if scheme is None
+                      else sysconfig.get_path("scripts", scheme))
+        except Exception:
+            continue
+        if folder and folder not in asked:
+            asked.append(folder)
+    return asked
+
+
+def own_scripts_dir() -> str | None:
+    """The folder holding THIS install's `firm` entry point, or None (#166).
+
+    Asked of the interpreter that runs this code, through `sysconfig`, and
+    never read off `sys.executable`: a python.org install keeps `python.exe`
+    in `<prefix>` and its console scripts in `<prefix>\\Scripts` (measured on
+    `C:\\Python312`, and it is CI's own layout), so the interpreter's folder
+    is not the scripts folder there. `python.exe` and `pythonw.exe` of one
+    install give the same answer (measured on the operator's venv), so a pulse
+    that runs under Task Scheduler's pythonw launcher finds the same folder as
+    one run by hand. The first folder `scripts_folders_asked` names that holds
+    a `firm` the OS would run by name wins.
+
+    BOUNDARY, registered and not built for: two installs of Cadre inside ONE
+    interpreter, one per scheme, resolve to the default scheme's. Either
+    scheme's launcher runs that same interpreter, which imports whichever
+    `firm` its `sys.path` finds first -- the same package this code came from
+    -- so a Member still runs the pulse's code.
+    """
+    for folder in scripts_folders_asked():
+        if shutil.which("firm", path=folder):
+            return folder
+    return None
 
 
 def installed_identity() -> dict[str, Any]:

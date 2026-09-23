@@ -53,6 +53,10 @@ _QUEUE_RETRY_SEC = 10
 #: not earn.
 _CONTAINMENT: dict[str, Any] = {}
 
+#: What the pulse found making its Members' entry folder (#166), merged onto
+#: the result line by `_exit_with`, presence-keyed like `_CONTAINMENT`.
+_MEMBER_ENTRY: dict[str, Any] = {}
+
 
 def _containment_record() -> dict[str, Any]:
     """Put this pulse in a kill-on-close job and say what happened (#148 R2/R3).
@@ -117,6 +121,11 @@ def _exit_with(result: dict[str, Any], ledger: "_Ledger | None" = None) -> int:
     # the record is taken. It is merged BEFORE the ledger closes, so the row
     # and the printed line describe the same object.
     for key, value in _CONTAINMENT.items():
+        result.setdefault(key, value)
+    # The same for the Member entry record (#166): empty on a healthy pulse,
+    # `member_entry_missing` / `member_entry_note` when there is something to
+    # say (firm.pulse.environment.ensure_member_entry).
+    for key, value in _MEMBER_ENTRY.items():
         result.setdefault(key, value)
     if ledger is not None:
         ledger.close(result)
@@ -257,8 +266,9 @@ def run_pulse(
         # is #128 U4. These two lines were outside it for one run and that
         # guard caught them -- a guard catching a real defect in the change
         # that introduced it.
-        global _CONTAINMENT
+        global _CONTAINMENT, _MEMBER_ENTRY
         _CONTAINMENT = {}
+        _MEMBER_ENTRY = {}
         workspace = workspace.expanduser().resolve()
 
         # Abort mode: kill tracked processes + resolve the DB lock holder
@@ -300,7 +310,11 @@ def run_pulse(
         # and probes nothing, so it keeps the environment it was given.
         environment = (contextlib.nullcontext() if dry_run
                        else pulse_environment(workspace, db_path, firm_id))
-        with environment:
+        with environment as entry:
+            # What the pulse found making its Members' entry folder rides onto
+            # the result line the way containment does (#166), presence-keyed:
+            # a healthy pulse's line is main's. (Declared global at the top.)
+            _MEMBER_ENTRY = dict(entry or {})
             return _run_resolved(workspace, db_path, firm_id, dry_run=dry_run,
                                  only=only, drain_queue=drain_queue,
                                  source=source)
@@ -694,9 +708,11 @@ def _handle_abort(workspace: Path, firm_id: str | None) -> int:
     # the same process would leave `contained` and `containment_supported` on
     # an abort result that never asked for them. Measured by osprey against
     # `tests/test_pulse_cleanup.py`, which calls this function directly at
-    # :361, :394, :496 and :597.
-    global _CONTAINMENT
+    # :361, :394, :496 and :597. The Member entry record (#166) is taken by the
+    # pulse too, never by abort, so it is cleared here for the same reason.
+    global _CONTAINMENT, _MEMBER_ENTRY
     _CONTAINMENT = {}
+    _MEMBER_ENTRY = {}
 
     # WHAT THIS PROMISES NOW (#148). Abort writes down the holder's tree
     # before it signals anything, looks again after the grace window, and

@@ -589,3 +589,211 @@ def test_the_hub_seam_contains_its_pulse_and_abort_proves_the_tree_died(
         if wrapper_gen and _alive({wrapper_gen}):
             run_cmd(["taskkill", "/F", "/PID", str(wrapper_gen[0])],
                     timeout=60)
+
+
+# ---------------------------------------------------------------------------
+# #166 -- a Member of a TIMER pulse and of the HUB's own dispatch runs THIS
+# install's `firm`, past a stale copy in .firm/bin (tier C)
+# ---------------------------------------------------------------------------
+#
+# The stand-in Member, the scratch firm and the stripped PATH are the tier-B
+# ones in tests/test_member_entry.py. What only this file can reach is the two
+# ways a pulse starts without a hand: Task Scheduler's pythonw launcher running
+# `python -m firm pulse`, and the hub's `_fire_pulse` (its `_venv_python`, its
+# env, its wrapper), both with a decoy `firm.exe` in `ws\.firm\bin`.
+
+
+def _decoy_launcher(folder: Path, marker: Path) -> Path:
+    """A stale `firm.exe` of the shape Chris was told to copy: a pip launcher
+    (distlib's t64.exe, a shebang naming this interpreter, then a zip). When it
+    runs it writes *marker* and exits 3, so which `firm` ran is read from what
+    ran (G0 verdict condition 12), never from a lookup."""
+    import io
+    import zipfile
+
+    import pip._vendor.distlib as distlib
+
+    script = ("import pathlib, sys\n"
+              f"pathlib.Path({str(marker)!r}).write_text("
+              "'DECOY RAN ' + ' '.join(sys.argv[1:]), encoding='utf-8')\n"
+              "print('DECOY-166')\nsys.exit(3)\n")
+    packed = io.BytesIO()
+    with zipfile.ZipFile(packed, "w") as zf:
+        zf.writestr("__main__.py", script)
+    launcher = (Path(distlib.__file__).parent / "t64.exe").read_bytes()
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "firm.exe"
+    path.write_bytes(launcher + b'#!"' + sys.executable.encode() + b'"\n'
+                     + packed.getvalue())
+    return path
+
+
+def _live166(tmp_path: Path, firm_id: str):
+    """A scratch firm, the decoy, the stand-in Member and the pulse's env."""
+    from types import SimpleNamespace
+
+    from tests.test_member_entry import (PACKAGE_ROOT, _need_git_bash,
+                                         _scratch_firm, _stub_member,
+                                         _without_firm)
+
+    ws = tmp_path / "ws"
+    _scratch_firm(ws, firm_id)
+    marker = tmp_path / "decoy-ran.txt"
+    _decoy_launcher(ws / ".firm" / "bin", marker)
+    rec = tmp_path / "rec"
+    stub = _stub_member(tmp_path, rec)
+    home = tmp_path / "home"
+    (home / ".local" / "bin").mkdir(parents=True)
+    stripped = _without_firm(os.environ.get("PATH", ""))
+    bash = _need_git_bash()
+    # CONTROL: apart from the decoy, nothing the pulse searches holds a `firm`.
+    base = shutil.which("base", path=stripped)
+    reachable = os.pathsep.join(
+        [stripped, str(home / ".local" / "bin")]
+        + ([str(Path(base).parent)] if base else []))
+    found = shutil.which("firm", path=reachable)
+    if found:
+        pytest.skip(f"VOID: `firm` already resolves at {found}")
+    env = {"FIRM_ID": firm_id, "CADRE_CLAUDE_BIN": str(stub), "PATH": stripped,
+           "PYTHONPATH": PACKAGE_ROOT, "HOME": str(home),
+           "USERPROFILE": str(home), "CADRE_TEST_GIT_BASH": bash}
+    return SimpleNamespace(ws=ws, rec=rec, marker=marker, env=env,
+                           stripped=stripped, firm_id=firm_id)
+
+
+def _await_member(live, seconds: int = 300):
+    """The firm's state once the stand-in has run and no run is still open."""
+    from tests.test_member_entry import _firm_state
+
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if (live.rec / "member.json").exists():
+            state = _firm_state(live.ws)
+            if state["runs"] and "running" not in state["runs"]:
+                return state
+        time.sleep(1.0)
+    return _firm_state(live.ws)
+
+
+def _last_json(path: Path):
+    """The last line of *path* that parses as a JSON object, or None."""
+    if not path.exists():
+        return None
+    for line in reversed(path.read_text(encoding="utf-8",
+                                        errors="replace").splitlines()):
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def _abort_quietly(live) -> None:
+    """End a pulse still holding the firm, through the product's own verified
+    abort (#148): by generation, never by number, never `/T`."""
+    import subprocess as _sp
+
+    env = dict(os.environ)
+    env.update(live.env)
+    _sp.run([sys.executable, "-m", "firm", "pulse", "--abort", "--workspace",
+             str(live.ws)], env=env, capture_output=True, timeout=120)
+
+
+def _this_installs_firm_ran(case: str, live, state, results, capsys) -> None:
+    from tests.test_member_entry import (NEW_KEYS, _entry_of, _own_version,
+                                         _ran_this_build)
+
+    member_file = live.rec / "member.json"
+    member = (json.loads(member_file.read_text(encoding="utf-8"))
+              if member_file.exists() else None)
+    env = dict(os.environ)
+    env.update(live.env)
+    version = _own_version(env)
+    with capsys.disabled():
+        print(f"\n[166 {case}] sys.executable = {sys.executable}")
+        print(f"[166 {case}] firm state = {state}")
+        print(f"[166 {case}] decoy ran = "
+              f"{live.marker.read_text(encoding='utf-8') if live.marker.exists() else 'no'}")
+        if member:
+            print(f"[166 {case}] member where = {member.get('where')}")
+            print(f"[166 {case}] member gitbash firm = {member.get('gitbash_firm')}")
+            print(f"[166 {case}] member firm --version = {member['version']}")
+            print(f"[166 {case}] member register = {member['register']}")
+        print(f"[166 {case}] result lines = {results}")
+
+    assert member is not None, f"the stand-in Member never ran; state {state}"
+    assert not live.marker.exists(), "the stale firm.exe in .firm/bin ran"
+    assert _ran_this_build(member["version"]["out"], version), (
+        member["version"], version)
+    assert member["register"]["rc"] == 0, member["register"]
+    assert state["runs"] == ["completed"], state
+    assert state["documents"] == 1 and state["unit"] == "done", state
+    entry = _entry_of(member["gitbash_firm"]["out"], live.ws)
+    assert entry is not None, member["gitbash_firm"]
+    assert _entry_of(member["where"]["firm"], live.ws) == entry, member["where"]
+    for name in ("python", "pip"):
+        expected = shutil.which(name, path=live.stripped)
+        assert (os.path.normcase(member["which"][name] or "")
+                == os.path.normcase(expected or "")), (name, member["which"][name])
+    for where, result in results.items():
+        assert isinstance(result, dict), f"no result line in {where}"
+        assert not any(k in result for k in NEW_KEYS), (where, result)
+
+
+def test_c1_a_timer_pulse_member_runs_this_installs_firm(tmp_path, capsys):
+    """DoD (c), (e), (h): the scheduled-task path, through the pythonw launcher.
+
+    The task runs `python -m firm pulse --source heartbeat`, exactly the argv
+    `cadre heartbeat enable` installs (cli/heartbeat.py:246), with the stripped
+    PATH in its spec. The pulse's result line lands in the launcher's log.
+    """
+    from firm.sched.base import run_cmd
+    from firm.sched.winsched import WindowsScheduler
+
+    live = _live166(tmp_path, "c1166")
+    # A short directory on purpose: the task command must fit schtasks' limit.
+    sched = WindowsScheduler(launcher_dir=Path(tempfile.mkdtemp(prefix="c166")))
+    stem = f"cadre-live166-{int(time.time())}"
+    try:
+        sched.install_timer(
+            stem, description="166 live", workdir=live.ws, env=live.env,
+            argv=[sys.executable, "-m", "firm", "pulse", "--workspace",
+                  str(live.ws), "--firm-id", live.firm_id,
+                  "--source", "heartbeat"],
+            interval="15m")
+        run_cmd(["schtasks", "/Run", "/TN", sched._tn(stem)], timeout=60)
+        state = _await_member(live)
+        results = {"launcher log": _last_json(sched._log(stem))}
+        _this_installs_firm_ran("C1", live, state, results, capsys)
+    finally:
+        sched.remove(stem)
+        _abort_quietly(live)
+
+
+def test_c2_the_hubs_own_dispatch_member_runs_this_installs_firm(
+        tmp_path, capsys, monkeypatch):
+    """DoD (b), (e), (h): the board path, through the hub's own `_fire_pulse`
+    (G0 verdict condition 4): its `_venv_python`, its env and its wrapper, from
+    a test process whose PATH holds no `firm`."""
+    from firm.dashboard.server import _fire_pulse
+
+    live = _live166(tmp_path, "c2166")
+    for key, value in live.env.items():
+        if key != "FIRM_ID":
+            monkeypatch.setenv(key, value)
+    monkeypatch.delenv("FIRM_ID", raising=False)
+    try:
+        dispatched = _fire_pulse(live.ws, live.firm_id)
+        last = live.ws / ".firm" / "last-pulse.json"
+        deadline = time.time() + 300
+        while not last.exists() and time.time() < deadline:
+            time.sleep(1.0)
+        state = _await_member(live, seconds=30)
+        per_pulse = live.ws / ".firm" / "pulse-logs" / f"{dispatched['unit']}.json"
+        results = {"per-pulse log": _last_json(per_pulse),
+                   "last-pulse.json": _last_json(last)}
+        _this_installs_firm_ran("C2", live, state, results, capsys)
+    finally:
+        _abort_quietly(live)
